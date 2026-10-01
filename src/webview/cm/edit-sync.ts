@@ -60,16 +60,15 @@ const IDENTITY_FLAP_THRESHOLD = 3;
  *  bytes actually belonged to: `recorded` is NOT guaranteed to sit still while an
  *  Edit is in flight (onHostSnapshot can accept another Document first), so
  *  reading the live pair instead would judge the wrong lineage.
- *  `epoch`/`generation` are `null` when captured under a legacy (pair-less) host.
+ *  `epoch`/`generation` are `null` when captured before the first host snapshot.
  *  `content` is `readonly` for the same reason `DocumentIdentity`'s fields are: a
  *  HeldEdit is built WHOLE by `stampHeld`, so the stamp and the content belong to
  *  one capture and neither wing may be replaced on its own. */
 type HeldEdit = DocumentIdentity & { readonly content: string };
 
 /** A Document's (externalEpoch, epochGeneration) pair in edit-sync's internal
- *  form. The wire pair is EXCLUSIVE (both present or both absent — validator-
- *  authoritative, see protocol.ts); absence is carried as `null` on BOTH fields
- *  so a single comparison rule can read stamps and incoming Documents alike.
+ *  form. The wire pair is required (see protocol.ts); `null` on BOTH fields
+ *  means only "before the first host snapshot".
  *  Both fields are `readonly`: a pair is REPLACED as a whole, never amended one
  *  wing at a time, so "advance the epoch and leave the generation behind"
  *  cannot be written. (Where the recorded pair's writes live is recorded at its
@@ -158,8 +157,8 @@ export type EditSync = {
   onHostSnapshot: (
     docVersion: number,
     canWrite: boolean,
-    externalEpoch?: number,
-    epochGeneration?: number
+    externalEpoch: number,
+    epochGeneration: number
   ) => void;
   /** The reducer committed — re-evaluate and drain. This is the SINGLE
    *  post-commit drain entry point. The shell fires it from its dispatch
@@ -270,17 +269,14 @@ export type EditSync = {
    *     genuine external divergence — whose text never matches our posted
    *     bytes — still reseeds.
    *  2. The Document's identity pair CONTINUES the lineage we are carrying —
-   *     same generation with the epoch not advanced, OR (legacy tolerance)
-   *     neither side carries a pair at all, which keeps a pair-less host on the
-   *     old unconditional-fold behaviour. Content equality alone does not make a
+   *     same generation with the epoch not advanced. Content equality alone does not make a
    *     Document ours: another writer can produce byte-identical bytes, and the
    *     host then reports a foreign epoch advance / a new generation. The
    *     lineage compared against is the held replay buffer's stamp when one is
    *     held (it is the content whose survival the fold predicts) and the
    *     recorded pair otherwise. Pass the incoming pair BEFORE `onHostSnapshot`
    *     records it (applyDocument's order), so the comparison is
-   *     incoming-vs-previous. Both arguments are required — pass `undefined`
-   *     explicitly for a legacy pair-less host.
+   *     incoming-vs-previous.
    *
    *  The reseed path (editor.ts applyDocument) uses this to recognise a host
    *  Document that merely ECHOES our own in-flight edit back. When the live
@@ -294,14 +290,10 @@ export type EditSync = {
    *  fold to exactly the Documents whose replay buffer `replayIfNeeded` will
    *  still replay — on a superseded lineage the buffer is DROPPED, so folding
    *  would leave the ahead keystrokes visible but unsavable. */
-  acksInFlightEdit: (
-    content: string,
-    externalEpoch: number | undefined,
-    epochGeneration: number | undefined
-  ) => boolean;
+  acksInFlightEdit: (content: string, externalEpoch: number, epochGeneration: number) => boolean;
   /** The Document identity pair (externalEpoch, epochGeneration) recorded from
-   *  the most recent accepted host snapshot — `null` before the first snapshot
-   *  or when the host omitted the pair (old-host tolerance). TWO consumers read
+   *  the most recent accepted host snapshot — `null` before the first snapshot.
+   *  TWO consumers read
    *  it through the shared `supersedesIdentity` rule: the replay side
    *  (`shouldDropBufferedForEpoch`, which drops a held buffer on a foreign epoch
    *  advance or an identity transition) and the display side
@@ -311,15 +303,14 @@ export type EditSync = {
   recordedIdentity: () => DocumentIdentity;
   /** Pure predicate (no side effects): would an incoming Document's identity
    *  pair be an identity transition against the CURRENTLY recorded pair? True
-   *  on a different generation, absent→present, or present→absent; false for a
-   *  same-generation Document, a pure-absent (legacy) pair, or before the first
-   *  snapshot (the seed is an adoption, not a transition). The shell reads this
+   *  on a different generation; false for a same-generation Document or before
+   *  the first snapshot (the seed is an adoption, not a transition). The shell reads this
    *  BEFORE `applyDocument` to bypass its whole-Document stale-version drop on a
    *  transition; `onHostSnapshot` recomputes it internally to bypass its own
    *  stale guard, count the tripwire, and adopt the pair (both read the same
    *  unchanged recorded pair, so they agree). Version ordering is meaningful
    *  only WITHIN one host generation (S3b). */
-  isIdentityTransition: (externalEpoch?: number, epochGeneration?: number) => boolean;
+  isIdentityTransition: (externalEpoch: number, epochGeneration: number) => boolean;
 };
 
 export function createEditSync(opts: EditSyncOptions): EditSync {
@@ -353,14 +344,14 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
   let timer: ReturnType<typeof setTimeout> | null = null;
   // Document identity pair from the most recent accepted host snapshot (S3a
   // recorded it; S3b now acts on it). Both fields are `null` before the first
-  // snapshot / when the host omits the pair. Read in replayIfNeeded's drop
+  // snapshot. Read in replayIfNeeded's drop
   // check, at each buffer capture (via stampHeld), by isIdentityTransition,
   // and — via recordedIdentity(), as the no-buffer-held fallback — by
   // acksInFlightEdit's lineage conjunct. So BOTH the replay side and the
   // display (ok-ack fold) side read it, not the replay side alone.
   // ONE variable holding the PAIR, not two independent wings: with two `let`s a
-  // write could land on one and miss the other, leaving the wings disagreeing
-  // about presence (which is read off `generation` alone). Here every write
+  // write could land on one and miss the other, leaving the wings disagreeing.
+  // Here every write
   // names the whole pair — the initializer below and the adoption in
   // onHostSnapshot are the only two — and `DocumentIdentity`'s `readonly`
   // fields stop the pair being amended in place afterwards.
@@ -382,17 +373,6 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
   // caller mutate this module's recorded lineage.
   const recordedIdentity = (): DocumentIdentity => ({ ...recorded });
 
-  // Wire pair → internal pair. THE constructor for both directions — incoming
-  // Documents and the pair onHostSnapshot records — so the two sides cannot
-  // normalize differently. The EXCLUSIVE-pair contract is enforced at the
-  // boundary validator, so a partial pair cannot arrive from a validated
-  // message; normalizing one to absent is the conservative read anyway (against
-  // a present recorded pair it makes presence differ → supersedes).
-  const incomingIdentity = (epoch?: number, generation?: number): DocumentIdentity =>
-    epoch === undefined || generation === undefined
-      ? { epoch: null, generation: null }
-      : { epoch, generation };
-
   // Stamp a captured buffer with the identity pair CURRENT at capture time. All
   // four capturing functions route through this — trySend, replayIfNeeded and
   // flush (each including its failed-post retry arm) plus cancelPendingFlush,
@@ -407,39 +387,18 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
     ...recordedIdentity(),
   });
 
-  // Do two pairs name DIFFERENT Document identities? The ONE presence/generation
-  // rule, written once: a pair-less (legacy) session on both sides is the same
-  // identity, one side carrying a pair while the other does not is a transition,
-  // and two present pairs differ exactly when their generations differ.
-  // SYMMETRIC in its arguments — swapping them cannot change the answer — which
-  // is why it keeps positional parameters while `supersedesIdentity` below,
-  // whose epoch arm is directional, does not. Two judgements read it:
-  // `supersedesIdentity` and `isIdentityTransition`.
-  const identityChanged = (a: DocumentIdentity, b: DocumentIdentity): boolean => {
-    const aPresent = a.generation !== null;
-    const bPresent = b.generation !== null;
-    if (!aPresent && !bPresent) {
-      return false;
-    }
-    if (aPresent !== bPresent) {
-      return true;
-    }
-    return a.generation !== b.generation;
-  };
-
   // Has the host's Document lineage moved ON from `from` to `to` — i.e. is
   // content belonging to `from` no longer ours to carry forward? ONE rule at ONE
   // choke point (S3b):
-  //   - both pairs absent (legacy throughout)     → no (today's behaviour)
-  //   - exactly one side carries a pair           → identity transition → yes
-  //   - different generation                      → identity transition → yes
+  //   - different generation (incl. a pre-seed `null` stamp) → identity
+  //     transition → yes
   //   - same generation, `to` epoch AHEAD         → foreign bytes landed → yes
   //   - same generation, `to` epoch equal or BEHIND → no (our own lineage
   //     continues; a within-generation regression is not supersession)
   // `epoch` is compared for magnitude only WITHIN one generation; `generation`
   // is identity, never ordering (protocol.ts's DocumentMessage doc).
   //
-  // DIRECTIONAL, unlike identityChanged: only the epoch arm asks which side is
+  // DIRECTIONAL: only the epoch arm asks which side is
   // ahead, so a swapped call inverts exactly that arm and nothing else — no type
   // error, and no symptom until a same-generation foreign advance arrives. The
   // named fields, not argument positions, are what keep the call sites readable
@@ -462,7 +421,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
   }: {
     from: DocumentIdentity;
     to: DocumentIdentity;
-  }): boolean => identityChanged(from, to) || (to.epoch ?? 0) > (from.epoch ?? 0);
+  }): boolean => from.generation !== to.generation || (to.epoch ?? 0) > (from.epoch ?? 0);
 
   // Has the host's lineage moved on from these HELD bytes? Its STAMP is the pair
   // recorded at capture time; the currently recorded pair is where the host has
@@ -513,10 +472,9 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
   // Pure identity-transition predicate — see the EditSync.isIdentityTransition
   // JSDoc. Reads (never mutates) the recorded pair, so the shell's pre-apply
   // query and onHostSnapshot's internal call agree.
-  const isIdentityTransition = (incomingEpoch?: number, incomingGeneration?: number): boolean =>
+  const isIdentityTransition = (_incomingEpoch: number, incomingGeneration: number): boolean =>
     // the first snapshot is an adoption, not a transition
-    seeded &&
-    identityChanged(recordedIdentity(), incomingIdentity(incomingEpoch, incomingGeneration));
+    seeded && recorded.generation !== incomingGeneration;
 
   // Record an identity transition for the clustering tripwire and fire the
   // once-per-session alarm when ≥3 land within the rolling window.
@@ -824,22 +782,17 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
         // replayIfNeeded, which compares its stamp against the new pair.
         console.info("[quoll] identity transition — adopting new host session", {
           fromGeneration: recorded.generation,
-          toGeneration: nextGeneration ?? null,
+          toGeneration: nextGeneration,
           fromEpoch: recorded.epoch,
-          toEpoch: nextEpoch ?? null,
+          toEpoch: nextEpoch,
         });
         noteIdentityTransition();
       }
       docVersion = nextVersion;
       canWrite = nextCanWrite;
       seeded = true;
-      // Capture the identity pair alongside the version, through the SAME
-      // constructor the incoming path uses. `undefined` (old host omitted the
-      // pair) records as `null` — the "no epoch info" fallback that keeps a
-      // pure-absent (legacy) session on today's replay behaviour — and a partial
-      // pair normalizes to both-absent instead of being recorded verbatim, which
-      // would leave `epoch` silently dead (presence is read off `generation`).
-      recorded = incomingIdentity(nextEpoch, nextGeneration);
+      // Capture the identity pair alongside the version.
+      recorded = { epoch: nextEpoch, generation: nextGeneration };
     },
     // The SINGLE post-commit drain. `committedEditInFlight` is the
     // reducer's committed `state.editInFlight` — the single source of
@@ -967,7 +920,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
       sameTextIgnoringEol(content, inFlight.content) &&
       !supersedesIdentity({
         from: buffered ?? recordedIdentity(),
-        to: incomingIdentity(externalEpoch, epochGeneration),
+        to: { epoch: externalEpoch, generation: epochGeneration },
       }),
     recordedIdentity,
     isIdentityTransition,

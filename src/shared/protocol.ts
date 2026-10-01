@@ -253,13 +253,8 @@ export function isDocumentEol(value: unknown): value is DocumentEol {
  *  at the protocol layer — see MAX_CONTENT_LENGTH for the directionality
  *  rationale.
  *
- *  `externalEpoch` + `epochGeneration` are an EXCLUSIVE PAIR — both present or
- *  both absent; a partial pair is a boundary-INVALID message (validator-
- *  authoritative). They are wire-OPTIONAL for one release so an old host that
- *  never sends them does not brick a new webview (absence = "no epoch info" =
- *  today's unconditional-replay behaviour). Since `PROTOCOL_VERSION` 2 an old
- *  host is rejected at `isProtocolMatch` before the pair is read, so that
- *  tolerance is unreachable; making the pair required is a follow-up.
+ *  `externalEpoch` + `epochGeneration` are both REQUIRED — a Document missing
+ *  either is a boundary-INVALID message.
  *  Semantics (S3a plumbs them; S3b consumes them): `externalEpoch` is host-owned and monotonic WITHIN one host
  *  session (starts at 0), advancing whenever document content changed by
  *  anything other than the webview's own acked edit lineage; `epochGeneration`
@@ -267,12 +262,7 @@ export function isDocumentEol(value: unknown): value is DocumentEol {
  *  timestamp) that identifies WHICH host session's epoch counter it is, so a
  *  webview surviving a host restart can tell an epoch regression across
  *  generations from a real advance. Identity, not ordering — never compared for
- *  magnitude.
- *
- *  The fields are typed as INDEPENDENTLY optional, but the EXCLUSIVE-pair
- *  contract (both present or both absent; a partial pair is invalid) is enforced
- *  at the boundary by `isValidEpochIdentity` — the validator is the authority,
- *  not the type. The host's `buildDocumentMessage` always emits BOTH. */
+ *  magnitude. */
 export type DocumentMessage = Envelope & {
   type: "document";
   content: string;
@@ -280,8 +270,8 @@ export type DocumentMessage = Envelope & {
   themeKind: ThemeKind;
   canWrite: boolean;
   eol: DocumentEol;
-  externalEpoch?: number;
-  epochGeneration?: number;
+  externalEpoch: number;
+  epochGeneration: number;
 };
 
 /** Theme change only — no content, no version. Pushed on
@@ -711,26 +701,6 @@ function isEpochComponent(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
-/** The Document's `externalEpoch` + `epochGeneration` pair is EXCLUSIVE:
- *  both valid, or both absent. A partial pair (exactly one present) is a
- *  boundary-INVALID message — the webview must never see a half-formed
- *  identity (its S3b drop-and-adopt logic enumerates only well-formed states:
- *  absent, or a valid pair). Absence is tolerated (old host → new webview
- *  skew): the webview falls back to today's unconditional-replay behaviour.
- *  Since `PROTOCOL_VERSION` 2 an old host fails `isProtocolMatch` first, so
- *  this tolerance is unreachable; making the pair required is a follow-up. */
-function isValidEpochIdentity(epoch: unknown, generation: unknown): boolean {
-  const epochAbsent = epoch === undefined;
-  const generationAbsent = generation === undefined;
-  if (epochAbsent && generationAbsent) {
-    return true; // no epoch info — tolerated
-  }
-  if (epochAbsent || generationAbsent) {
-    return false; // partial pair — invalid
-  }
-  return isEpochComponent(epoch) && isEpochComponent(generation);
-}
-
 function isBoundedContent(value: unknown): value is string {
   // Webview→host: cap to bound oversized payloads from a user-controlled
   // surface. The exact boundary is asserted in test/shared/protocol.test.ts.
@@ -750,7 +720,8 @@ export function isHostToWebview(value: unknown): value is HostToWebview {
         isThemeKind(v.themeKind) &&
         typeof v.canWrite === "boolean" &&
         isDocumentEol(v.eol) &&
-        isValidEpochIdentity(v.externalEpoch, v.epochGeneration)
+        isEpochComponent(v.externalEpoch) &&
+        isEpochComponent(v.epochGeneration)
       );
     case "theme":
       return isThemeKind(v.themeKind);

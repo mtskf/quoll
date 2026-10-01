@@ -128,6 +128,8 @@ describe("subscribeToHost — boundary validation + diagnostics", () => {
     themeKind: "dark",
     canWrite: true,
     eol: "\n",
+    externalEpoch: 0,
+    epochGeneration: 1,
   });
 
   let subscribeToHost: HostModule["subscribeToHost"];

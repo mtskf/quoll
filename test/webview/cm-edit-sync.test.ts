@@ -57,7 +57,7 @@ describe("cm edit-sync", () => {
   // path makes, so a missed-trigger bug cannot hide behind a hand-rolled
   // drain.
   const ack = (s: ReturnType<typeof setup>, v: number, canWrite = true) => {
-    s.sync.onHostSnapshot(v, canWrite);
+    s.sync.onHostSnapshot(v, canWrite, 0, 1);
     s.sync.onReducerCommit(false); // reducer's document arm cleared editInFlight
   };
   // A consent flip / serialize-error clear: reducer state changed, NOT
@@ -66,7 +66,7 @@ describe("cm edit-sync", () => {
 
   it("posts the current doc with the base docVersion on a local change", () => {
     const s = setup();
-    s.sync.onHostSnapshot(1, true);
+    s.sync.onHostSnapshot(1, true, 0, 1);
     s.type("hello world");
     expect(s.posted).toEqual([{ content: "hello world", baseDocVersion: 1 }]);
   });
@@ -75,7 +75,7 @@ describe("cm edit-sync", () => {
     // Review fix #25: the ack-drain is onReducerCommit(false), fired by the
     // post-commit effect. The test mirrors that snapshot→commit sequence.
     const s = setup();
-    s.sync.onHostSnapshot(1, true);
+    s.sync.onHostSnapshot(1, true, 0, 1);
     s.type("a"); // posts, editInFlight = true
     s.type("ab"); // in flight → buffered, not posted
     expect(s.posted.length).toBe(1);
@@ -92,7 +92,7 @@ describe("cm edit-sync", () => {
     // not move. An earlier docVersion-only trigger missed this and
     // stranded the buffer.
     const s = setup();
-    s.sync.onHostSnapshot(1, true);
+    s.sync.onHostSnapshot(1, true, 0, 1);
     s.type("a"); // posts at v1, editInFlight = true
     s.type("ab"); // buffered while in flight
     expect(s.posted.length).toBe(1);
@@ -113,18 +113,18 @@ describe("cm edit-sync", () => {
     // fix #30). Mirror that: snapshot(v, false)→commit holds; snapshot(v,
     // true)→commit drains.
     const s = setup();
-    s.sync.onHostSnapshot(2, true);
+    s.sync.onHostSnapshot(2, true, 0, 1);
     s.type("a"); // posts at v2, editInFlight = true
     s.type("ab"); // buffered while in flight (legitimately, canWrite=true)
     expect(s.posted.length).toBe(1);
     // Transient readonly at the SAME docVersion: ack clears in-flight, but
     // the buffer is HELD (not dropped) because canWrite is now false.
-    s.sync.onHostSnapshot(2, false);
+    s.sync.onHostSnapshot(2, false, 0, 1);
     s.sync.onReducerCommit(false);
     expect(s.posted.length).toBe(1); // still held — not posted, not dropped
     // Write re-granted at the SAME docVersion. The canWrite flip in the
     // next dispatch triggers onReducerCommit; the held buffer drains.
-    s.sync.onHostSnapshot(2, true);
+    s.sync.onHostSnapshot(2, true, 0, 1);
     s.sync.onReducerCommit(false);
     expect(s.posted.length).toBe(2);
     expect(s.posted[1]).toEqual({ content: "ab", baseDocVersion: 2 });
@@ -135,7 +135,7 @@ describe("cm edit-sync", () => {
     // mutated state while an Edit is genuinely in flight) must NOT post a
     // concurrent second Edit. onReducerCommit(true) returns early.
     const s = setup();
-    s.sync.onHostSnapshot(1, true);
+    s.sync.onHostSnapshot(1, true, 0, 1);
     s.type("a"); // posts at v1, editInFlight = true
     s.type("ab"); // buffered while in flight
     expect(s.posted.length).toBe(1);
@@ -152,7 +152,7 @@ describe("cm edit-sync", () => {
     // Review fix #13: readonly is a HARD DROP, not a buffered hold. A later
     // write-granting ack must NOT replay content typed while readonly.
     const s = setup();
-    s.sync.onHostSnapshot(1, false);
+    s.sync.onHostSnapshot(1, false, 0, 1);
     s.type("x"); // readonly → dropped, buffer NOT retained
     expect(s.posted).toEqual([]);
     ack(s, 2, true); // host grants write — must NOT replay "x"
@@ -162,7 +162,7 @@ describe("cm edit-sync", () => {
   it("does not post while the warning/consent gate blocks", () => {
     let blocked = true;
     const s = setup({ blockPost: () => blocked });
-    s.sync.onHostSnapshot(1, true);
+    s.sync.onHostSnapshot(1, true, 0, 1);
     s.type("x");
     expect(s.posted).toEqual([]); // gate held, buffer retained
     blocked = false;
@@ -180,7 +180,7 @@ describe("cm edit-sync", () => {
     // releases it.
     let blocked = true;
     const s = setup({ blockPost: () => blocked });
-    s.sync.onHostSnapshot(1, true);
+    s.sync.onHostSnapshot(1, true, 0, 1);
     s.type("typed while blocked");
     expect(s.posted).toEqual([]); // held by the gate
     blocked = false;
@@ -190,7 +190,7 @@ describe("cm edit-sync", () => {
 
   it("retains the buffer when post fails (postMessage threw)", () => {
     const s = setup();
-    s.sync.onHostSnapshot(1, true);
+    s.sync.onHostSnapshot(1, true, 0, 1);
     s.setPostOk(false);
     s.type("x"); // post returns false → buffer retained, not in flight
     expect(s.posted).toEqual([]);
@@ -203,7 +203,8 @@ describe("cm edit-sync", () => {
     // replayIfNeeded's !seeded guard mirrors trySend. A buffer present
     // before the first onHostSnapshot must NOT post with the placeholder
     // docVersion 0. Capture a pre-seed reseed, then a commit before any
-    // snapshot — nothing posts until the seed arrives.
+    // snapshot — nothing posts. The seed then drops the buffer: its stamp
+    // predates any host identity, so the seed's pair supersedes it.
     let doc = "";
     const posted: Posted[] = [];
     const sync = createEditSync({
@@ -219,9 +220,9 @@ describe("cm edit-sync", () => {
     sync.cancelPendingFlush(); // captures into buffer pre-seed
     sync.onReducerCommit(false); // commit before any snapshot → must NOT post
     expect(posted).toEqual([]);
-    sync.onHostSnapshot(1, true); // first seed
-    sync.onReducerCommit(false); // now it may drain
-    expect(posted).toEqual([{ content: "pre-seed text", baseDocVersion: 1 }]);
+    sync.onHostSnapshot(1, true, 0, 1); // first seed
+    sync.onReducerCommit(false); // pre-seed stamp superseded → dropped
+    expect(posted).toEqual([]);
   });
 
   it("ignores a stale host snapshot (older docVersion)", () => {
@@ -229,8 +230,8 @@ describe("cm edit-sync", () => {
     // Pins that the stale onHostSnapshot does not clobber the live docVersion
     // the next Edit echoes as its base.
     const s = setup();
-    s.sync.onHostSnapshot(5, true);
-    s.sync.onHostSnapshot(3, true); // stale — ignored, docVersion stays 5
+    s.sync.onHostSnapshot(5, true, 0, 1);
+    s.sync.onHostSnapshot(3, true, 0, 1); // stale — ignored, docVersion stays 5
     s.type("x");
     expect(s.posted).toEqual([{ content: "x", baseDocVersion: 5 }]);
   });
@@ -251,7 +252,7 @@ describe("cm edit-sync", () => {
         return true;
       },
     });
-    sync.onHostSnapshot(1, true);
+    sync.onHostSnapshot(1, true, 0, 1);
     doc = "typed";
     sync.onLocalChange(); // schedules a real-timer flush (not yet buffered)
     // Reseed path, in production order: capture-then-cancel happens while
@@ -261,7 +262,7 @@ describe("cm edit-sync", () => {
     expect(posted).toEqual([]); // nothing posted yet (no echo of host bytes)
     // The reducer commit drains the captured keystroke — "typed" survived the
     // reseed, and "host-snapshot" was never echoed.
-    sync.onHostSnapshot(2, true);
+    sync.onHostSnapshot(2, true, 0, 1);
     sync.onReducerCommit(false);
     expect(posted).toEqual([{ content: "typed", baseDocVersion: 2 }]);
   });
@@ -289,12 +290,12 @@ describe("cm edit-sync", () => {
         return true;
       },
     });
-    sync.onHostSnapshot(1, true);
+    sync.onHostSnapshot(1, true, 0, 1);
     doc = "seed!"; // user typed one char inside the window
     sync.onLocalChange(); // debounced, NOT yet buffered, editInFlight false
     sync.cancelPendingFlush(); // Document interrupts mid-window → captures "seed!"
     doc = "host snapshot"; // host reseed lands after capture
-    sync.onHostSnapshot(2, true); // docVersion 1→2, editInFlight still false
+    sync.onHostSnapshot(2, true, 0, 1); // docVersion 1→2, editInFlight still false
     sync.onReducerCommit(false); // ONLY trigger is the docVersion change
     expect(posted).toEqual([{ content: "seed!", baseDocVersion: 2 }]);
   });
@@ -327,7 +328,7 @@ describe("cm edit-sync", () => {
       });
 
       // Initial host snapshot at v1.
-      sync.onHostSnapshot(1, true);
+      sync.onHostSnapshot(1, true, 0, 1);
       // First edit posts immediately when the timer fires (this verifies
       // baseline before we exercise the race).
       doc = "a";
@@ -348,9 +349,9 @@ describe("cm edit-sync", () => {
       // First Document: snapshot updates to v2 (does NOT clear in-flight
       // — the host re-sent because the write-lock dropped our previous
       // Edit; only the reducer's ack via onReducerCommit clears the flag).
-      sync.onHostSnapshot(2, true);
+      sync.onHostSnapshot(2, true, 0, 1);
       // Second Document arrives before any commit:
-      sync.onHostSnapshot(3, true);
+      sync.onHostSnapshot(3, true, 0, 1);
       // Now the reducer commits the ack (editInFlight=false). The
       // buffered "ab" must replay at v3, NOT v1 or v2.
       sync.onReducerCommit(false);
@@ -365,51 +366,51 @@ describe("cm edit-sync", () => {
 
 describe("cm edit-sync — acksInFlightEdit", () => {
   const ack = (s: ReturnType<typeof setup>, v: number, canWrite = true) => {
-    s.sync.onHostSnapshot(v, canWrite);
+    s.sync.onHostSnapshot(v, canWrite, 0, 1);
     s.sync.onReducerCommit(false);
   };
 
   it("is false before anything is posted", () => {
     const s = setup();
-    s.sync.onHostSnapshot(1, true);
-    expect(s.sync.acksInFlightEdit("hello", undefined, undefined)).toBe(false);
+    s.sync.onHostSnapshot(1, true, 0, 1);
+    expect(s.sync.acksInFlightEdit("hello", 0, 1)).toBe(false);
   });
 
   it("is true for the exact bytes of the Edit currently in flight", () => {
     const s = setup();
-    s.sync.onHostSnapshot(1, true);
+    s.sync.onHostSnapshot(1, true, 0, 1);
     s.type("hello world"); // posts, editInFlight = true
-    expect(s.sync.acksInFlightEdit("hello world", undefined, undefined)).toBe(true);
+    expect(s.sync.acksInFlightEdit("hello world", 0, 1)).toBe(true);
     // A different string (a genuine external divergence) never matches.
-    expect(s.sync.acksInFlightEdit("something else", undefined, undefined)).toBe(false);
+    expect(s.sync.acksInFlightEdit("something else", 0, 1)).toBe(false);
   });
 
   it("clears when the reducer commit acks the in-flight Edit", () => {
     const s = setup();
-    s.sync.onHostSnapshot(1, true);
+    s.sync.onHostSnapshot(1, true, 0, 1);
     s.type("a"); // posts, editInFlight = true
-    expect(s.sync.acksInFlightEdit("a", undefined, undefined)).toBe(true);
+    expect(s.sync.acksInFlightEdit("a", 0, 1)).toBe(true);
     ack(s, 2); // ack clears editInFlight
-    expect(s.sync.acksInFlightEdit("a", undefined, undefined)).toBe(false);
+    expect(s.sync.acksInFlightEdit("a", 0, 1)).toBe(false);
   });
 
   it("tracks the newest in-flight bytes across a buffered replay", () => {
     const s = setup();
-    s.sync.onHostSnapshot(1, true);
+    s.sync.onHostSnapshot(1, true, 0, 1);
     s.type("a"); // posts "a", editInFlight = true
     s.type("ab"); // buffered while in flight
-    expect(s.sync.acksInFlightEdit("a", undefined, undefined)).toBe(true); // still "a" in flight
+    expect(s.sync.acksInFlightEdit("a", 0, 1)).toBe(true); // still "a" in flight
     ack(s, 2); // ack "a" → replay drains "ab" → "ab" now in flight
-    expect(s.sync.acksInFlightEdit("ab", undefined, undefined)).toBe(true);
-    expect(s.sync.acksInFlightEdit("a", undefined, undefined)).toBe(false);
+    expect(s.sync.acksInFlightEdit("ab", 0, 1)).toBe(true);
+    expect(s.sync.acksInFlightEdit("a", 0, 1)).toBe(false);
   });
 
   it("clears when a post fails (no phantom in-flight echo)", () => {
     const s = setup();
-    s.sync.onHostSnapshot(1, true);
+    s.sync.onHostSnapshot(1, true, 0, 1);
     s.setPostOk(false);
     s.type("x"); // post returns false → not in flight
-    expect(s.sync.acksInFlightEdit("x", undefined, undefined)).toBe(false);
+    expect(s.sync.acksInFlightEdit("x", 0, 1)).toBe(false);
   });
 
   // The identity-lineage conjunct. Content equality alone does not make a
@@ -419,14 +420,14 @@ describe("cm edit-sync — acksInFlightEdit", () => {
   // read the same `supersedesIdentity` rule so the reseed path never folds a
   // Document whose replay buffer is about to be dropped.
   // Revert-check: delete the `!supersedesIdentity(...)` conjunct → every
-  // `toBe(false)` expectation BELOW THIS COMMENT goes red — 6 expectations
-  // spread across 5 of the `it` blocks that follow (the earlier `toBe(false)`
+  // `toBe(false)` expectation BELOW THIS COMMENT goes red — 4 expectations
+  // spread across 4 of the `it` blocks that follow (the earlier `toBe(false)`
   // cases in this describe test the content conjunct instead, and the
   // epoch-REGRESSION case below expects `toBe(true)`; both stay green).
-  // Measured, not derived: within THIS file the mutation reds exactly those 5
+  // Measured, not derived: within THIS file the mutation reds exactly those 4
   // tests. It also reds the display-side pins that read the same conjunct
-  // through foldsOkAck — editor.test.ts's (d3) block (4) and shell.test.ts's
-  // "forwards the Document's externalEpoch VALUE" (1), 10 in total — which is
+  // through foldsOkAck — editor.test.ts's (d3) block (3) and shell.test.ts's
+  // "forwards the Document's externalEpoch VALUE" (1), 8 in total — which is
   // the point: display and replay share one rule.
   it("is false when a content-equal Document advances the epoch in the same generation", () => {
     const s = setup();
@@ -457,22 +458,6 @@ describe("cm edit-sync — acksInFlightEdit", () => {
     // transition, not an ack.
     expect(s.sync.acksInFlightEdit("hello world", 0, 22)).toBe(false);
     expect(s.sync.acksInFlightEdit("hello world", 3, 11)).toBe(true);
-  });
-
-  it("is false on either half of a present/absent pair mismatch", () => {
-    const withPair = setup();
-    withPair.sync.onHostSnapshot(1, true, 0, 11);
-    withPair.type("hello world");
-    // present→absent (a legacy host took over).
-    expect(withPair.sync.acksInFlightEdit("hello world", undefined, undefined)).toBe(false);
-
-    const legacy = setup();
-    legacy.sync.onHostSnapshot(1, true); // no pair recorded
-    legacy.type("hello world");
-    // absent→present (a pair-emitting host took over).
-    expect(legacy.sync.acksInFlightEdit("hello world", 0, 11)).toBe(false);
-    // absent→absent stays the legacy unconditional-fold behaviour.
-    expect(legacy.sync.acksInFlightEdit("hello world", undefined, undefined)).toBe(true);
   });
 
   it("agrees with the replay-buffer drop rule on the same Document", () => {
@@ -524,13 +509,13 @@ describe("cm edit-sync — acksInFlightEdit", () => {
 
 describe("cm edit-sync — discardBuffer", () => {
   const ack = (s: ReturnType<typeof setup>, v: number, canWrite = true) => {
-    s.sync.onHostSnapshot(v, canWrite);
+    s.sync.onHostSnapshot(v, canWrite, 0, 1);
     s.sync.onReducerCommit(false);
   };
 
   it("clears a buffered pre-reject payload so the next drain does not replay it", () => {
     const s = setup();
-    s.sync.onHostSnapshot(1, true); // seeded + writable
+    s.sync.onHostSnapshot(1, true, 0, 1); // seeded + writable
     s.type("a"); // posts at v1, editInFlight = true, buffered = null
     s.type("ab"); // in-flight → buffered = "ab"
     expect(s.posted.length).toBe(1);
@@ -545,7 +530,7 @@ describe("cm edit-sync — discardBuffer", () => {
 
   it("is a no-op when no buffer is held (idempotent)", () => {
     const s = setup();
-    s.sync.onHostSnapshot(1, true);
+    s.sync.onHostSnapshot(1, true, 0, 1);
     s.sync.discardBuffer(); // no buffer at all
     s.sync.onReducerCommit(false);
     expect(s.posted.length).toBe(0);
@@ -558,7 +543,7 @@ describe("cm edit-sync — discardBuffer", () => {
     // that after discard, a NEW local change while editInFlight is still
     // true falls into the buffer arm (re-fills it) rather than posting.
     const s = setup();
-    s.sync.onHostSnapshot(1, true);
+    s.sync.onHostSnapshot(1, true, 0, 1);
     s.type("a"); // posts at v1, editInFlight = true
     expect(s.posted.length).toBe(1);
     s.sync.discardBuffer();
@@ -585,7 +570,7 @@ describe("cm edit-sync — flush (teardown)", () => {
           return true;
         },
       });
-      sync.onHostSnapshot(1, true);
+      sync.onHostSnapshot(1, true, 0, 1);
       doc = "seed+edit";
       sync.onLocalChange(); // schedules the 300ms timer (pending, not fired)
       expect(posted.length).toBe(0);
@@ -608,7 +593,7 @@ describe("cm edit-sync — flush (teardown)", () => {
           return true;
         },
       });
-      sync.onHostSnapshot(1, true);
+      sync.onHostSnapshot(1, true, 0, 1);
       sync.flush(); // nothing typed → nothing pending
       expect(posted).toEqual([]);
     } finally {
@@ -628,7 +613,7 @@ describe("cm edit-sync — flush (teardown)", () => {
           return true;
         },
       });
-      sync.onHostSnapshot(1, true);
+      sync.onHostSnapshot(1, true, 0, 1);
       doc = "a";
       sync.onLocalChange();
       vi.advanceTimersByTime(300); // first Edit posts, editInFlight = true
@@ -687,7 +672,7 @@ describe("cm edit-sync — flush (teardown)", () => {
           return true;
         },
       });
-      sync.onHostSnapshot(1, true);
+      sync.onHostSnapshot(1, true, 0, 1);
       doc = "seed+edit";
       sync.onLocalChange(); // timer pending, NO Edit in flight (editInFlight false)
       sync.flush(); // force-posts once; nothing was in flight → buffer nulled
@@ -724,7 +709,7 @@ describe("cm edit-sync — flush (teardown)", () => {
           return true;
         },
       });
-      sync.onHostSnapshot(1, true);
+      sync.onHostSnapshot(1, true, 0, 1);
       doc = "a";
       sync.onLocalChange();
       vi.advanceTimersByTime(300); // edit #1 posts at v1, editInFlight = true
@@ -743,7 +728,7 @@ describe("cm edit-sync — flush (teardown)", () => {
       // webview processes it: snapshot advances the version, the commit clears
       // in-flight and REPLAYS the retained buffer at the fresh v2 — the bytes
       // the stale force-post could not deliver.
-      sync.onHostSnapshot(2, true);
+      sync.onHostSnapshot(2, true, 0, 1);
       sync.onReducerCommit(false);
       expect(posted).toContainEqual({ content: "ab", baseDocVersion: 2 });
     } finally {
@@ -763,7 +748,7 @@ describe("cm edit-sync — flush (teardown)", () => {
           return true;
         },
       });
-      sync.onHostSnapshot(1, true);
+      sync.onHostSnapshot(1, true, 0, 1);
       doc = "a";
       sync.onLocalChange();
       vi.advanceTimersByTime(300); // edit #1 posts, editInFlight = true
@@ -793,7 +778,7 @@ describe("cm edit-sync — flush (teardown)", () => {
           return true;
         },
       });
-      sync.onHostSnapshot(1, true);
+      sync.onHostSnapshot(1, true, 0, 1);
       doc = "a";
       sync.onLocalChange(); // timer pending, editInFlight still false
       sync.flush(); // force-posts "a" AND must set editInFlight
@@ -828,7 +813,7 @@ describe("cm edit-sync — flush (teardown)", () => {
           return true;
         },
       });
-      sync.onHostSnapshot(1, true);
+      sync.onHostSnapshot(1, true, 0, 1);
       doc = "a";
       sync.onLocalChange();
       allow = false;
@@ -857,11 +842,11 @@ describe("cm edit-sync — flush (teardown)", () => {
         getDoc: () => doc,
         post: () => true,
       });
-      sync.onHostSnapshot(1, true);
+      sync.onHostSnapshot(1, true, 0, 1);
       doc = "seed+edit";
       sync.onLocalChange(); // timer pending, idle (no prior in-flight)
       sync.flush(); // force-posts "seed+edit"; must record it as in-flight
-      expect(sync.acksInFlightEdit("seed+edit", undefined, undefined)).toBe(true);
+      expect(sync.acksInFlightEdit("seed+edit", 0, 1)).toBe(true);
     } finally {
       vi.useRealTimers();
     }
@@ -879,7 +864,7 @@ describe("cm edit-sync — flush (teardown)", () => {
           return true;
         },
       });
-      sync.onHostSnapshot(1, false); // readonly
+      sync.onHostSnapshot(1, false, 0, 1); // readonly
       doc = "a";
       sync.onLocalChange();
       sync.flush();
@@ -905,7 +890,7 @@ describe("cm edit-sync — flushIfIdle", () => {
         // No scheduleFlush override → real setTimeout path so the timer stays
         // pending until we call flushIfIdle.
       });
-      sync.onHostSnapshot(1, true);
+      sync.onHostSnapshot(1, true, 0, 1);
       doc = "seed+typed";
       sync.onLocalChange(); // schedules the 300ms timer (pending, not fired)
       expect(posted.length).toBe(0); // debounce window — not posted yet
@@ -928,7 +913,7 @@ describe("cm edit-sync — flushIfIdle", () => {
           return true;
         },
       });
-      sync.onHostSnapshot(1, true);
+      sync.onHostSnapshot(1, true, 0, 1);
       // First edit: let the timer fire so the Edit is in flight.
       doc = "a";
       sync.onLocalChange();
@@ -942,7 +927,7 @@ describe("cm edit-sync — flushIfIdle", () => {
       sync.flushIfIdle();
       expect(posted.length).toBe(1); // no second post at the same version
       // Deliver the ack: the buffered content must replay (no data loss).
-      sync.onHostSnapshot(2, true);
+      sync.onHostSnapshot(2, true, 0, 1);
       sync.onReducerCommit(false); // ack clears in-flight + drains
       expect(posted.length).toBe(2);
       expect(posted[1]).toEqual({ content: "ab", baseDocVersion: 2 });
@@ -963,7 +948,7 @@ describe("cm edit-sync — flushIfIdle", () => {
           return true;
         },
       });
-      sync.onHostSnapshot(1, true);
+      sync.onHostSnapshot(1, true, 0, 1);
       // No onLocalChange call → no pending timer.
       sync.flushIfIdle(); // nothing pending → must be a no-op
       expect(posted).toEqual([]);
@@ -987,25 +972,6 @@ describe("cm edit-sync — recordedIdentity", () => {
     const s = setup();
     s.sync.onHostSnapshot(1, true, 3, 12345);
     expect(s.sync.recordedIdentity()).toEqual({ epoch: 3, generation: 12345 });
-  });
-
-  it("records null for an omitted pair (old-host tolerance)", () => {
-    const s = setup();
-    s.sync.onHostSnapshot(1, true); // legacy host: no pair
-    expect(s.sync.recordedIdentity()).toEqual({ epoch: null, generation: null });
-  });
-
-  it("records a PARTIAL pair as fully absent, like the incoming path normalizes it", () => {
-    // The wire pair is exclusive (protocol.ts's validator drops a half-pair), so
-    // this is defence in depth, not a reachable message. It matters because
-    // presence is read off `generation` alone: recording {epoch: 5, generation:
-    // null} verbatim would leave the epoch live in comparisons while the pair
-    // counted as absent — a state no incoming Document can be in, since
-    // incomingIdentity() normalizes the same shape to both-absent. ONE
-    // constructor, so the recorded and incoming sides cannot disagree.
-    const s = setup();
-    s.sync.onHostSnapshot(1, true, 5); // epoch without a generation
-    expect(s.sync.recordedIdentity()).toEqual({ epoch: null, generation: null });
   });
 
   it("updates the recorded pair on each accepted snapshot", () => {
@@ -1039,8 +1005,8 @@ describe("cm edit-sync — epoch-bounded buffers (S3b)", () => {
   const ackPair = (
     s: ReturnType<typeof setup>,
     v: number,
-    epoch: number | undefined,
-    generation: number | undefined,
+    epoch: number,
+    generation: number,
     canWrite = true
   ) => {
     s.sync.onHostSnapshot(v, canWrite, epoch, generation);
@@ -1109,39 +1075,6 @@ describe("cm edit-sync — epoch-bounded buffers (S3b)", () => {
     expect(s.posted[1]).toEqual({ content: "fresh", baseDocVersion: 1 });
   });
 
-  it("(d2) drops a buffer stamped under an ABSENT pair when the pair appears (absent→present)", () => {
-    const s = setup();
-    s.sync.onHostSnapshot(1, true); // legacy host — no pair
-    s.type("a"); // posts, in flight
-    s.type("ab"); // buffered {epoch:null, gen:null}
-    expect(s.posted.length).toBe(1);
-    ackPair(s, 2, 0, 42); // pair appears → identity transition → drop
-    expect(s.posted.length).toBe(1);
-    expect(s.sync.recordedIdentity()).toEqual({ epoch: 0, generation: 42 });
-  });
-
-  it("(d3) drops a buffer when a legacy Document downgrades the pair (present→absent)", () => {
-    const s = setup();
-    s.sync.onHostSnapshot(1, true, 0, 42);
-    s.type("a"); // posts, in flight
-    s.type("ab"); // buffered {epoch:0, gen:42}
-    expect(s.posted.length).toBe(1);
-    ackPair(s, 2, undefined, undefined); // host downgraded → present→absent → drop
-    expect(s.posted.length).toBe(1);
-    expect(s.sync.recordedIdentity()).toEqual({ epoch: null, generation: null });
-  });
-
-  it("keeps a pure-absent (legacy throughout) buffer replayable — today's behaviour", () => {
-    const s = setup();
-    s.sync.onHostSnapshot(1, true); // legacy
-    s.type("a"); // posts, in flight
-    s.type("ab"); // buffered {null, null}
-    expect(s.posted.length).toBe(1);
-    ackPair(s, 2, undefined, undefined); // still legacy → no drop → replay
-    expect(s.posted.length).toBe(2);
-    expect(s.posted[1]).toEqual({ content: "ab", baseDocVersion: 2 });
-  });
-
   it("(e/f) adopts lower-version different-generation Documents (bypasses the stale guard)", () => {
     const s = setup();
     // Session A leaves the webview at a HIGH version.
@@ -1168,22 +1101,6 @@ describe("cm edit-sync — epoch-bounded buffers (S3b)", () => {
     s.sync.onReducerCommit(false);
     s.type("survives");
     expect(s.posted[s.posted.length - 1]).toEqual({ content: "survives", baseDocVersion: 6 });
-  });
-
-  it("(f) B→absent→B: a legacy straggler at a LOWER version is adopted, stream continues", () => {
-    const s = setup();
-    s.sync.onHostSnapshot(10, true, 0, 222); // B at v10
-    // Legacy (pair-less) straggler at a LOWER version — present→absent transition.
-    // A same-or-higher version would pass the stale guard anyway; the lower
-    // version proves the bypass is exercised.
-    s.sync.onHostSnapshot(5, true);
-    expect(s.sync.recordedIdentity()).toEqual({ epoch: null, generation: null });
-    // Live host B re-adopts (absent→present).
-    s.sync.onHostSnapshot(6, true, 1, 222);
-    expect(s.sync.recordedIdentity()).toEqual({ epoch: 1, generation: 222 });
-    s.sync.onReducerCommit(false);
-    s.type("y");
-    expect(s.posted[s.posted.length - 1]).toEqual({ content: "y", baseDocVersion: 6 });
   });
 
   it("(g) fires the resync-storm notice EXACTLY ONCE at ≥3 transitions in the window", () => {
@@ -1278,7 +1195,6 @@ describe("cm edit-sync — epoch-bounded buffers (S3b)", () => {
     for (let i = 0; i < 5; i++) {
       expect(s.sync.isIdentityTransition(0, 222)).toBe(true); // new generation
       expect(s.sync.isIdentityTransition(9, 111)).toBe(false); // same generation
-      expect(s.sync.isIdentityTransition(undefined, undefined)).toBe(true); // present→absent
     }
     expect(onResyncStorm).not.toHaveBeenCalled();
     expect(s.sync.recordedIdentity()).toEqual({ epoch: 0, generation: 111 });
@@ -1575,7 +1491,7 @@ describe("cm edit-sync — readonly hard drops are traced", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       const s = setup();
-      s.sync.onHostSnapshot(1, false); // readonly
+      s.sync.onHostSnapshot(1, false, 0, 1); // readonly
       s.type(SECRET);
       expect(s.posted).toEqual([]);
       expect(warnArgs(warn)).toEqual([
@@ -1598,7 +1514,7 @@ describe("cm edit-sync — readonly hard drops are traced", () => {
     try {
       let doc = "seed";
       const sync = createEditSync({ getDoc: () => doc, post: () => true });
-      sync.onHostSnapshot(1, false); // readonly
+      sync.onHostSnapshot(1, false, 0, 1); // readonly
       doc = SECRET;
       sync.onLocalChange(); // schedules the flush; still inside the window
       sync.cancelPendingFlush(); // host Document interrupts → readonly hard drop
@@ -1628,7 +1544,7 @@ describe("cm edit-sync — readonly hard drops are traced", () => {
           return true;
         },
       });
-      sync.onHostSnapshot(1, false); // readonly
+      sync.onHostSnapshot(1, false, 0, 1); // readonly
       doc = SECRET;
       sync.onLocalChange();
       sync.flush();
@@ -1650,7 +1566,7 @@ describe("cm edit-sync — readonly hard drops are traced", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       const s = setup();
-      s.sync.onHostSnapshot(1, false); // readonly, nothing typed
+      s.sync.onHostSnapshot(1, false, 0, 1); // readonly, nothing typed
       s.sync.flush(); // content === null → genuine no-op
       s.sync.cancelPendingFlush(); // no live timer → no capture, no drop
       expect(warnArgs(warn)).toEqual([]);
@@ -1663,7 +1579,7 @@ describe("cm edit-sync — readonly hard drops are traced", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       const s = setup();
-      s.sync.onHostSnapshot(1, true); // writable
+      s.sync.onHostSnapshot(1, true, 0, 1); // writable
       s.type(SECRET);
       expect(s.posted).toEqual([{ content: SECRET, baseDocVersion: 1 }]);
       expect(warnArgs(warn)).toEqual([]);
@@ -1683,11 +1599,11 @@ describe("cm edit-sync — readonly hard drops are traced", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       const s = setup();
-      s.sync.onHostSnapshot(1, true); // seed, writable
+      s.sync.onHostSnapshot(1, true, 0, 1); // seed, writable
       s.type("aa"); // posts "aa" at v1, editInFlight = true
       s.type("aaa"); // single-flight: stashed into buffered (len 3), not posted
       expect(s.posted.length).toBe(1);
-      s.sync.onHostSnapshot(2, false); // readonly ack; canWrite flips false
+      s.sync.onHostSnapshot(2, false, 0, 1); // readonly ack; canWrite flips false
       s.sync.onReducerCommit(false); // editInFlight clears; replayIfNeeded holds
       // the buffer under !canWrite WITHOUT nulling it (buffered is still "aaa")
       s.type("aaaaa"); // trySend's readonly branch fires: doc is now "aaaaa" (len 5)

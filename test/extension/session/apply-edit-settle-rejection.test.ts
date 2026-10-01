@@ -685,9 +685,7 @@ describe("applyEdit settlement: a landed write is acked, not toasted", () => {
     });
 
     const seed = h.identity();
-    // VACUITY HAZARD: if the seed snapshot carried no identity pair, edit-sync's
-    // "both absent -> replay" legacy arm would replay REGARDLESS of any epoch move
-    // and this test would pass for the wrong reason. Pin that the pair is present.
+    // Pin that the seed snapshot carries the identity pair the replay is judged on.
     expect(seed.epochGeneration).toEqual(expect.any(Number));
     expect(seed.externalEpoch).toEqual(expect.any(Number));
     sync.onHostSnapshot(seed.docVersion, true, seed.externalEpoch, seed.epochGeneration);
@@ -717,7 +715,7 @@ describe("applyEdit settlement: a landed write is acked, not toasted", () => {
   });
 
   it("NEGATIVE pin: the same wiring DOES drop the buffer when the epoch advances", () => {
-    // Proves the pin above is not passing through edit-sync's pair-less legacy arm:
+    // Proves the pin above is not passing vacuously:
     // identical shape, but the ack carries `externalEpoch + 1`.
     const h = harness();
     let webviewDoc = "";

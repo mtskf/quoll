@@ -55,6 +55,8 @@ vi.mock("../../src/webview/host.js", () => ({
   patchPersistedState: () => {},
 }));
 
+// The identity pair for fixtures that stay on one host lineage throughout.
+const PAIR = { externalEpoch: 0, epochGeneration: 1 } as const;
 const mounted: EditorHandle[] = [];
 let container: HTMLElement | null = null;
 
@@ -166,6 +168,7 @@ describe("Quoll's own multi-line insert paths, in a CRLF document", () => {
       eol: "\r\n",
       canWrite: true,
       docVersion: 1,
+      ...PAIR,
     });
     // A reseed posts nothing (editor.test.ts (r4) pins this) — sanity check that
     // seeding this fixture is not itself an observable Edit before we drive Enter.
@@ -179,7 +182,13 @@ describe("Quoll's own multi-line insert paths, in a CRLF document", () => {
 
   it("autoCloseFenceOnEnter keeps a clean line model", () => {
     const { handle, view } = mount();
-    handle.applyDocument({ content: "```js\r\nx", eol: "\r\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({
+      content: "```js\r\nx",
+      eol: "\r\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
     view.dispatch({ selection: EditorSelection.cursor(5) }); // end of "```js"
     expect(autoCloseFenceOnEnter(view)).toBe(true);
     expectCleanLineModel(view.state.doc);
@@ -187,7 +196,13 @@ describe("Quoll's own multi-line insert paths, in a CRLF document", () => {
 
   it("htmlTablePaste keeps a clean line model", () => {
     const { handle, view } = mount();
-    handle.applyDocument({ content: "intro\r\ntext", eol: "\r\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({
+      content: "intro\r\ntext",
+      eol: "\r\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
     view.dispatch({ selection: EditorSelection.cursor(view.state.doc.length) });
     firePasteAt(view.contentDOM, {
       html: "<table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table>",
@@ -208,7 +223,13 @@ describe("Quoll's own multi-line insert paths, in a CRLF document", () => {
 
   it("richHtmlPaste keeps a clean line model", () => {
     const { handle, view } = mount();
-    handle.applyDocument({ content: "intro\r\ntext", eol: "\r\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({
+      content: "intro\r\ntext",
+      eol: "\r\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
     view.dispatch({ selection: EditorSelection.cursor(view.state.doc.length) });
     firePasteAt(view.contentDOM, { html: "<ul><li>one</li><li>two</li></ul>" });
     expectLineModel(view.state.doc, ["intro", "text", "", "- one", "- two", ""]);
@@ -226,6 +247,7 @@ describe("Quoll's own multi-line insert paths, in a CRLF document", () => {
       eol: "\r\n",
       canWrite: true,
       docVersion: 1,
+      ...PAIR,
     });
     const caret = "- a\n  - b\n  ".length; // interior is LF-only regardless of source EOL
     view.dispatch({ selection: { anchor: caret } });
@@ -238,7 +260,13 @@ describe("Quoll's own multi-line insert paths, in a CRLF document", () => {
 
   it("imagePaste (resolveImageWrite) keeps a clean line model", () => {
     const { handle, view } = mount();
-    handle.applyDocument({ content: "ab\r\ncd", eol: "\r\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({
+      content: "ab\r\ncd",
+      eol: "\r\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
     // Anchor mid-line so the insert carries the leading "\n" (image-paste.ts's
     // standalone-block prefix), exercising the multi-line insert path.
     view.dispatch({ effects: addPendingAnchor.of({ requestId: "1", anchor: 1 }) });
@@ -262,6 +290,7 @@ describe("Quoll's own multi-line insert paths, in a CRLF document", () => {
       eol: "\r\n",
       canWrite: true,
       docVersion: 1,
+      ...PAIR,
     });
     handle.runFormatDocument();
     // The format LANDED — the seed is already 4 clean lines, so without this the
@@ -277,7 +306,13 @@ describe("Quoll's own multi-line insert paths, in a CRLF document", () => {
 describe("CodeMirror's own multi-line insert paths, in a CRLF document", () => {
   it("plain paste of LF clipboard text into a CRLF document leaves no stray literal newline", () => {
     const { handle, view } = mount();
-    handle.applyDocument({ content: "ab\r\ncd", eol: "\r\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({
+      content: "ab\r\ncd",
+      eol: "\r\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
     view.dispatch({ selection: EditorSelection.cursor(1) }); // mid "ab", not a list
     firePasteAt(view.contentDOM, { text: "x\ny" }); // no html/files: falls to CM's own doPaste
     expectLineModel(view.state.doc, ["ax", "yb", "cd"]);
@@ -286,7 +321,13 @@ describe("CodeMirror's own multi-line insert paths, in a CRLF document", () => {
 
   it("a multi-range selection maps every caret through a plain-text paste", () => {
     const { handle, view } = mount();
-    handle.applyDocument({ content: "ab\r\ncd", eol: "\r\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({
+      content: "ab\r\ncd",
+      eol: "\r\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
     view.dispatch({
       selection: EditorSelection.create([EditorSelection.cursor(1), EditorSelection.cursor(4)]),
     });
@@ -301,7 +342,13 @@ describe("CodeMirror's own multi-line insert paths, in a CRLF document", () => {
 
   it("copyLineDown over a multi-line selection keeps a clean line model (commands:1416)", () => {
     const { handle, view } = mount();
-    handle.applyDocument({ content: "one\r\ntwo", eol: "\r\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({
+      content: "one\r\ntwo",
+      eol: "\r\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
     view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } });
     expect(copyLineDown(view)).toBe(true);
     expectCleanLineModel(view.state.doc);
@@ -309,7 +356,13 @@ describe("CodeMirror's own multi-line insert paths, in a CRLF document", () => {
 
   it("search replace with a \\n escape keeps a clean line model (search:565,929)", () => {
     const { handle, view } = mount();
-    handle.applyDocument({ content: "a\r\nb", eol: "\r\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({
+      content: "a\r\nb",
+      eol: "\r\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
     view.dispatch({
       effects: setSearchQuery.of(new SearchQuery({ search: "a", replace: "X\\nY" })),
       selection: EditorSelection.single(0, 1), // exactly the "a" match, so replaceNext fires
@@ -340,6 +393,7 @@ describe("CodeMirror's own multi-line insert paths, in a CRLF document", () => {
       eol: "\r\n",
       canWrite: true,
       docVersion: 1,
+      ...PAIR,
     });
     view.dispatch({ selection: EditorSelection.cursor(view.state.doc.length) });
     expect(continueListOnEnter(view)).toBe(false); // deferred: not the marker line
@@ -354,7 +408,7 @@ describe("CodeMirror's own multi-line insert paths, in a CRLF document", () => {
     // no lineSeparator provided, CM's default /\r\n?|\n/ splits the pair and no
     // stray \r remains.
     const { handle, view } = mount();
-    handle.applyDocument({ content: "ab\ncd", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({ content: "ab\ncd", eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
     view.dispatch({ selection: EditorSelection.cursor(1) });
     firePasteAt(view.contentDOM, { text: "x\r\ny" });
     expectLineModel(view.state.doc, ["ax", "yb", "cd"]);
@@ -370,6 +424,7 @@ describe("boundary cases", () => {
       eol: "\r\n",
       canWrite: true,
       docVersion: 1,
+      ...PAIR,
     });
     const line1 = view.state.doc.line(1);
     expect(line1.text).toBe("- \u{1F600} first");
@@ -390,6 +445,7 @@ describe("boundary cases", () => {
       eol: "\r\n",
       canWrite: true,
       docVersion: 1,
+      ...PAIR,
     });
     const before = ["- first", "- second"];
     expectLineModel(view.state.doc, before);
@@ -408,7 +464,13 @@ describe("boundary cases", () => {
 describe("editor — the document EOL lives in state, not in CodeMirror's splitter", () => {
   it("the mounted editor never installs a literal-EOL splitter (the root cause)", () => {
     const { handle, view } = mount();
-    handle.applyDocument({ content: "a\r\nb", eol: "\r\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({
+      content: "a\r\nb",
+      eol: "\r\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
     // Auxiliary to expectCleanLineModel: this names the ONE cause the suite
     // above exists for. It is deliberately not the primary guard — a hand-built
     // `Text.of(["x\ny"])` or a `ChangeSet.of(spec, len, "\r\n")` corrupts a
@@ -426,10 +488,16 @@ describe("editor — the document EOL lives in state, not in CodeMirror's splitt
     // the view itself — CM's copy handler bails on hasSelection() in an
     // unfocused happy-dom view.)
     const { handle, view } = mount();
-    handle.applyDocument({ content: "a\r\nb", eol: "\r\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({
+      content: "a\r\nb",
+      eol: "\r\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
     view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } });
     expect(copyViaEvent(view)).toBe("a\r\nb");
-    handle.applyDocument({ content: "a\nb", eol: "\n", canWrite: true, docVersion: 2 });
+    handle.applyDocument({ content: "a\nb", eol: "\n", canWrite: true, docVersion: 2, ...PAIR });
     view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } });
     expect(copyViaEvent(view)).toBe("a\nb");
   });
@@ -448,7 +516,13 @@ describe("editor — the document EOL lives in state, not in CodeMirror's splitt
     // document's EOL reappears.
     vi.useFakeTimers();
     const { handle, view } = mount();
-    handle.applyDocument({ content: "a\r\nb", eol: "\r\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({
+      content: "a\r\nb",
+      eol: "\r\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
     expect(editPosts()).toHaveLength(0);
     view.dispatch({ changes: { from: view.state.doc.length, insert: "c" } });
     vi.advanceTimersByTime(300);
@@ -462,9 +536,9 @@ describe("editor — the document EOL lives in state, not in CodeMirror's splitt
 describe("editor — the document EOL comes from the wire, not from the content", () => {
   it("installs the wire eol even when the content says otherwise (no inference)", () => {
     const { handle, view } = mount();
-    handle.applyDocument({ content: "a\nb", eol: "\r\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({ content: "a\nb", eol: "\r\n", canWrite: true, docVersion: 1, ...PAIR });
     expect(view.state.facet(quollDocumentEol)).toBe("\r\n");
-    handle.applyDocument({ content: "a\r\nb", eol: "\n", canWrite: true, docVersion: 2 });
+    handle.applyDocument({ content: "a\r\nb", eol: "\n", canWrite: true, docVersion: 2, ...PAIR });
     expect(view.state.facet(quollDocumentEol)).toBe("\n");
   });
 
@@ -477,8 +551,8 @@ describe("editor — the document EOL comes from the wire, not from the content"
     // facet stays LF and the post is "a\n".
     vi.useFakeTimers();
     const { handle, view } = mount();
-    handle.applyDocument({ content: "a", eol: "\n", canWrite: true, docVersion: 1 });
-    handle.applyDocument({ content: "a", eol: "\r\n", canWrite: true, docVersion: 2 });
+    handle.applyDocument({ content: "a", eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
+    handle.applyDocument({ content: "a", eol: "\r\n", canWrite: true, docVersion: 2, ...PAIR });
     expect(editPosts()).toHaveLength(0);
     view.dispatch({ changes: { from: view.state.doc.length, insert: "\n" } });
     expectLineModel(view.state.doc, ["a", ""]);
