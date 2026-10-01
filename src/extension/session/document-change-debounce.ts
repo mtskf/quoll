@@ -15,9 +15,11 @@
 // `onFire` MUST NOT throw: it runs inside a `setTimeout` callback, which the
 // Node event loop invokes OUTSIDE VS Code's extension-host tryCatch wrapper (a
 // throw would not be caught-and-logged like a throw from the change-event
-// handler). The panel's fire thunk dispatches `documentChanged` (a pure reducer
-// step + `disposed`-guarded `postDocument`) AND calls `caretWiring.refreshCount()`
-// (`document.getText()` on the live doc + the total count formatters) — neither
+// handler). The panel's fire thunk reads the live text for the edit-lineage
+// query (`canonicalDocumentText`, guarded: a throw degrades the answer to
+// `null`), dispatches `documentChanged` (a pure reducer step +
+// `disposed`-guarded `postDocument`) AND calls `caretWiring.refreshCount()`
+// (`document.getText()` on the live doc + the total count formatters) — none
 // throws, so the invariant holds.
 
 export interface TrailingDebounce {

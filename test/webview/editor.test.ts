@@ -366,6 +366,48 @@ describe("editor — ok-ack while ahead does not reseed backwards (d2)", () => {
   });
 });
 
+// (d2b) An ack that crossed an EOL-mode switch echoes our bytes in the
+// document's new line endings; the ok-ack fold must still recognise it and
+// fold instead of rewinding the keystrokes typed after it was posted.
+describe("editor — an ack that crossed an EOL-mode switch still folds (d2b)", () => {
+  it("does not rewind the ahead keystroke when the ack carries the new line endings", () => {
+    // EOL switched to CRLF while "a\nbc" was in flight; the host canonicalises
+    // and echoes "a\r\nbc". Revert-check: compare the ack byte-for-byte again
+    // and the view rewinds to "a\nbc" (the buffered "d" is lost on screen).
+    vi.useFakeTimers();
+    const onLocalEditDiscarded = vi.fn();
+    const { handle, view, commit } = mount({ onLocalEditDiscarded });
+    handle.applyDocument({
+      content: "a\nb",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 1,
+      externalEpoch: 0,
+      epochGeneration: 11,
+    });
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "c" } });
+    vi.advanceTimersByTime(300); // posts "a\nbc" — in flight
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "d" } });
+    vi.advanceTimersByTime(300); // buffers "a\nbcd"
+    expect(editPosts()).toHaveLength(1);
+    handle.applyDocument({
+      content: "a\r\nbc",
+      eol: "\r\n",
+      canWrite: true,
+      docVersion: 2,
+      externalEpoch: 0,
+      epochGeneration: 11,
+    });
+    expect(view.state.sliceDoc()).toBe("a\nbcd"); // folded, no rewind
+    commit(false);
+    const replay = editPosts()[1] as { content: string; baseDocVersion: number };
+    // The buffer keeps the bytes it was stamped with; the host canonicalises.
+    expect(replay.content).toBe("a\nbcd");
+    expect(replay.baseDocVersion).toBe(2);
+    expect(onLocalEditDiscarded).not.toHaveBeenCalled();
+  });
+});
+
 // (d3) The ok-ack fold must ALSO require identity-lineage continuity, not just
 // a content match. A host Document whose content happens to equal our in-flight
 // bytes but which arrives on a DIFFERENT lineage (same-generation epoch advance,
@@ -733,10 +775,11 @@ describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
 //
 // ⚠️ The two reads are NOT symmetric, so one test cannot gate both (measured by
 // two independent reviewers):
-//   - `getDoc()` supplies the bytes edit-sync posts, and the ok-ack fold compares
-//     the host echo against them byte-exactly (`content === inFlight.content`,
-//     edit-sync.ts:957). Serialize it with the wrong EOL and every ack looks
-//     foreign -> reseed -> the keystroke rewind the fold exists to prevent.
+//   - `getDoc()` supplies the bytes edit-sync posts. The ok-ack fold is
+//     EOL-insensitive (`sameTextIgnoringEol`, edit-sync.ts acksInFlightEdit), so
+//     a wrong-EOL getDoc no longer shows up as a rewind — it shows up on the WIRE:
+//     the posted Edit carries the wrong separator. Hence this test asserts the
+//     posted bytes literally.
 //   - `liveDoc` feeds ONLY `aheadOfHost` (editor.ts, `applyDocument`:
 //     `const aheadOfHost = liveDoc !== content`). An LF-only liveDoc is
 //     benign while the editor is ahead; it shows up instead as a FALSE

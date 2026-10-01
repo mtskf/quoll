@@ -265,9 +265,10 @@ export function createRevertRescueWiring(deps: RevertRescueWiringDeps): RevertRe
             // already equal to the live document — reaches this tag too. Either way
             // nothing failed, so the handling is the same.) Treat it exactly as
             // `applied` — silent success: the surviving/live editor holds the bytes
-            // and the restore's own change event reposts the authoritative
-            // document. No toast (the restore did not fail) and no resync of our
-            // own, mirroring the `applied` arm. (This path's convergence rides the
+            // and the restore's own change event resyncs the webview (a repost, or
+            // nothing when the restored text is the text it was last handed — see
+            // maybeRescueAliveRevert). No toast (the restore did not fail) and no
+            // resync of our own, mirroring the `applied` arm. (This path's convergence rides the
             // module's own change-event handler, whose lock-free `documentChanged`
             // is pre-existing behaviour.) The warn above covers triage, consistent
             // with the diverged arm's log-only decision.
@@ -372,10 +373,13 @@ export function createRevertRescueWiring(deps: RevertRescueWiringDeps): RevertRe
   // no-op. On a positive decision it BEST-EFFORT suppresses the debounced disk
   // (revert) repost — cancel() clears a timer a revert change-event may already
   // have scheduled, and the change-event caller ALSO early-returns so it never
-  // schedules one. The restore's OWN change event then reposts the authoritative
-  // dirty Document as the FINAL state. On restore FAILURE the onFailure reseeds the
-  // webview to the real (disk) doc so the live panel never silently diverges (the
-  // toast already warned the user). Returns true iff a rescue was performed.
+  // schedules one. The restore's OWN change event then resyncs the webview: it
+  // reposts the authoritative dirty Document as the FINAL state, unless the
+  // restored text is the text the webview was last handed (the usual case — the
+  // revert never reached it) — then the edit lineage (session/edit-lineage.ts)
+  // proves nothing changed for the webview and nothing is posted. On restore
+  // FAILURE the onFailure reseeds the webview to the real (disk) doc so the live
+  // panel never silently diverges (the toast already warned the user). Returns true iff a rescue was performed.
   // Skipped when the write lock is held (decideOnAliveRevert → rescue:false) so it
   // never races an in-flight apply.
   const maybeRescueAliveRevert = (): boolean => {

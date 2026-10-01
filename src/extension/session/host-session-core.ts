@@ -112,9 +112,22 @@ export type HostSessionEvent =
       readonly documentVersion: number;
       readonly canWrite: boolean;
       readonly currentContent: string;
+      // See the `documentChanged` variant. For an Edit it also answers whether
+      // an OLDER base is still current: yes iff `baseDocVersion >= lineageSince`.
+      readonly lineageSince: number | null;
     }
   | { readonly type: "openExternal"; readonly href: string }
-  | { readonly type: "documentChanged"; readonly documentVersion: number }
+  | {
+      readonly type: "documentChanged";
+      readonly documentVersion: number;
+      // The panel's lineage answer for the LIVE text (session/edit-lineage.ts):
+      // the version since which every label handed to the webview carried this
+      // same text (EOL aside), or `null` when that cannot be proven (text
+      // changed, nothing handed yet, or the write lock is held). Non-null ⇒ the
+      // version advance did not change the text the webview's lineage is built
+      // on — an EOL-mode switch — so it is not a foreign edit.
+      readonly lineageSince: number | null;
+    }
   | { readonly type: "themeChanged"; readonly themeKind: ThemeKind }
   | { readonly type: "viewStateVisible"; readonly documentVersion: number }
   | {
@@ -339,19 +352,32 @@ function contentMatches(a: string, b: string | null): boolean {
  *  `max(old, live)` so a late/reordered event or a future call site passing a
  *  LOWER version can never REWIND it (one clamp, one test). The `externalEpoch`
  *  increment is gated INTERNALLY: it fires only on a genuine LOCK-FREE forward
- *  advance (`liveVersion > old && pendingApplyBaseVersion === null`) — a
- *  lock-free advance is FOREIGN by construction (no self-apply is in flight, so
- *  the webview did not produce it), whereas a lock-HELD advance is usually the
+ *  advance (`liveVersion > old && pendingApplyBaseVersion === null`) whose text
+ *  the panel could not prove unchanged — such an advance is FOREIGN (no
+ *  self-apply is in flight, so the webview did not produce it; and an EOL-mode
+ *  switch, which advances the version without touching the text, is excluded by
+ *  `textUnchanged`), whereas a lock-HELD advance is usually the
  *  in-flight apply's own echo and is adjudicated by the settlement check
  *  instead. This is ONE of the reducer's TWO version-raising paths; the other is
  *  the settlement advance (`advanced` — `Math.max` over `event.settledVersion`
  *  for EVERY outcome kind since this PR, clamp-consistent with this helper and
  *  no longer an ok-only exemption). There are exactly two, and the invariant
  *  test's allowed-RHS roster is what fences a third from appearing. */
-function resyncLiveVersion(state: HostSessionState, liveVersion: number): HostSessionState {
+function resyncLiveVersion(
+  state: HostSessionState,
+  liveVersion: number,
+  // REQUIRED (no default) so every call site states its evidence: true only
+  // when the panel proved the live text is still the lineage text (an EOL-only
+  // advance). Only `documentChanged` and `edit` carry that proof; every other
+  // site passes `false` (today's behaviour — a lock-free advance there is
+  // scored foreign even if it was an EOL switch; accepted residual).
+  textUnchanged: boolean
+): HostSessionState {
   const raised = Math.max(state.lastAppliedDocVersion, liveVersion);
   const foreignAdvance =
-    liveVersion > state.lastAppliedDocVersion && state.pendingApplyBaseVersion === null;
+    liveVersion > state.lastAppliedDocVersion &&
+    state.pendingApplyBaseVersion === null &&
+    !textUnchanged;
   return {
     ...state,
     lastAppliedDocVersion: raised,
@@ -636,7 +662,7 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // also advances the epoch when the live version moved (this arm is only
         // reached lock-free — the lock guard returned above — so an advance is a
         // foreign external edit).
-        const resynced = resyncLiveVersion(state, event.documentVersion);
+        const resynced = resyncLiveVersion(state, event.documentVersion, false);
         return {
           state: { ...resynced, rejection: NONE },
           effects: [postDoc(resynced, resynced.lastAppliedDocVersion)],
@@ -655,7 +681,11 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // the resync would swallow the advance (the later debounced
         // `documentChanged` no-ops on the version-identical check) and finding
         // #4 recurs through the front door.
-        const resynced = resyncLiveVersion(state, event.documentVersion);
+        const resynced = resyncLiveVersion(
+          state,
+          event.documentVersion,
+          event.lineageSince !== null
+        );
         if (resynced.pendingApplyBaseVersion !== null) {
           // Host write lock held: STASH the latest edit intent instead of
           // dropping it. The webview only force-posts while in-flight on
@@ -681,9 +711,17 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
             ],
           };
         }
+        // Is the base current? The exact live version, or an OLDER version the
+        // lineage proves carried the same text as now (an EOL-mode switch
+        // advanced the version without touching the text). An unexpected-newer
+        // base (impossible from a correct webview) stays stale.
+        const liveVersion = resynced.lastAppliedDocVersion;
+        const base = event.baseDocVersion;
+        const baseIsCurrent =
+          base === liveVersion ||
+          (base < liveVersion && event.lineageSince !== null && base >= event.lineageSince);
         const verdict = decideEdit({
-          baseDocVersion: event.baseDocVersion,
-          lastAppliedDocVersion: resynced.lastAppliedDocVersion,
+          baseIsCurrent,
           canWrite: event.canWrite,
           content: event.content,
           currentContent: event.currentContent,
@@ -722,15 +760,18 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
             // that clears the webview's editInFlight and can transiently
             // wipe the accepted edit's content.
             return {
+              // The lock records the version the apply STARTS from, not the
+              // Edit's stated base: the settlement's `ackLabelObserved` and
+              // version-delta checks read it as the exact pre-apply version, and
+              // an older base accepted via the lineage would otherwise score the
+              // EOL switch's own advance as foreign.
               state: {
                 ...resynced,
-                pendingApplyBaseVersion: event.baseDocVersion,
+                pendingApplyBaseVersion: liveVersion,
                 inFlightContent: event.content,
                 rejection: NONE,
               },
-              effects: [
-                { type: "applyEdit", content: event.content, baseDocVersion: event.baseDocVersion },
-              ],
+              effects: [{ type: "applyEdit", content: event.content, baseDocVersion: liveVersion }],
             };
           default: {
             const _exhaustive: never = verdict;
@@ -809,10 +850,12 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // with the webview's `quollDocumentEol` EOL. That EOL comes from the wire
         // (`DocumentMessage.eol`), so the two agree in steady state — but an Edit
         // buffered or in flight across an EOL-mode switch (status bar →
-        // setEndOfLine, which advances the version and reposts through the
-        // lock-free `documentChanged` arm) still carries the OLD EOL. A byte
-        // compare would then read that edit as "foreign bytes" and bump the epoch
-        // on the webview's OWN acked lineage. EOL mode is a canonicalisation
+        // setEndOfLine, which advances the version WITHOUT a repost when the
+        // lineage proves the text unchanged — see the `documentChanged` arm —
+        // so the webview learns the new EOL only from its next Document) still
+        // carries the OLD EOL. A byte compare would then read that edit as
+        // "foreign bytes" and bump the epoch on the webview's OWN acked
+        // lineage. EOL mode is a canonicalisation
         // detail everywhere else in the pipeline, so the foreign-bytes verdict
         // must ignore it. The `a === b` fast path keeps the hot typing path
         // (byte-identical settle) regex-free — the normalise only runs when the
@@ -1128,11 +1171,11 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // Drain the stash through the FULL decideEdit gates, RE-BASED to the
         // settled version (safe: the document is edit #1's exact result, so the
         // stash — edit #1 + the extra keystroke — is a valid continuation).
-        // base === lastApplied ⇒ `stale` never fires. The drain's effects
-        // MIRROR the normal `edit` arm and REPLACE the ok ack Document.
+        // The re-base makes the base current by construction ⇒ `stale` never
+        // fires. The drain's effects MIRROR the normal `edit` arm and REPLACE
+        // the ok ack Document.
         const verdict = decideEdit({
-          baseDocVersion: settled.lastAppliedDocVersion,
-          lastAppliedDocVersion: settled.lastAppliedDocVersion,
+          baseIsCurrent: true,
           canWrite: event.canWrite,
           content: stash.content,
           // `canDrain` already narrowed `observed` to `string` — the drain is
@@ -1301,7 +1344,9 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // Document goes out), and pinned by a test so this note cannot drift.
         // `null` ⇒ no resync at all (no fabricated version).
         const resynced =
-          event.settledVersion !== null ? resyncLiveVersion(state, event.settledVersion) : state;
+          event.settledVersion !== null
+            ? resyncLiveVersion(state, event.settledVersion, false)
+            : state;
         const recovered: HostSessionState = {
           ...resynced,
           pendingApplyBaseVersion: null,
@@ -1521,7 +1566,7 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // matching live version (and a bumped epoch if the live version moved:
         // this arm clears a rejection, which the `accept` arm proved cannot
         // survive into the write lock, so the resync is lock-free here).
-        const resynced = resyncLiveVersion(state, event.documentVersion);
+        const resynced = resyncLiveVersion(state, event.documentVersion, false);
         return {
           state: { ...resynced, rejection: NONE },
           effects: [postDoc(resynced, resynced.lastAppliedDocVersion)],
@@ -1548,8 +1593,21 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // edit); a lock-HELD advance here is usually the in-flight apply's own
         // echo, so the increment is withheld and site 2 adjudicates the racy
         // case at settlement.
+        //
+        // Lineage-preserving advance (an EOL-mode switch): lock-free and the
+        // panel proved the live text is still the text the webview's lineage is
+        // built on. Nothing new for the webview — no Document, no epoch bump, and
+        // the rejection is KEPT (no Document goes out to clear the webview's
+        // banner, so clearing it here would desync the two). Checked before the
+        // `rejection: NONE` below for exactly that reason. The webview's Edits
+        // stay acceptable: the `edit` arm accepts an older base the lineage
+        // covers. `lineageSince` is always null under the lock (the panel does
+        // not compute it there), so the lock-held path below is unchanged.
+        if (event.lineageSince !== null && state.pendingApplyBaseVersion === null) {
+          return { state: resyncLiveVersion(state, event.documentVersion, true), effects: [] };
+        }
         const resynced: HostSessionState = {
-          ...resyncLiveVersion(state, event.documentVersion),
+          ...resyncLiveVersion(state, event.documentVersion, false),
           rejection: NONE,
         };
         // While the host write lock is held, an accepted apply's own
@@ -1596,7 +1654,7 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // split-editor edit is still in the documentChanged debounce. Reached
         // only lock-free (the lock guard returned above), so an advance is a
         // foreign external edit and the epoch increments.
-        const resynced = resyncLiveVersion(state, event.documentVersion);
+        const resynced = resyncLiveVersion(state, event.documentVersion, false);
         return {
           state: { ...resynced, rejection: NONE },
           effects: [postDoc(resynced, resynced.lastAppliedDocVersion)],

@@ -114,6 +114,7 @@ import {
   buildEditRejectedMessage,
   buildThemeMessage,
 } from "./document-message.js";
+import { createEditLineage } from "./edit-lineage.js";
 import { createEditSettledBarrier } from "./edit-settled-barrier.js";
 import { createEffectExecutor } from "./effect-executor.js";
 import {
@@ -435,6 +436,22 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     const canWriteNow = (): boolean =>
       canHostWrite(document.uri.scheme, (scheme) => workspace.fs.isWritableFileSystem(scheme));
 
+    // The text last handed to the webview, for telling an EOL-only version
+    // advance from a foreign edit (session/edit-lineage.ts). Recorded as a side
+    // effect of the two docVersion-carrying builders — the one place that knows
+    // exactly which text went out under which label — and reset by every host
+    // apply (see `applyEditSeam.apply`). A failed read resets it (every query
+    // then answers null = today's version-only judgement) and never blocks the
+    // post or the dispatch.
+    const lineage = createEditLineage((err) =>
+      console.warn("[quoll] edit-lineage read failed; judging by version only", err)
+    );
+    // The lineage answer for a lock-free resync. `null` while the write lock is
+    // held: the reducer ignores it there, and no extra getText() runs under
+    // the lock.
+    const liveLineageSince = (readLiveText: () => string): number | null =>
+      isWriteLockHeld(state) ? null : lineage.lineageSince(readLiveText);
+
     // Effect executor — owns `post`, `sendEditRejected`, `runApplyEdit`, and
     // `runEffects` (extracted to src/extension/session/effect-executor.ts so the
     // dispose / lifecycle branches get direct unit tests). It stays vscode-free:
@@ -465,22 +482,30 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       recordEvent: (m) => this.harness?.recordEvent(m, document.uri.toString()),
       showError,
       canWrite: canWriteNow,
-      buildSeedDocument: (docVersion, externalEpoch, epochGeneration) =>
-        buildDocumentMessageFromDocument(document, {
+      buildSeedDocument: (docVersion, externalEpoch, epochGeneration) => {
+        const message = buildDocumentMessageFromDocument(document, {
           docVersion,
           themeKind: themeKindFromColorTheme(window.activeColorTheme.kind),
           canWrite: canWriteNow(),
           externalEpoch,
           epochGeneration,
-        }),
-      buildRejectedDraft: (content, docVersion, externalEpoch, epochGeneration) =>
-        buildRejectedDraftFromDocument(document, content, {
+        });
+        lineage.noteHandedText(() => message.content, docVersion, document.version);
+        return message;
+      },
+      buildRejectedDraft: (content, docVersion, externalEpoch, epochGeneration) => {
+        const message = buildRejectedDraftFromDocument(document, content, {
           docVersion,
           themeKind: themeKindFromColorTheme(window.activeColorTheme.kind),
           canWrite: canWriteNow(),
           externalEpoch,
           epochGeneration,
-        }),
+        });
+        // The HOST text under this label, not the draft: the draft is the
+        // webview's own bytes, and its next Edit is built on this label.
+        lineage.noteHandedText(() => canonicalDocumentText(document), docVersion, document.version);
+        return message;
+      },
       buildTheme: (themeKind) => buildThemeMessage(themeKind),
       buildEditRejected: (error) => buildEditRejectedMessage(error),
       applyEditSeam: {
@@ -503,10 +528,16 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           );
           return edit;
         },
-        apply: (edit) =>
-          this.harness?.applyEditOverride
+        apply: (edit) => {
+          // The document is about to carry the webview's own text, which it was
+          // never handed: an external undo back to the lineage text must not make
+          // an Edit on an old label look current. The ack (or the next Document)
+          // re-anchors.
+          lineage.reset();
+          return this.harness?.applyEditOverride
             ? this.harness.applyEditOverride(edit)
-            : workspace.applyEdit(edit),
+            : workspace.applyEdit(edit);
+        },
       },
       // The production closure builds the encoding-preserving `Uri` via
       // `buildExternalUri` (WHATWG split + `Uri.from`, preserving `%2F`/`+`)
@@ -620,7 +651,11 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           )
         ),
       dispatchDocumentChanged: (documentVersion) => {
-        dispatch({ type: "documentChanged", documentVersion });
+        dispatch({
+          type: "documentChanged",
+          documentVersion,
+          lineageSince: liveLineageSince(() => canonicalDocumentText(document)),
+        });
         // A documentChanged fire means the buffer content advanced — refresh the
         // word/char count slot off the same signal, no extra listener. (Routing —
         // immediate vs coalesced — lives in revert-rescue-wiring's onDocumentChange.)
@@ -830,14 +865,18 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           // an external edit that raced the apply→settle window wins instead of
           // being clobbered) and only then passes it into `decideEdit` alongside
           // the stash. No host re-read is needed here.
-          dispatch({
-            type: "edit",
-            baseDocVersion: raw.baseDocVersion,
-            content: raw.content,
-            documentVersion: document.version,
-            canWrite: canWriteNow(),
-            currentContent: isWriteLockHeld(state) ? "" : canonicalDocumentText(document),
-          });
+          {
+            const currentContent = isWriteLockHeld(state) ? "" : canonicalDocumentText(document);
+            dispatch({
+              type: "edit",
+              baseDocVersion: raw.baseDocVersion,
+              content: raw.content,
+              documentVersion: document.version,
+              canWrite: canWriteNow(),
+              currentContent,
+              lineageSince: liveLineageSince(() => currentContent),
+            });
+          }
           return;
         case "open-external":
           dispatch({ type: "openExternal", href: raw.href });

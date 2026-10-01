@@ -1,0 +1,90 @@
+// Edit lineage: "which document versions carried the text the webview's
+// Edits are built on?"
+//
+// The reducer judges an Edit's base and a version advance by version number
+// alone, but some advances do not change the text — an EOL-mode switch
+// (`TextEdit.setEndOfLine`, the status bar) bumps `document.version` and
+// rewrites every line ending while the text stays the same. Judged by version,
+// that switch reads as a foreign edit: the epoch advances and the webview drops
+// its unsent keystrokes, and an Edit built just before it is refused as stale.
+//
+// This records the one thing that settles it: the host's text under each
+// docVersion-carrying label — usually the text handed to the webview, but a
+// rejected-draft reseed hands the webview its own draft bytes instead and
+// records the host's canonical text here (see buildRejectedDraft in
+// quoll-editor-panel.ts) — and `since`, the first label that carried that
+// text. A later live text that equals it (EOL aside) is the
+// same lineage — every label from `since` on is a valid base for it. The panel
+// resets it on every host apply: from then on the document has carried text the
+// webview produced and was never handed, so an external undo back to the old
+// text must not make an Edit on an old label look current.
+//
+// Pure + vscode-free so it is unit-testable; the panel owns the instance.
+
+import { sameTextIgnoringEol } from "../../shared/text-equality.js";
+
+export interface EditLineage {
+  /** Record the host's text under a docVersion-carrying label — usually the
+   *  text handed to the webview, but a rejected-draft reseed hands the
+   *  webview its own draft bytes and records the host's canonical text here.
+   *  `docVersion` is the label on the message; `liveVersion` is
+   *  `document.version` at the time the text was read. */
+  noteHandedText(read: () => string, docVersion: number, liveVersion: number): void;
+  /** The version since which the lineage has carried the live text, or `null`
+   *  when that cannot be proven. */
+  lineageSince(readLive: () => string): number | null;
+  /** Forget everything — every query answers `null`, which is today's
+   *  version-only behaviour. */
+  reset(): void;
+}
+
+/** A throwing `read` resets the lineage (it never blocks the caller's post or
+ *  dispatch) and is reported to `onReadError`. */
+export function createEditLineage(onReadError: (err: unknown) => void): EditLineage {
+  let lineage: { readonly text: string; readonly since: number } | null = null;
+  const guardedRead = (read: () => string): string | null => {
+    try {
+      return read();
+    } catch (err) {
+      lineage = null;
+      onReadError(err);
+      return null;
+    }
+  };
+  return {
+    noteHandedText(read, docVersion, liveVersion) {
+      const text = guardedRead(read);
+      if (text === null) {
+        return;
+      }
+      if (lineage !== null && sameTextIgnoringEol(text, lineage.text)) {
+        // Same text handed again (a ready / visible-edge resend, or the EOL
+        // switch's own form): `since` must NOT move, or an Edit built on an
+        // earlier label of this very text would turn stale.
+        return;
+      }
+      if (docVersion !== liveVersion) {
+        // Different text under a label that does not describe it (a
+        // rejected-draft replay re-sends the stored version while an external
+        // edit is still in the documentChanged debounce). Attributing the live
+        // text to a past label would let an Edit on that label overwrite the
+        // external change, so leave the lineage alone. While live differs from
+        // the old text every query answers `null`; if live returns to it, the
+        // old lineage answers again — safe, because no version in between
+        // carried text the webview produced (a host apply resets the lineage),
+        // so an Edit on that label is built on exactly the live text.
+        return;
+      }
+      lineage = { text, since: docVersion };
+    },
+    lineageSince(readLive) {
+      const liveText = guardedRead(readLive);
+      return liveText !== null && lineage !== null && sameTextIgnoringEol(liveText, lineage.text)
+        ? lineage.since
+        : null;
+    },
+    reset() {
+      lineage = null;
+    },
+  };
+}

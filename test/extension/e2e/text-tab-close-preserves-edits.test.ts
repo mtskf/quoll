@@ -1,9 +1,11 @@
 import * as assert from "node:assert";
 import * as vscode from "vscode";
+import { PROTOCOL_VERSION } from "./constants";
 import {
   cleanupBetweenTests,
   fixtureUri,
   getHarness,
+  isDocumentAfter,
   isDocumentEvent,
   tick,
   VIEW_TYPE,
@@ -40,16 +42,18 @@ describe("text-tab-close-preserves-edits", function () {
 
     // Open Quoll BESIDE (viewColumn Two) — both editors hold the same doc.
     await vscode.commands.executeCommand("vscode.openWith", uri, VIEW_TYPE, vscode.ViewColumn.Two);
-    await harness.waitForEvent(isDocumentEvent, 8000);
+    const seed = await harness.waitForEvent(isDocumentEvent, 8000);
+    assert.strictEqual(
+      seed.message.content,
+      dirtyText,
+      "precondition: Quoll seeded the dirty body"
+    );
     await tick(400);
 
-    // Clear recorded events so the webview assertion below is NON-VACUOUS: it
-    // must observe a FRESH Document post caused by the rescue (not the setup-era
-    // dirty seed). Focus the TEXT tab, then "Don't Save" close it
-    // (revert-then-close, no dialog).
+    // Focus the TEXT tab, then "Don't Save" close it (revert-then-close, no
+    // dialog).
     await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.One });
     await tick(200);
-    harness.clearEvents();
     await vscode.commands.executeCommand("workbench.action.revertAndCloseActiveEditor");
 
     // The rescue applyEdit is async off the tab-close / change event — poll the
@@ -69,25 +73,38 @@ describe("text-tab-close-preserves-edits", function () {
     );
     assert.ok(reDoc.isDirty, "document must still be dirty (unsaved) after the text tab closes");
 
-    // The live Quoll webview must END on the DIRTY content. A transient disk
-    // repost may be interleaved (viewStateVisible / edit-arm resync — cosmetic,
-    // documented), so poll to a deadline until the MOST RECENT post-close
-    // Document post is the restored bytes rather than snapshotting once (which
-    // would race the async repost). Non-vacuous: events were cleared, so a
-    // matching post must be a fresh rescue-driven repost.
+    // The live Quoll webview must END on the DIRTY content. Today the revert's
+    // change event posts the disk text (a new epoch) and the restore's reposts
+    // the dirty body; with no post at all the webview still holds the seed and
+    // the edit lineage must keep it silent. Either way the latest Document is
+    // what the webview holds — poll for it rather than snapshotting once (which
+    // would race the async repost).
     const postDeadline = Date.now() + 3000;
-    const latestDocPost = () => {
-      const posts = harness.events.filter(isDocumentEvent);
-      return posts[posts.length - 1];
-    };
-    while (latestDocPost()?.message.content !== dirtyText && Date.now() < postDeadline) {
+    const latestDocument = () => harness.events.filter(isDocumentEvent).at(-1);
+    while (latestDocument()?.message.content !== dirtyText && Date.now() < postDeadline) {
       await tick(50);
     }
+    const latest = latestDocument();
     assert.strictEqual(
-      latestDocPost()?.message.content,
+      latest?.message.content,
       dirtyText,
-      "the webview's latest Document post must settle on the restored dirty content (no disk end-state)"
+      "the webview must end on the restored dirty content (no disk end-state)"
     );
+
+    // And the host must agree: keystrokes typed on that Document's label must
+    // land. A label the host no longer treats as current (the seed's, after
+    // revert + restore advanced the version twice, without the lineage) is
+    // refused and nothing lands.
+    await tick(400); // let the restore's debounced documentChanged fire
+    const probe = `${dirtyText}PROBE`;
+    harness.activePanel?.simulateInbound({
+      protocol: PROTOCOL_VERSION,
+      type: "edit",
+      content: probe,
+      baseDocVersion: latest.message.docVersion,
+    });
+    const ack = await harness.waitForEvent(isDocumentAfter(reDoc.version), 5000);
+    assert.strictEqual(ack.message.content, probe, "an Edit on the webview's label must land");
   });
 
   it("control: manual Revert File while Quoll is open reseeds to disk (external wins, no false restore)", async () => {

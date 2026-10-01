@@ -22,6 +22,7 @@ import {
   type ValidateForWriteResult,
   validateMarkdownForWrite,
 } from "../../markdown/validate-for-write.js";
+import { sameTextIgnoringEol } from "../../shared/text-equality.js";
 
 export type EditVerdict =
   | { kind: "accept" }
@@ -31,8 +32,11 @@ export type EditVerdict =
   | { kind: "parse-failed"; error: MarkdownError };
 
 export type DecideEditInput = {
-  baseDocVersion: number;
-  lastAppliedDocVersion: number;
+  // Is the Edit's base still the document's current text? Version bookkeeping
+  // is the reducer's (host-session-core decides it: an exact version match, or
+  // an older base the lineage proves still carries the live text); this module
+  // is the content gate only.
+  baseIsCurrent: boolean;
   canWrite: boolean;
   content: string;
   currentContent: string;
@@ -47,16 +51,17 @@ export function decideEdit(input: DecideEditInput): EditVerdict {
   if (!input.canWrite) {
     return { kind: "readonly" };
   }
-  // stale next: strict equality so unexpected-newer (impossible from a
-  // correct webview) and unexpected-older both resync.
-  if (input.baseDocVersion !== input.lastAppliedDocVersion) {
+  // stale next: the base is not provably the current text → resync.
+  if (!input.baseIsCurrent) {
     return { kind: "stale" };
   }
-  // no-op before parse: identical bytes can be answered without paying
-  // for a parse (and avoids surfacing a parse-failed verdict on content
-  // that already matches the current document text). The comparison is
-  // against the supplied `currentContent`, which the host now canonicalizes.
-  if (input.content === input.currentContent) {
+  // no-op before parse: identical text can be answered without paying for a
+  // parse (and avoids surfacing a parse-failed verdict on content that already
+  // matches the current document text). EOL-insensitive: `currentContent` is
+  // canonicalised to `document.eol`, while an Edit built before an EOL-mode
+  // switch still carries the old line endings — the same text either way, so
+  // it must not be validated or written.
+  if (sameTextIgnoringEol(input.content, input.currentContent)) {
     return { kind: "no-op" };
   }
   const validate = input.markdownValidator ?? validateMarkdownForWrite;

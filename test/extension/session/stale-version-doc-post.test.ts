@@ -82,6 +82,7 @@ describe("stale-version Document post: keystroke is not lost", () => {
       documentVersion: 2,
       canWrite: true,
       currentContent: "v2 bytes",
+      lineageSince: null,
     });
     // Accepted → applyEdit (write). NOT a stale-reseed postDocument that would
     // discard the keystroke. Non-vacuity: under the old stale-version post
