@@ -41,9 +41,12 @@ function ctx(doc: string, visibleRanges: { from: number; to: number }[]): BuildC
   // fixture is parsed: a partial tree (CM's bounded initial parse covers only
   // the leading few KB) would build BOTH the tiny and whole viewports from the
   // same leading fragment, collapsing the ratio to ~1 and failing the test.
-  // fullTree throws if the 5s budget is somehow exhausted, surfacing an
-  // incomplete parse as a clear error instead of a baffling ratio failure.
-  const tree = fullTree(state);
+  // The parse budget is wall-clock, and under load the 1MB parse can outlast
+  // fullTree's default 5s, so it gets the same ceiling as the test's own
+  // timeout — a ceiling only: a small fixture still returns at once. If it is
+  // exhausted anyway fullTree throws, surfacing an incomplete parse as a clear
+  // error instead of a baffling ratio failure.
+  const tree = fullTree(state, HEAVY_FIXTURE_TIMEOUT_MS);
   return { state, selection: state.selection, visibleRanges, tree };
 }
 
