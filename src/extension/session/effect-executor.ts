@@ -96,6 +96,10 @@ export interface EffectExecutorDeps<TEdit> {
   recordEvent: (message: HostToWebview) => void;
   showError: (message: string) => void;
   canWrite: () => boolean;
+  /** The panel's lineage answer for the live text (session/edit-lineage.ts),
+   *  carried on the edit-rejected recovery dispatches. Never throws: the
+   *  lineage guards its own read. */
+  readLineageSince: () => number | null;
   /** Live builders — read theme/canWrite/document text at call time (freshness).
    *  The (externalEpoch, epochGeneration) pair is core-managed and passed from
    *  the effect (self-contained, like docVersion). */
@@ -451,6 +455,7 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
         type: "editRejectedDeliveryFailed",
         id,
         documentVersion: readVersionGuarded("edit-rejected-recovery:sync-throw"),
+        lineageSince: deps.readLineageSince(),
       });
       return;
     }
@@ -482,6 +487,7 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
           type: "editRejectedDeliveryFailed",
           id,
           documentVersion: readVersionGuarded("edit-rejected-recovery:refused"),
+          lineageSince: deps.readLineageSince(),
         });
       },
       (err: unknown) => {
@@ -499,6 +505,7 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
           type: "editRejectedDeliveryFailed",
           id,
           documentVersion: readVersionGuarded("edit-rejected-recovery:rejected"),
+          lineageSince: deps.readLineageSince(),
         });
       }
     );

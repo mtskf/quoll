@@ -157,6 +157,7 @@ function harness(options: HarnessOptions = {}) {
       }
     },
     canWrite: () => true,
+    readLineageSince: () => null,
     // Gated on the SAME `settleFailure` flag as `readCanonical` on purpose: in
     // production both bottom out in `canonicalDocumentText(document)` (the panel
     // wires `buildSeedDocument` → `canonicalDocumentText` and

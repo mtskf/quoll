@@ -482,6 +482,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       recordEvent: (m) => this.harness?.recordEvent(m, document.uri.toString()),
       showError,
       canWrite: canWriteNow,
+      readLineageSince: () => liveLineageSince(() => canonicalDocumentText(document)),
       buildSeedDocument: (docVersion, externalEpoch, epochGeneration) => {
         const message = buildDocumentMessageFromDocument(document, {
           docVersion,
@@ -617,7 +618,11 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       isDisposed: () => disposed,
       postCaretApply: (caret) => post(buildCaretApplyMessage(caret)),
       dispatchViewStateVisible: () =>
-        dispatch({ type: "viewStateVisible", documentVersion: document.version }),
+        dispatch({
+          type: "viewStateVisible",
+          documentVersion: document.version,
+          lineageSince: liveLineageSince(() => canonicalDocumentText(document)),
+        }),
       consumeRevealCaretSuppression: () => revealCaretSuppression.consume(),
     });
     disposables.push(caretWiring);
@@ -843,7 +848,11 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       }
       switch (raw.type) {
         case "ready":
-          dispatch({ type: "ready", documentVersion: document.version });
+          dispatch({
+            type: "ready",
+            documentVersion: document.version,
+            lineageSince: liveLineageSince(() => canonicalDocumentText(document)),
+          });
           // Guard-less: relies on handleInbound's top-of-function `disposed`
           // guard above, which already gates this whole switch.
           editorConfig.push();
