@@ -610,6 +610,12 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // reveal-caret-suppression.ts. One per panel (function-scoped, never
     // module-level — like the other per-panel caret locals).
     const revealCaretSuppression = createRevealCaretSuppression();
+    const dispatchViewStateVisible = (): void =>
+      dispatch({
+        type: "viewStateVisible",
+        documentVersion: document.version,
+        lineageSince: liveLineageSince(() => canonicalDocumentText(document)),
+      });
     const caretWiring = createCaretHandoffWiring({
       document,
       webviewPanel,
@@ -617,12 +623,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       switchCaret,
       isDisposed: () => disposed,
       postCaretApply: (caret) => post(buildCaretApplyMessage(caret)),
-      dispatchViewStateVisible: () =>
-        dispatch({
-          type: "viewStateVisible",
-          documentVersion: document.version,
-          lineageSince: liveLineageSince(() => canonicalDocumentText(document)),
-        }),
+      dispatchViewStateVisible,
       consumeRevealCaretSuppression: () => revealCaretSuppression.consume(),
     });
     disposables.push(caretWiring);
@@ -1173,6 +1174,12 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         // Non-null in this branch: `this.harness` gates both the probe build
         // above and this panelControls install, so statusBarProbes is set.
         statusBarItems: statusBarProbes ?? [],
+        // Same disposed guard as the caret wiring's view-state handler.
+        simulateViewStateVisible: () => {
+          if (!disposed) {
+            dispatchViewStateVisible();
+          }
+        },
       };
       this.harness.setActivePanel(panelControls);
     }

@@ -118,6 +118,13 @@ export interface PanelControls {
    *  the set through here so a test observes show/hide/dispose PER panel
    *  (window.createStatusBarItem is otherwise unobservable). */
   readonly statusBarItems: readonly FakeStatusBarItem[];
+  /** Runs the panel's visible-edge resync dispatch at a point the test chooses.
+   *  Real `onDidChangeViewState` events are VS-Code-timed, so E2E cannot place
+   *  one; this calls the very closure the caret wiring invokes from that handler
+   *  while the panel is visible. It skips the wiring's own `visible` check and
+   *  active-edge side effects; the real-event E2Es (hidden-webview-resync,
+   *  status-bar-active-edge) cover those. */
+  simulateViewStateVisible(): void;
 }
 
 type EventWaiter = {
