@@ -39,12 +39,12 @@ import {
  * infers it). The third case is the Done-when end to end: the switch's debounced
  * `documentChanged` fires first, then keystrokes typed before the switch land on
  * disk in the new EOL. The fourth pins the panel's `ready` wiring: a `ready` that
- * lands before that debounce resyncs on the same epoch. The fifth pins the
- * converse: a host apply breaks the
- * lineage, so an external undo back to the pre-apply text does not let an Edit
- * on the pre-apply version overwrite it. The last two pin the remaining lineage
- * wirings the same way (a visible-edge resync, and the recovery from a failed
- * edit-rejected delivery), each acting from inside the switch's own change event.
+ * lands before that debounce resyncs on the same epoch. The fifth and sixth pin
+ * the remaining lineage wirings the same way (a visible-edge resync, and the
+ * recovery from a failed edit-rejected delivery), each acting from inside the
+ * switch's own change event. The seventh pins the converse: a host apply breaks
+ * the lineage, so an external undo back to the pre-apply text does not let an
+ * Edit on the pre-apply version overwrite it.
  */
 describe("crlf-roundtrip", function () {
   this.timeout(20000);
