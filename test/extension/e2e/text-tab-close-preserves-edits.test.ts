@@ -1,9 +1,11 @@
 import * as assert from "node:assert";
 import * as vscode from "vscode";
+import { PROTOCOL_VERSION } from "./constants";
 import {
   cleanupBetweenTests,
   fixtureUri,
   getHarness,
+  isDocumentAfter,
   isDocumentEvent,
   tick,
   VIEW_TYPE,
@@ -48,12 +50,10 @@ describe("text-tab-close-preserves-edits", function () {
     );
     await tick(400);
 
-    // Clear recorded events so the webview assertion below sees only post-close
-    // Documents. Focus the TEXT tab, then "Don't Save" close it
-    // (revert-then-close, no dialog).
+    // Focus the TEXT tab, then "Don't Save" close it (revert-then-close, no
+    // dialog).
     await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.One });
     await tick(200);
-    harness.clearEvents();
     await vscode.commands.executeCommand("workbench.action.revertAndCloseActiveEditor");
 
     // The rescue applyEdit is async off the tab-close / change event — poll the
@@ -73,25 +73,38 @@ describe("text-tab-close-preserves-edits", function () {
     );
     assert.ok(reDoc.isDirty, "document must still be dirty (unsaved) after the text tab closes");
 
-    // The live Quoll webview must END on the DIRTY content: the latest
-    // post-close Document, or — if none was posted — the seed above. A transient
-    // disk post may be interleaved (a viewStateVisible resync from the tab
-    // switch — cosmetic, documented); it hands the webview the disk text, so the
-    // restore's change event reposts the dirty body. With no such post the
-    // restore brings back exactly the text the webview was last handed, and the
-    // edit lineage keeps it silent (the webview still holds the dirty seed).
-    // Poll to a deadline rather than snapshotting once (which would race the
-    // async repost).
+    // The live Quoll webview must END on the DIRTY content. Today the revert's
+    // change event posts the disk text (a new epoch) and the restore's reposts
+    // the dirty body; with no post at all the webview still holds the seed and
+    // the edit lineage must keep it silent. Either way the latest Document is
+    // what the webview holds — poll for it rather than snapshotting once (which
+    // would race the async repost).
     const postDeadline = Date.now() + 3000;
-    const latestDocument = () => harness.events.filter(isDocumentEvent).at(-1) ?? seed;
-    while (latestDocument().message.content !== dirtyText && Date.now() < postDeadline) {
+    const latestDocument = () => harness.events.filter(isDocumentEvent).at(-1);
+    while (latestDocument()?.message.content !== dirtyText && Date.now() < postDeadline) {
       await tick(50);
     }
+    const latest = latestDocument();
     assert.strictEqual(
-      latestDocument().message.content,
+      latest?.message.content,
       dirtyText,
       "the webview must end on the restored dirty content (no disk end-state)"
     );
+
+    // And the host must agree: keystrokes typed on that Document's label must
+    // land. A label the host no longer treats as current (the seed's, after
+    // revert + restore advanced the version twice, without the lineage) is
+    // refused and nothing lands.
+    await tick(400); // let the restore's debounced documentChanged fire
+    const probe = `${dirtyText}PROBE`;
+    harness.activePanel?.simulateInbound({
+      protocol: PROTOCOL_VERSION,
+      type: "edit",
+      content: probe,
+      baseDocVersion: latest.message.docVersion,
+    });
+    const ack = await harness.waitForEvent(isDocumentAfter(reDoc.version), 5000);
+    assert.strictEqual(ack.message.content, probe, "an Edit on the webview's label must land");
   });
 
   it("control: manual Revert File while Quoll is open reseeds to disk (external wins, no false restore)", async () => {

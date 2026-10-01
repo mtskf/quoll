@@ -24,19 +24,34 @@ export interface EditLineage {
   /** Record the text a docVersion-carrying message was built from.
    *  `docVersion` is the label on the message; `liveVersion` is
    *  `document.version` at the time the text was read. */
-  noteHandedText(text: string, docVersion: number, liveVersion: number): void;
-  /** The version since which the lineage has carried `liveText`, or `null`
+  noteHandedText(read: () => string, docVersion: number, liveVersion: number): void;
+  /** The version since which the lineage has carried the live text, or `null`
    *  when that cannot be proven. */
-  lineageSince(liveText: string): number | null;
-  /** Forget everything (e.g. after a failed read) — every query answers `null`,
-   *  which is today's version-only behaviour. */
+  lineageSince(readLive: () => string): number | null;
+  /** Forget everything — every query answers `null`, which is today's
+   *  version-only behaviour. */
   reset(): void;
 }
 
-export function createEditLineage(): EditLineage {
+/** A throwing `read` resets the lineage (it never blocks the caller's post or
+ *  dispatch) and is reported to `onReadError`. */
+export function createEditLineage(onReadError: (err: unknown) => void): EditLineage {
   let lineage: { readonly text: string; readonly since: number } | null = null;
+  const guardedRead = (read: () => string): string | null => {
+    try {
+      return read();
+    } catch (err) {
+      lineage = null;
+      onReadError(err);
+      return null;
+    }
+  };
   return {
-    noteHandedText(text, docVersion, liveVersion) {
+    noteHandedText(read, docVersion, liveVersion) {
+      const text = guardedRead(read);
+      if (text === null) {
+        return;
+      }
       if (lineage !== null && sameTextIgnoringEol(text, lineage.text)) {
         // Same text handed again (a ready / visible-edge resend, or the EOL
         // switch's own form): `since` must NOT move, or an Edit built on an
@@ -57,8 +72,11 @@ export function createEditLineage(): EditLineage {
       }
       lineage = { text, since: docVersion };
     },
-    lineageSince(liveText) {
-      return lineage !== null && sameTextIgnoringEol(liveText, lineage.text) ? lineage.since : null;
+    lineageSince(readLive) {
+      const liveText = guardedRead(readLive);
+      return liveText !== null && lineage !== null && sameTextIgnoringEol(liveText, lineage.text)
+        ? lineage.since
+        : null;
     },
     reset() {
       lineage = null;

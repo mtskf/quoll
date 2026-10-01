@@ -440,33 +440,17 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // advance from a foreign edit (session/edit-lineage.ts). Recorded as a side
     // effect of the two docVersion-carrying builders — the one place that knows
     // exactly which text went out under which label — and reset by every host
-    // apply (see `applyEditSeam.apply`). A failed record or query resets it
-    // (every query then answers null = today's version-only judgement) and never
-    // blocks the post or the dispatch.
-    const lineage = createEditLineage();
-    const noteHandedText = (read: () => string, docVersion: number): void => {
-      try {
-        lineage.noteHandedText(read(), docVersion, document.version);
-      } catch (err) {
-        lineage.reset();
-        console.warn("[quoll] edit-lineage record failed; lineage reset", err);
-      }
-    };
+    // apply (see `applyEditSeam.apply`). A failed read resets it (every query
+    // then answers null = today's version-only judgement) and never blocks the
+    // post or the dispatch.
+    const lineage = createEditLineage((err) =>
+      console.warn("[quoll] edit-lineage read failed; judging by version only", err)
+    );
     // The lineage answer for a lock-free resync. `null` while the write lock is
     // held: the reducer ignores it there, and no extra getText() runs under
     // the lock.
-    const liveLineageSince = (readLiveText: () => string): number | null => {
-      if (isWriteLockHeld(state)) {
-        return null;
-      }
-      try {
-        return lineage.lineageSince(readLiveText());
-      } catch (err) {
-        lineage.reset();
-        console.warn("[quoll] edit-lineage query failed; judging by version only", err);
-        return null;
-      }
-    };
+    const liveLineageSince = (readLiveText: () => string): number | null =>
+      isWriteLockHeld(state) ? null : lineage.lineageSince(readLiveText);
 
     // Effect executor — owns `post`, `sendEditRejected`, `runApplyEdit`, and
     // `runEffects` (extracted to src/extension/session/effect-executor.ts so the
@@ -506,7 +490,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           externalEpoch,
           epochGeneration,
         });
-        noteHandedText(() => message.content, docVersion);
+        lineage.noteHandedText(() => message.content, docVersion, document.version);
         return message;
       },
       buildRejectedDraft: (content, docVersion, externalEpoch, epochGeneration) => {
@@ -519,7 +503,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         });
         // The HOST text under this label, not the draft: the draft is the
         // webview's own bytes, and its next Edit is built on this label.
-        noteHandedText(() => canonicalDocumentText(document), docVersion);
+        lineage.noteHandedText(() => canonicalDocumentText(document), docVersion, document.version);
         return message;
       },
       buildTheme: (themeKind) => buildThemeMessage(themeKind),
