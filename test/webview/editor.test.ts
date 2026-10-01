@@ -366,16 +366,9 @@ describe("editor — ok-ack while ahead does not reseed backwards (d2)", () => {
   });
 });
 
-// (d3) The ok-ack fold must ALSO require identity-lineage continuity, not just
-// a content match. A host Document whose content happens to equal our in-flight
-// bytes but which arrives on a DIFFERENT lineage (same-generation epoch advance,
-// or a new epochGeneration) is a foreign snapshot, not our ack: edit-sync's
-// replay buffer is dropped for exactly that pair (shouldDropBufferedForEpoch),
-// so folding the visible reseed away would strand the user's ahead-of-host
-// keystrokes on screen with nothing left to post them — they look saved, are
-// not, and resurface on the NEXT keystroke as bytes the host already superseded
-// (external-wins — NOT an `edit-rejected`; no banner is involved).
-// Display and replay must agree on one rule; see ARCHITECTURE.md §3/§5/§7.
+// (d2b) An ack that crossed an EOL-mode switch echoes our bytes in the
+// document's new line endings; the ok-ack fold must still recognise it and
+// fold instead of rewinding the keystrokes typed after it was posted.
 describe("editor — an ack that crossed an EOL-mode switch still folds (d2b)", () => {
   it("does not rewind the ahead keystroke when the ack carries the new line endings", () => {
     // EOL switched to CRLF while "a\nbc" was in flight; the host canonicalises
@@ -415,6 +408,16 @@ describe("editor — an ack that crossed an EOL-mode switch still folds (d2b)", 
   });
 });
 
+// (d3) The ok-ack fold must ALSO require identity-lineage continuity, not just
+// a content match. A host Document whose content happens to equal our in-flight
+// bytes but which arrives on a DIFFERENT lineage (same-generation epoch advance,
+// or a new epochGeneration) is a foreign snapshot, not our ack: edit-sync's
+// replay buffer is dropped for exactly that pair (shouldDropBufferedForEpoch),
+// so folding the visible reseed away would strand the user's ahead-of-host
+// keystrokes on screen with nothing left to post them — they look saved, are
+// not, and resurface on the NEXT keystroke as bytes the host already superseded
+// (external-wins — NOT an `edit-rejected`; no banner is involved).
+// Display and replay must agree on one rule; see ARCHITECTURE.md §3/§5/§7.
 describe("editor — ok-ack fold requires identity-lineage continuity (d3)", () => {
   // Types "2" (posted) then "3" (buffered) on top of a "D1" seed carrying the
   // given identity pair, leaving the editor AHEAD of the in-flight "D12".
@@ -772,10 +775,11 @@ describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
 //
 // ⚠️ The two reads are NOT symmetric, so one test cannot gate both (measured by
 // two independent reviewers):
-//   - `getDoc()` supplies the bytes edit-sync posts, and the ok-ack fold compares
-//     the host echo against them byte-exactly (`content === inFlight.content`,
-//     edit-sync.ts:957). Serialize it with the wrong EOL and every ack looks
-//     foreign -> reseed -> the keystroke rewind the fold exists to prevent.
+//   - `getDoc()` supplies the bytes edit-sync posts. The ok-ack fold is
+//     EOL-insensitive (`sameTextIgnoringEol`, edit-sync.ts acksInFlightEdit), so
+//     a wrong-EOL getDoc no longer shows up as a rewind — it shows up on the WIRE:
+//     the posted Edit carries the wrong separator. Hence this test asserts the
+//     posted bytes literally.
 //   - `liveDoc` feeds ONLY `aheadOfHost` (editor.ts, `applyDocument`:
 //     `const aheadOfHost = liveDoc !== content`). An LF-only liveDoc is
 //     benign while the editor is ahead; it shows up instead as a FALSE

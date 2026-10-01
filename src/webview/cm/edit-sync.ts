@@ -263,10 +263,12 @@ export type EditSync = {
   /** Is this incoming Document the ack of our own in-flight Edit? TWO conditions,
    *  deliberately answered by ONE call so a caller cannot check half of it:
    *
-   *  1. `content` is byte-identical to the Edit currently awaiting its ack
-   *     (single-flight → at most one). False whenever nothing is in flight, so a
-   *     genuine external divergence — which never matches our posted bytes —
-   *     still reseeds.
+   *  1. `content` carries the same TEXT as the Edit currently awaiting its ack,
+   *     line endings aside (`sameTextIgnoringEol` — an ack that crossed an
+   *     EOL-mode switch echoes our bytes in the document's new EOL).
+   *     Single-flight → at most one. False whenever nothing is in flight, so a
+   *     genuine external divergence — whose text never matches our posted
+   *     bytes — still reseeds.
    *  2. The Document's identity pair CONTINUES the lineage we are carrying —
    *     same generation with the epoch not advanced, OR (legacy tolerance)
    *     neither side carries a pair at all, which keeps a pair-less host on the
@@ -483,9 +485,10 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
   // The content test is EOL-INSENSITIVE, through the same `sameTextIgnoringEol`
   // the host's `contentMatches` asks of this document (src/shared/) — one
   // definition, so the two sides cannot drift apart about what "carries these
-  // bytes" means. It is asked ONLY here, never to decide what to post: the host
-  // canonicalises a Document to `document.eol` while this side posts whatever its
-  // `quollDocumentEol` facet holds. The facet takes the wire `eol`, so the two
+  // bytes" means. In this module it is asked here (the loss judgement) and in
+  // `acksInFlightEdit` (is this Document our ack?), never to decide WHAT bytes
+  // to post: the host canonicalises a Document to `document.eol` while this side
+  // posts whatever its `quollDocumentEol` facet holds. The facet takes the wire `eol`, so the two
   // agree in steady state, but bytes held across an EOL-mode switch still carry
   // the old EOL — an EOL-only difference is skew between the two sides, and
   // reporting it as a lost edit trains the user to ignore a notice that

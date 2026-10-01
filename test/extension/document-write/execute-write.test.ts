@@ -10,8 +10,8 @@ import type { MinimalEditSpan } from "../../../src/extension/document-write/mini
 // (and bumps `version`) via the injected `onApply`, so a test can model a clean
 // apply, a diverging (misplaced / external-won) apply, a refusal, or a throw.
 // `readCanonical` returns the live `text` verbatim (the fakes already speak in
-// the canonical EOL), so the executor's `settledContent === intendedContent`
-// divergence check exercises real bytes.
+// the canonical EOL), so the executor's `sameTextIgnoringEol` divergence check
+// exercises real bytes.
 interface FakeOptions {
   initial: string;
   /** Apply behaviour. Return false → refused; throw sync → applyThrew; reject →

@@ -66,7 +66,7 @@ describe("buildDocumentMessageFromDocument", () => {
 describe("decideEdit + canonicalDocumentText wiring", () => {
   const base = { baseIsCurrent: true, canWrite: true };
 
-  it("returns no-op when the inbound (canonical) content matches the canonicalized document (pins the EOL-adapter wiring)", () => {
+  it("returns no-op when the inbound content matches the canonicalized document (verdict only — the canonicalisation itself is pinned in test/extension/document-write)", () => {
     // getText() is MIXED; the webview echoes the CANONICAL form → no-op.
     // (Since decideEdit's no-op check became EOL-insensitive, a raw getText()
     // here would ALSO read as no-op — this pins the verdict, no longer the

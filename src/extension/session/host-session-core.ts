@@ -850,8 +850,10 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // with the webview's `quollDocumentEol` EOL. That EOL comes from the wire
         // (`DocumentMessage.eol`), so the two agree in steady state — but an Edit
         // buffered or in flight across an EOL-mode switch (status bar →
-        // setEndOfLine, which advances the version and reposts through the
-        // lock-free `documentChanged` arm) still carries the OLD EOL. A byte
+        // setEndOfLine, which advances the version WITHOUT a repost when the
+        // lineage proves the text unchanged — see the `documentChanged` arm —
+        // so the webview learns the new EOL only from its next Document) still
+        // carries the OLD EOL. A byte
         // compare would then read that edit as "foreign bytes" and bump the epoch
         // on the webview's OWN acked lineage. EOL mode is a canonicalisation
         // detail everywhere else in the pipeline, so the foreign-bytes verdict

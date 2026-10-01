@@ -89,8 +89,8 @@ export interface DocumentWriteAdapter<TEdit> {
 }
 
 /** Complete outcome tag set — one per today's five `ApplyEditOutcome` kinds,
- *  plus `diverged` (an `ok` apply whose landed bytes differ from intended) and
- *  `appliedUnverified` (the pipeline completed, but the settle-time CONTENT read
+ *  plus `diverged` (an `ok` apply whose landed TEXT differs from intended, EOL
+ *  aside) and `appliedUnverified` (the pipeline completed, but the settle-time CONTENT read
  *  threw so the divergence check could not run). The session wrapper and the
  *  rescue map 1:1 from these (see callers). */
 export type DocumentWriteTag =
@@ -99,8 +99,8 @@ export type DocumentWriteTag =
   // without ever calling `build` or `apply` (see `settle`'s ⚠️ note below), so on
   // that path there is no landing and no compare. `diverged` is the exception —
   // it is only reachable through a compare that actually ran.
-  | "applied" // pipeline ok, settled content === intended (or nothing to apply) → reducer `ok`
-  | "diverged" // apply ok, landed content !== intended → `ok` + divergedAfterApply
+  | "applied" // pipeline ok, settled text equals intended ignoring EOL (or nothing to apply) → reducer `ok`
+  | "diverged" // apply ok, landed TEXT differs from intended (EOL aside) → `ok` + divergedAfterApply
   | "appliedUnverified" // pipeline ok, the settle-time CONTENT read threw → `ok`, UNVERIFIED
   | "applyRefused" // apply resolved false → reducer `refused`
   | "buildThrew" // build() threw → reducer `constructThrew`
