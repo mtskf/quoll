@@ -172,7 +172,7 @@ describe("validateMarkdownForWrite", () => {
   });
 
   it(
-    "validates a ~1 MiB document of benign links without throwing or hanging",
+    "validates a ~1 MiB document of benign links without throwing",
     () => {
       const ONE_LINK = "[t](https://example.com/x)\n";
       const COPIES = Math.ceil((1 << 20) / ONE_LINK.length);
