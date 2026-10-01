@@ -37,7 +37,9 @@ import {
  * that Edit's ack, whose `eol` field carries the new separator (the webview never
  * infers it). The third case is the Done-when end to end: the switch's debounced
  * `documentChanged` fires first, then keystrokes typed before the switch land on
- * disk in the new EOL. The fourth pins the converse: a host apply breaks the
+ * disk in the new EOL. The fourth pins the panel's `ready` wiring: a `ready` that
+ * lands before that debounce resyncs on the same epoch. The fifth pins the
+ * converse: a host apply breaks the
  * lineage, so an external undo back to the pre-apply text does not let an Edit
  * on the pre-apply version overwrite it.
  */
@@ -268,6 +270,55 @@ describe("crlf-roundtrip", function () {
     );
     assert.strictEqual(await doc.save(), true);
     assert.strictEqual(await fs.readFile(tempFile, "utf8"), "a\r\nbc");
+  });
+
+  it("a `ready` landing inside the EOL switch's debounce resyncs without advancing the epoch", async () => {
+    const dir = await makeTempDir("eol-switch-ready");
+    tempFile = path.join(dir, "ready.md");
+    await fs.writeFile(tempFile, "a\nb");
+
+    const uri = vscode.Uri.file(tempFile);
+    await vscode.commands.executeCommand("vscode.openWith", uri, VIEW_TYPE);
+    const harness = await getHarness();
+    await harness.waitForEvent(isDocumentEvent, 8000);
+    const doc = await vscode.workspace.openTextDocument(uri);
+    assert.strictEqual(doc.eol, vscode.EndOfLine.LF, "fixture opens as LF");
+    const panel = harness.activePanel;
+    assert.ok(panel, "no active panel");
+    await tick(400); // let the open settle (the webview's own `ready` resync)
+    const settled = harness.events.filter(isDocumentEvent).at(-1);
+    assert.ok(settled, "no Document after open");
+    harness.clearEvents();
+
+    // Send `ready` from inside the switch's own change event: synchronously
+    // ahead of the debounced `documentChanged`, so only the ready arm's lineage
+    // answer can keep the epoch — no timing involved.
+    let readySent = 0;
+    const sub = vscode.workspace.onDidChangeTextDocument((e) => {
+      if (e.document.uri.toString() !== uri.toString()) {
+        return;
+      }
+      sub.dispose();
+      readySent++;
+      panel.simulateInbound({ protocol: PROTOCOL_VERSION, type: "ready" });
+    });
+    try {
+      const edit = new vscode.WorkspaceEdit();
+      edit.set(uri, [vscode.TextEdit.setEndOfLine(vscode.EndOfLine.CRLF)]);
+      assert.strictEqual(await vscode.workspace.applyEdit(edit), true);
+    } finally {
+      sub.dispose();
+    }
+    assert.strictEqual(readySent, 1, "the switch fired no change event to send `ready` from");
+
+    const resync = await harness.waitForEvent(isDocumentAfter(settled.message.docVersion), 5000);
+    assert.strictEqual(resync.message.docVersion, doc.version);
+    assert.strictEqual(resync.message.eol, "\r\n");
+    assert.strictEqual(
+      resync.message.externalEpoch,
+      settled.message.externalEpoch,
+      "the switch must not advance the epoch"
+    );
   });
 
   it("an external undo of a host apply is not the same lineage: an Edit on the pre-apply version is refused", async () => {
