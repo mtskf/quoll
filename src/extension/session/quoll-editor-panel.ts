@@ -436,19 +436,13 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     const canWriteNow = (): boolean =>
       canHostWrite(document.uri.scheme, (scheme) => workspace.fs.isWritableFileSystem(scheme));
 
-    // Effect executor — owns `post`, `sendEditRejected`, `runApplyEdit`, and
-    // `runEffects` (extracted to src/extension/session/effect-executor.ts so the
-    // dispose / lifecycle branches get direct unit tests). It stays vscode-free:
-    // every VS Code touch (postMessage surface, WorkspaceEdit build/apply,
-    // document text/version, theme/canWrite reads, handleOpenExternal, the
-    // message builders) is injected here. The builders are closures that read
-    // live theme/canWrite at CALL time, preserving the freshness contract.
     // The text last handed to the webview, for telling an EOL-only version
     // advance from a foreign edit (session/edit-lineage.ts). Recorded as a side
     // effect of the two docVersion-carrying builders — the one place that knows
-    // exactly which text went out under which label. A failed record resets it
+    // exactly which text went out under which label — and reset by every host
+    // apply (see `applyEditSeam.apply`). A failed record or query resets it
     // (every query then answers null = today's version-only judgement) and never
-    // blocks the post.
+    // blocks the post or the dispatch.
     const lineage = createEditLineage();
     const noteHandedText = (read: () => string, docVersion: number): void => {
       try {
@@ -461,8 +455,26 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // The lineage answer for a lock-free resync. `null` while the write lock is
     // held: the reducer ignores it there, and no extra getText() runs under
     // the lock.
-    const liveLineageSince = (readLiveText: () => string): number | null =>
-      isWriteLockHeld(state) ? null : lineage.lineageSince(readLiveText());
+    const liveLineageSince = (readLiveText: () => string): number | null => {
+      if (isWriteLockHeld(state)) {
+        return null;
+      }
+      try {
+        return lineage.lineageSince(readLiveText());
+      } catch (err) {
+        lineage.reset();
+        console.warn("[quoll] edit-lineage query failed; judging by version only", err);
+        return null;
+      }
+    };
+
+    // Effect executor — owns `post`, `sendEditRejected`, `runApplyEdit`, and
+    // `runEffects` (extracted to src/extension/session/effect-executor.ts so the
+    // dispose / lifecycle branches get direct unit tests). It stays vscode-free:
+    // every VS Code touch (postMessage surface, WorkspaceEdit build/apply,
+    // document text/version, theme/canWrite reads, handleOpenExternal, the
+    // message builders) is injected here. The builders are closures that read
+    // live theme/canWrite at CALL time, preserving the freshness contract.
     const { post, runEffects } = createEffectExecutor({
       isDisposed: () => disposed,
       getState: () => state,
@@ -532,10 +544,16 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           );
           return edit;
         },
-        apply: (edit) =>
-          this.harness?.applyEditOverride
+        apply: (edit) => {
+          // The document is about to carry the webview's own text, which it was
+          // never handed: an external undo back to the lineage text must not make
+          // an Edit on an old label look current. The ack (or the next Document)
+          // re-anchors.
+          lineage.reset();
+          return this.harness?.applyEditOverride
             ? this.harness.applyEditOverride(edit)
-            : workspace.applyEdit(edit),
+            : workspace.applyEdit(edit);
+        },
       },
       // The production closure builds the encoding-preserving `Uri` via
       // `buildExternalUri` (WHATWG split + `Uri.from`, preserving `%2F`/`+`)

@@ -11,7 +11,10 @@
 // This records the one thing that settles it: the text the host last HANDED
 // the webview (on every docVersion-carrying post) and `since`, the first label
 // that carried that text. A later live text that equals it (EOL aside) is the
-// same lineage — every label from `since` on is a valid base for it.
+// same lineage — every label from `since` on is a valid base for it. The panel
+// resets it on every host apply: from then on the document has carried text the
+// webview produced and was never handed, so an external undo back to the old
+// text must not make an Edit on an old label look current.
 //
 // Pure + vscode-free so it is unit-testable; the panel owns the instance.
 
@@ -45,9 +48,11 @@ export function createEditLineage(): EditLineage {
         // rejected-draft replay re-sends the stored version while an external
         // edit is still in the documentChanged debounce). Attributing the live
         // text to a past label would let an Edit on that label overwrite the
-        // external change, so leave the lineage alone: the old text no longer
-        // matches live, so every query answers `null` until a Document whose
-        // label really describes its text re-anchors it.
+        // external change, so leave the lineage alone. While live differs from
+        // the old text every query answers `null`; if live returns to it, the
+        // old lineage answers again — safe, because no version in between
+        // carried text the webview produced (a host apply resets the lineage),
+        // so an Edit on that label is built on exactly the live text.
         return;
       }
       lineage = { text, since: docVersion };

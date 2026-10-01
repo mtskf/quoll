@@ -9,6 +9,7 @@ import {
   isDocumentAfter,
   isDocumentEvent,
   makeTempDir,
+  tick,
   VIEW_TYPE,
 } from "./harness";
 
@@ -30,9 +31,15 @@ import {
  * Scope: uniform-CRLF only. Mixed-EOL is documented-normalized and is
  * NOT asserted here.
  *
- * The second case pins the other half of "EOL on the protocol": an EOL-mode
- * switch (`TextEdit.setEndOfLine`) reaches the webview as a Document whose
- * `eol` field carries the new separator — the webview never infers it.
+ * The later cases pin the EOL-mode switch (`TextEdit.setEndOfLine`). The switch
+ * alone is not a foreign edit — no reseed goes out for it — and an Edit built on
+ * the pre-switch version is still accepted; the webview learns the new EOL from
+ * that Edit's ack, whose `eol` field carries the new separator (the webview never
+ * infers it). The third case is the Done-when end to end: the switch's debounced
+ * `documentChanged` fires first, then keystrokes typed before the switch land on
+ * disk in the new EOL. The fourth pins the converse: a host apply breaks the
+ * lineage, so an external undo back to the pre-apply text does not let an Edit
+ * on the pre-apply version overwrite it.
  */
 describe("crlf-roundtrip", function () {
   this.timeout(20000);
@@ -219,24 +226,98 @@ describe("crlf-roundtrip", function () {
     const uri = vscode.Uri.file(tempFile);
     await vscode.commands.executeCommand("vscode.openWith", uri, VIEW_TYPE);
     const harness = await getHarness();
-    const seed = await harness.waitForEvent(isDocumentEvent, 8000);
+    await harness.waitForEvent(isDocumentEvent, 8000);
     const doc = await vscode.workspace.openTextDocument(uri);
     assert.strictEqual(doc.eol, vscode.EndOfLine.LF, "fixture opens as LF");
+    // Let the open settle (the webview's `ready` resync, view-state posts) so a
+    // Document observed below can only come from the switch.
+    await tick(400);
+    const settled = harness.events.filter(isDocumentEvent).at(-1);
+    assert.ok(settled, "no Document after open");
+    harness.clearEvents();
 
     const edit = new vscode.WorkspaceEdit();
     edit.set(uri, [vscode.TextEdit.setEndOfLine(vscode.EndOfLine.CRLF)]);
     assert.strictEqual(await vscode.workspace.applyEdit(edit), true);
     const switched = doc.version;
 
+    // Let the switch's debounced `documentChanged` fire before the Edit arrives
+    // (the unsent-buffer path: the keystrokes flush later). It must not reseed:
+    // a Document here would carry a new epoch and drop the webview's buffer.
+    await tick(400);
+    assert.deepStrictEqual(
+      harness.events
+        .filter(isDocumentEvent)
+        .map((e) => ({ docVersion: e.message.docVersion, epoch: e.message.externalEpoch })),
+      [],
+      "the EOL switch alone must not post a Document"
+    );
+
     harness.activePanel?.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
       content: "a\nbc",
-      baseDocVersion: seed.message.docVersion,
+      baseDocVersion: settled.message.docVersion,
     });
     const ack = await harness.waitForEvent(isDocumentAfter(switched), 5000);
     assert.strictEqual(ack.message.content, "a\r\nbc");
+    assert.strictEqual(
+      ack.message.externalEpoch,
+      settled.message.externalEpoch,
+      "the switch must not advance the epoch"
+    );
     assert.strictEqual(await doc.save(), true);
     assert.strictEqual(await fs.readFile(tempFile, "utf8"), "a\r\nbc");
+  });
+
+  it("an external undo of a host apply is not the same lineage: an Edit on the pre-apply version is refused", async () => {
+    // Seed "A"; the webview's Edit "AB" is applied, and an external undo restores
+    // "A" before the apply settles. The document visited "AB" — text the webview
+    // was never handed — so its pre-apply version no longer describes the live
+    // "A". A flush of "ABC" on that version must be stale: the undo wins.
+    const dir = await makeTempDir("eol-lineage-undo");
+    tempFile = path.join(dir, "undo.md");
+    await fs.writeFile(tempFile, "A");
+
+    const uri = vscode.Uri.file(tempFile);
+    await vscode.commands.executeCommand("vscode.openWith", uri, VIEW_TYPE);
+    const harness = await getHarness();
+    const seed = await harness.waitForEvent(isDocumentEvent, 8000);
+    const doc = await vscode.workspace.openTextDocument(uri);
+    const panel = harness.activePanel;
+    assert.ok(panel, "no active panel");
+    await tick(400); // let the open settle (the webview's `ready` resync)
+
+    harness.applyEditOverride = async (edit) => {
+      harness.applyEditOverride = null;
+      assert.strictEqual(await vscode.workspace.applyEdit(edit), true);
+      assert.strictEqual(doc.getText(), "AB");
+      const undo = new vscode.WorkspaceEdit();
+      undo.replace(uri, new vscode.Range(doc.positionAt(0), doc.positionAt(2)), "A");
+      assert.strictEqual(await vscode.workspace.applyEdit(undo), true);
+      return true;
+    };
+    try {
+      panel.simulateInbound({
+        protocol: PROTOCOL_VERSION,
+        type: "edit",
+        content: "AB",
+        baseDocVersion: seed.message.docVersion,
+      });
+      const ack = await harness.waitForEvent(isDocumentAfter(seed.message.docVersion), 5000);
+      assert.strictEqual(ack.message.content, "A", "the external undo won the settlement");
+
+      harness.clearEvents();
+      panel.simulateInbound({
+        protocol: PROTOCOL_VERSION,
+        type: "edit",
+        content: "ABC",
+        baseDocVersion: seed.message.docVersion,
+      });
+      await tick(400);
+      assert.strictEqual(doc.getText(), "A", "the pre-apply Edit must not overwrite the undo");
+    } finally {
+      harness.applyEditOverride = null;
+    }
   });
 });
