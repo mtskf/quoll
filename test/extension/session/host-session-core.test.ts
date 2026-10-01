@@ -112,7 +112,7 @@ const expectToastBeforeReseed = (effects: readonly HostSessionEffect[]): void =>
 
 describe("host-session-core: ready/seed", () => {
   it("ready (no lock, no rejection) → postDocument(v1), rejection none", () => {
-    const r = core.transition(base(), { type: "ready", documentVersion: 1 });
+    const r = core.transition(base(), { type: "ready", documentVersion: 1, lineageSince: null });
     expect(r.effects).toEqual([pDoc(1)]);
     expect(r.state.rejection).toEqual({ kind: "none" });
   });
@@ -120,6 +120,7 @@ describe("host-session-core: ready/seed", () => {
     const r = core.transition(base({ pendingApplyBaseVersion: 1 }), {
       type: "ready",
       documentVersion: 1,
+      lineageSince: null,
     });
     expect(r.effects.map((e) => e.type)).toEqual(["logWarn"]);
   });
@@ -128,7 +129,7 @@ describe("host-session-core: ready/seed", () => {
       rejection: { kind: "pending", id: 1, content: "draftBAD", error: unsafe },
       nextRejectionId: 5,
     });
-    const r = core.transition(s, { type: "ready", documentVersion: 1 });
+    const r = core.transition(s, { type: "ready", documentVersion: 1, lineageSince: null });
     // The effect carries the freshly re-stamped delivery id (5) so the executor
     // delivers the replay banner failure-aware (sendEditRejected(error, id))
     // rather than via a bare post — a failed replay then recovers (Codex N6).
@@ -759,19 +760,34 @@ describe("host-session-core: applyEditSettled drain", () => {
 describe("host-session-core: misc transitions", () => {
   it("editRejectedDeliveryFailed (matching id) → clear rejection + postDocument", () => {
     const s = base({ rejection: { kind: "pending", id: 1, content: "d", error: unsafe } });
-    const r = core.transition(s, { type: "editRejectedDeliveryFailed", id: 1, documentVersion: 1 });
+    const r = core.transition(s, {
+      type: "editRejectedDeliveryFailed",
+      id: 1,
+      documentVersion: 1,
+      lineageSince: null,
+    });
     expect(r.state.rejection).toEqual({ kind: "none" });
     expect(r.effects).toEqual([pDoc(1)]);
   });
   it("editRejectedDeliveryFailed (stale id ≠ pending id) → no-op (Codex N2)", () => {
     const s = base({ rejection: { kind: "pending", id: 2, content: "d", error: unsafe } });
-    const r = core.transition(s, { type: "editRejectedDeliveryFailed", id: 1, documentVersion: 1 });
+    const r = core.transition(s, {
+      type: "editRejectedDeliveryFailed",
+      id: 1,
+      documentVersion: 1,
+      lineageSince: null,
+    });
     expect(r.state).toEqual(s);
     expect(r.effects).toEqual([]);
   });
   it("editRejectedDeliveryFailed while rejection none → no-op (Codex N2)", () => {
     const s = base({ rejection: { kind: "none" } });
-    const r = core.transition(s, { type: "editRejectedDeliveryFailed", id: 1, documentVersion: 1 });
+    const r = core.transition(s, {
+      type: "editRejectedDeliveryFailed",
+      id: 1,
+      documentVersion: 1,
+      lineageSince: null,
+    });
     expect(r.state).toEqual(s);
     expect(r.effects).toEqual([]);
   });
@@ -829,6 +845,7 @@ describe("host-session-core: misc transitions", () => {
       core.transition(base({ pendingApplyBaseVersion: 1 }), {
         type: "viewStateVisible",
         documentVersion: 1,
+        lineageSince: null,
       }).effects
     ).toEqual([]);
   });
@@ -836,13 +853,14 @@ describe("host-session-core: misc transitions", () => {
     const s = base({ rejection: { kind: "pending", id: 1, content: "d", error: unsafe } });
     expect(
       core
-        .transition(s, { type: "viewStateVisible", documentVersion: 1 })
+        .transition(s, { type: "viewStateVisible", documentVersion: 1, lineageSince: null })
         .effects.map((e) => e.type)
     ).toEqual(["logWarn"]);
   });
   it("viewStateVisible normal → postDocument", () => {
     expect(
-      core.transition(base(), { type: "viewStateVisible", documentVersion: 1 }).effects
+      core.transition(base(), { type: "viewStateVisible", documentVersion: 1, lineageSince: null })
+        .effects
     ).toEqual([pDoc(1)]);
   });
   it("openExternal → openExternal effect", () => {
@@ -932,7 +950,7 @@ describe("host-session-core: traces", () => {
     const { batches } = run(
       base({ lastAppliedDocVersion: 1 }),
       edit({ content: "good", currentContent: "cur", baseDocVersion: 1, documentVersion: 1 }),
-      { type: "ready", documentVersion: 1 },
+      { type: "ready", documentVersion: 1, lineageSince: null },
       settled({ settledVersion: 2, currentContent: "good" })
     );
     expect(batches[1].map((e) => e.type)).toEqual(["logWarn"]); // ready dropped while locked
@@ -982,6 +1000,7 @@ describe("host-session-core: traces", () => {
       type: "editRejectedDeliveryFailed",
       id: idA,
       documentVersion: 2,
+      lineageSince: null,
     });
     expect(r.state.rejection).toMatchObject({ kind: "pending", content: "secondBAD" });
     expect(r.effects).toEqual([]);
@@ -1018,6 +1037,7 @@ describe("host-session-core: traces", () => {
       type: "editRejectedDeliveryFailed",
       id: idA,
       documentVersion: 1,
+      lineageSince: null,
     });
     expect(r.effects).toEqual([]);
     expect(r.state.pendingApplyBaseVersion).toBe(1);
@@ -1040,7 +1060,7 @@ describe("host-session-core: traces", () => {
     // (2) `ready` replay re-delivers A → re-stamps a fresh delivery id. The
     // effect carries that fresh id (attempt1Id + 1) so the executor delivers
     // the replay banner failure-aware via sendEditRejected(error, id).
-    const replay = core.transition(s, { type: "ready", documentVersion: 1 });
+    const replay = core.transition(s, { type: "ready", documentVersion: 1, lineageSince: null });
     s = replay.state;
     expect(replay.effects).toEqual([
       {
@@ -1059,6 +1079,7 @@ describe("host-session-core: traces", () => {
       type: "editRejectedDeliveryFailed",
       id: attempt1Id,
       documentVersion: 1,
+      lineageSince: null,
     });
     expect(r.state.rejection).toMatchObject({ kind: "pending", content: "firstBAD" });
     expect(r.effects).toEqual([]);
@@ -1223,6 +1244,7 @@ describe("host-session-core: stale-version resync", () => {
     const r = core.transition(base({ lastAppliedDocVersion: 1 }), {
       type: "ready",
       documentVersion: 2,
+      lineageSince: null,
     });
     expect(r.effects).toEqual([pDoc(2, 1)]);
     expect(r.state.lastAppliedDocVersion).toBe(2);
@@ -1239,6 +1261,7 @@ describe("host-session-core: stale-version resync", () => {
     const r = core.transition(base({ lastAppliedDocVersion: 1 }), {
       type: "viewStateVisible",
       documentVersion: 2,
+      lineageSince: null,
     });
     expect(r.effects).toEqual([pDoc(2, 1)]);
     expect(r.state.lastAppliedDocVersion).toBe(2);
@@ -1252,6 +1275,7 @@ describe("host-session-core: stale-version resync", () => {
       type: "editRejectedDeliveryFailed",
       id: 1,
       documentVersion: 2,
+      lineageSince: null,
     });
     expect(r.effects).toEqual([pDoc(2, 1)]);
     expect(r.state.lastAppliedDocVersion).toBe(2);
@@ -1632,6 +1656,7 @@ describe("host-session-core: settlement ack-label gate (ackLabelObserved)", () =
       type: "editRejectedDeliveryFailed",
       id: 7,
       documentVersion: null,
+      lineageSince: null,
     });
     expect(r.state.rejection).toEqual({ kind: "none" }); // no deadlock: pending is cleared
     expect(r.effects.find((e) => e.type === "postDocument")).toBeUndefined(); // no fabricated label
@@ -1648,7 +1673,12 @@ describe("host-session-core: settlement ack-label gate (ackLabelObserved)", () =
       nextRejectionId: 8,
     });
     const kinds = core
-      .transition(s, { type: "editRejectedDeliveryFailed", id: 7, documentVersion: null })
+      .transition(s, {
+        type: "editRejectedDeliveryFailed",
+        id: 7,
+        documentVersion: null,
+        lineageSince: null,
+      })
       .effects.map((e) => e.type);
     expect(kinds.indexOf("showResyncFailure")).toBeLessThan(kinds.indexOf("logWarn"));
   });
@@ -1662,6 +1692,7 @@ describe("host-session-core: settlement ack-label gate (ackLabelObserved)", () =
       type: "editRejectedDeliveryFailed",
       id: 7,
       documentVersion: null,
+      lineageSince: null,
     });
     expect(r.state).toBe(s);
     expect(r.effects).toEqual([]);
@@ -1679,6 +1710,7 @@ describe("host-session-core: settlement ack-label gate (ackLabelObserved)", () =
       type: "editRejectedDeliveryFailed",
       id: 7,
       documentVersion: null,
+      lineageSince: null,
     });
     const r = core.transition(withheld.state, documentChanged(2));
     expect(reseedIn(r.effects)).toEqual(pDoc(2, 1));
@@ -2380,5 +2412,41 @@ describe("host-session-core: EOL-only advance keeps the Edit lineage", () => {
     expect(r.effects).toEqual([]);
     expect(r.state.rejection).toEqual({ kind: "none" });
     expect(r.state.externalEpoch).toBe(0);
+  });
+
+  // The arms that resync AND post: the Document still goes out (a seed / a
+  // resync needs one), but on the SAME epoch, so the webview replays its buffer.
+  describe.each([
+    {
+      arm: "ready",
+      from: base(),
+      event: (lineageSince: number | null) =>
+        ({ type: "ready", documentVersion: 2, lineageSince }) as const,
+    },
+    {
+      arm: "viewStateVisible",
+      from: base(),
+      event: (lineageSince: number | null) =>
+        ({ type: "viewStateVisible", documentVersion: 2, lineageSince }) as const,
+    },
+    {
+      arm: "editRejectedDeliveryFailed",
+      from: base({ rejection: pending }),
+      event: (lineageSince: number | null) =>
+        ({ type: "editRejectedDeliveryFailed", id: 1, documentVersion: 2, lineageSince }) as const,
+    },
+  ])("$arm", ({ from, event }) => {
+    it("an advance whose text is unchanged posts the Document on the same epoch", () => {
+      const r = core.transition(from, event(1));
+      expect(r.effects).toEqual([pDoc(2, 0)]);
+      expect(r.state.lastAppliedDocVersion).toBe(2);
+      expect(r.state.externalEpoch).toBe(0);
+    });
+
+    it("without a lineage the advance is foreign, exactly as before", () => {
+      const r = core.transition(from, event(null));
+      expect(r.effects).toEqual([pDoc(2, 1)]);
+      expect(r.state.externalEpoch).toBe(1);
+    });
   });
 });

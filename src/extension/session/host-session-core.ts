@@ -104,7 +104,12 @@ export type ApplyEditOutcome =
 
 export type HostSessionEvent =
   | { readonly type: "seed"; readonly documentVersion: number }
-  | { readonly type: "ready"; readonly documentVersion: number }
+  | {
+      readonly type: "ready";
+      readonly documentVersion: number;
+      // See the `documentChanged` variant.
+      readonly lineageSince: number | null;
+    }
   | {
       readonly type: "edit";
       readonly baseDocVersion: number;
@@ -129,7 +134,12 @@ export type HostSessionEvent =
       readonly lineageSince: number | null;
     }
   | { readonly type: "themeChanged"; readonly themeKind: ThemeKind }
-  | { readonly type: "viewStateVisible"; readonly documentVersion: number }
+  | {
+      readonly type: "viewStateVisible";
+      readonly documentVersion: number;
+      // See the `documentChanged` variant.
+      readonly lineageSince: number | null;
+    }
   | {
       readonly type: "applyEditSettled";
       readonly outcome: ApplyEditOutcome;
@@ -225,6 +235,8 @@ export type HostSessionEvent =
       // pending rejection is the deadlock this event exists to break) but
       // WITHHOLDS the recovery reseed rather than fabricating a label.
       readonly documentVersion: number | null;
+      // See the `documentChanged` variant.
+      readonly lineageSince: number | null;
     }
   | {
       // A throwing `applyEditSettled` TRANSITION unwinds before the panel
@@ -368,9 +380,8 @@ function resyncLiveVersion(
   liveVersion: number,
   // REQUIRED (no default) so every call site states its evidence: true only
   // when the panel proved the live text is still the lineage text (an EOL-only
-  // advance). Only `documentChanged` and `edit` carry that proof; every other
-  // site passes `false` (today's behaviour — a lock-free advance there is
-  // scored foreign even if it was an EOL switch; accepted residual).
+  // advance). The events that carry `lineageSince` pass that proof; `seed` and
+  // the settlement pass `false`.
   textUnchanged: boolean
 ): HostSessionState {
   const raised = Math.max(state.lastAppliedDocVersion, liveVersion);
@@ -661,8 +672,12 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // `edit`/`documentChanged` arms' source-of-truth resync. `resyncLiveVersion`
         // also advances the epoch when the live version moved (this arm is only
         // reached lock-free — the lock guard returned above — so an advance is a
-        // foreign external edit).
-        const resynced = resyncLiveVersion(state, event.documentVersion, false);
+        // foreign external edit) unless the panel proved the text unchanged.
+        const resynced = resyncLiveVersion(
+          state,
+          event.documentVersion,
+          event.type === "ready" && event.lineageSince !== null
+        );
         return {
           state: { ...resynced, rejection: NONE },
           effects: [postDoc(resynced, resynced.lastAppliedDocVersion)],
@@ -1563,10 +1578,15 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         }
         // Resync to the live snapshot before the recovery reseed (see the
         // `ready` arm) — the reseed posts live bytes, so it must carry the
-        // matching live version (and a bumped epoch if the live version moved:
-        // this arm clears a rejection, which the `accept` arm proved cannot
-        // survive into the write lock, so the resync is lock-free here).
-        const resynced = resyncLiveVersion(state, event.documentVersion, false);
+        // matching live version (and a bumped epoch if the live version moved
+        // and the panel could not prove the text unchanged: this arm clears a
+        // rejection, which the `accept` arm proved cannot survive into the write
+        // lock, so the resync is lock-free here).
+        const resynced = resyncLiveVersion(
+          state,
+          event.documentVersion,
+          event.lineageSince !== null
+        );
         return {
           state: { ...resynced, rejection: NONE },
           effects: [postDoc(resynced, resynced.lastAppliedDocVersion)],
@@ -1653,8 +1673,13 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // reported bug's repro: focus the Quoll tab (viewStateVisible) while a
         // split-editor edit is still in the documentChanged debounce. Reached
         // only lock-free (the lock guard returned above), so an advance is a
-        // foreign external edit and the epoch increments.
-        const resynced = resyncLiveVersion(state, event.documentVersion, false);
+        // foreign external edit and the epoch increments — unless the panel
+        // proved the text unchanged.
+        const resynced = resyncLiveVersion(
+          state,
+          event.documentVersion,
+          event.lineageSince !== null
+        );
         return {
           state: { ...resynced, rejection: NONE },
           effects: [postDoc(resynced, resynced.lastAppliedDocVersion)],

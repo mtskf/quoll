@@ -33,6 +33,7 @@ function makeDeps(over: Partial<EffectExecutorDeps<FakeEdit>> = {}): EffectExecu
     recordEvent: vi.fn(),
     showError: vi.fn(),
     canWrite: () => true,
+    readLineageSince: () => null,
     buildSeedDocument: (v, externalEpoch, epochGeneration) => ({
       protocol: PROTOCOL_VERSION,
       type: "document",
@@ -819,6 +820,7 @@ describe("effect-executor sendEditRejected (via postEditRejected effect)", () =>
       type: "editRejectedDeliveryFailed",
       id: 42,
       documentVersion: 11,
+      lineageSince: null,
     });
   });
 
@@ -831,6 +833,7 @@ describe("effect-executor sendEditRejected (via postEditRejected effect)", () =>
       type: "editRejectedDeliveryFailed",
       id: 42,
       documentVersion: 11,
+      lineageSince: null,
     });
   });
 
@@ -846,7 +849,37 @@ describe("effect-executor sendEditRejected (via postEditRejected effect)", () =>
       type: "editRejectedDeliveryFailed",
       id: 42,
       documentVersion: 11,
+      lineageSince: null,
     });
+  });
+
+  it.each([
+    [
+      "sync throw",
+      (): Thenable<boolean> => {
+        throw new Error("sync");
+      },
+    ],
+    ["refused", (): Thenable<boolean> => Promise.resolve(false)],
+    ["rejected", (): Thenable<boolean> => Promise.reject(new Error("x"))],
+  ])("%s: the recovery dispatch carries the panel's lineage answer", async (_site, send) => {
+    const dispatch = vi.fn();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      runReject({ send, dispatch, readLineageSince: () => 7 });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(dispatch).toHaveBeenCalledWith({
+        type: "editRejectedDeliveryFailed",
+        id: 42,
+        documentVersion: 11,
+        lineageSince: 7,
+      });
+    } finally {
+      errorSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
   });
 
   it("disposed before send: early return, no send, no dispatch", () => {
@@ -919,6 +952,7 @@ describe("effect-executor sendEditRejected (via postEditRejected effect)", () =>
       type: "editRejectedDeliveryFailed",
       id: 42,
       documentVersion: 11,
+      lineageSince: null,
     });
   });
 
@@ -950,6 +984,7 @@ describe("effect-executor sendEditRejected (via postEditRejected effect)", () =>
         type: "editRejectedDeliveryFailed",
         id: 42,
         documentVersion: null,
+        lineageSince: null,
       });
       expect(warnSpy).toHaveBeenCalledWith(
         expect.stringContaining("guarded readVersion failed"),
@@ -985,6 +1020,7 @@ describe("effect-executor sendEditRejected (via postEditRejected effect)", () =>
         type: "editRejectedDeliveryFailed",
         id: 42,
         documentVersion: null,
+        lineageSince: null,
       });
       expect(warnSpy).toHaveBeenCalledWith(
         expect.stringContaining("guarded readVersion failed"),
@@ -1020,6 +1056,7 @@ describe("effect-executor sendEditRejected (via postEditRejected effect)", () =>
         type: "editRejectedDeliveryFailed",
         id: 42,
         documentVersion: null,
+        lineageSince: null,
       });
       expect(warnSpy).toHaveBeenCalledWith(
         expect.stringContaining("guarded readVersion failed"),
@@ -1060,6 +1097,7 @@ describe("effect-executor sendEditRejected (via postEditRejected effect)", () =>
         type: "editRejectedDeliveryFailed",
         id: 42,
         documentVersion: 11,
+        lineageSince: null,
       });
     } finally {
       errorSpy.mockRestore();
@@ -1086,6 +1124,7 @@ describe("effect-executor sendEditRejected (via postEditRejected effect)", () =>
         type: "editRejectedDeliveryFailed",
         id: 42,
         documentVersion: 11,
+        lineageSince: null,
       });
       await Promise.resolve();
       expect(rejections).toEqual([]);
@@ -1118,6 +1157,7 @@ describe("effect-executor sendEditRejected (via postEditRejected effect)", () =>
         type: "editRejectedDeliveryFailed",
         id: 42,
         documentVersion: 11,
+        lineageSince: null,
       });
       // The log line itself is the acceptable loss: the payload could not be
       // built, so nothing was warned.
@@ -1144,6 +1184,7 @@ describe("effect-executor sendEditRejected (via postEditRejected effect)", () =>
         type: "editRejectedDeliveryFailed",
         id: 42,
         documentVersion: 11,
+        lineageSince: null,
       });
       await Promise.resolve();
       expect(rejections).toEqual([]);

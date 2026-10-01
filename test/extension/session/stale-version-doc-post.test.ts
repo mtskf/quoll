@@ -57,6 +57,7 @@ describe("stale-version Document post: keystroke is not lost", () => {
     const visible = core.transition(state({ lastAppliedDocVersion: 1 }), {
       type: "viewStateVisible",
       documentVersion: 2,
+      lineageSince: null,
     });
     // The reseed the webview receives carries the LIVE version (2) — matching
     // the live bytes buildSeedDocument reads. (Old bug: docVersion 1 with v2
@@ -124,6 +125,7 @@ describe("stale-version Document post: executor pairs live version with live byt
       recordEvent: () => {},
       showError: () => {},
       canWrite: () => true,
+      readLineageSince: () => null,
       // Mirrors the production panel closure: live bytes + the effect's version
       // + the core-managed identity pair.
       buildSeedDocument: (docVersion, externalEpoch, epochGeneration) =>
@@ -167,7 +169,11 @@ describe("stale-version Document post: executor pairs live version with live byt
     fakeDoc.version = 2;
     fakeDoc.getText = () => "v2";
     // The webview becomes visible: the panel captures the LIVE version.
-    dispatchEvent({ type: "viewStateVisible", documentVersion: fakeDoc.version });
+    dispatchEvent({
+      type: "viewStateVisible",
+      documentVersion: fakeDoc.version,
+      lineageSince: null,
+    });
 
     const lastDoc = sent.filter((m) => m.type === "document").at(-1) as {
       docVersion: number;

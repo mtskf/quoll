@@ -79,5 +79,13 @@ describe("edit lineage", () => {
       expect(l.lineageSince(() => "a")).toBeNull();
       expect(errors).toHaveLength(1);
     });
+
+    it("does not throw when the reporter throws too", () => {
+      const l = createEditLineage(() => {
+        throw new Error("reporter failed");
+      });
+      expect(() => l.noteHandedText(boom, 1, 1)).not.toThrow();
+      expect(l.lineageSince(boom)).toBeNull();
+    });
   });
 });

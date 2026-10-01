@@ -39,7 +39,7 @@ export interface EditLineage {
 }
 
 /** A throwing `read` resets the lineage (it never blocks the caller's post or
- *  dispatch) and is reported to `onReadError`. */
+ *  dispatch) and is reported to `onReadError`, whose own throw is swallowed. */
 export function createEditLineage(onReadError: (err: unknown) => void): EditLineage {
   let lineage: { readonly text: string; readonly since: number } | null = null;
   const guardedRead = (read: () => string): string | null => {
@@ -47,7 +47,11 @@ export function createEditLineage(onReadError: (err: unknown) => void): EditLine
       return read();
     } catch (err) {
       lineage = null;
-      onReadError(err);
+      try {
+        onReadError(err);
+      } catch {
+        // A throwing reporter must not escape the guard either.
+      }
       return null;
     }
   };
