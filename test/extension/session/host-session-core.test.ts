@@ -63,6 +63,10 @@ const edit = (over: Partial<Extract<HostSessionEvent, { type: "edit" }>> = {}) =
     lineageSince: null,
     ...over,
   }) as const;
+// A `documentChanged` event. `lineageSince` defaults to null (the panel could
+// not prove the live text unchanged); pass a version for the EOL-only arms.
+const documentChanged = (documentVersion: number, lineageSince: number | null = null) =>
+  ({ type: "documentChanged", documentVersion, lineageSince }) as const;
 const settled = (over: Partial<Extract<HostSessionEvent, { type: "applyEditSettled" }>> = {}) =>
   ({
     type: "applyEditSettled",
@@ -773,11 +777,7 @@ describe("host-session-core: misc transitions", () => {
   });
   it("documentChanged (no lock) → update version, clear rejection, postDocument(newV)", () => {
     const s = base({ rejection: { kind: "pending", id: 1, content: "d", error: unsafe } });
-    const r = core.transition(s, {
-      type: "documentChanged",
-      documentVersion: 7,
-      lineageSince: null,
-    });
+    const r = core.transition(s, documentChanged(7));
     expect(r.state.lastAppliedDocVersion).toBe(7);
     expect(r.state.rejection).toEqual({ kind: "none" });
     // Lock-free version advance from a foreign external edit → epoch++ (site 1).
@@ -794,7 +794,7 @@ describe("host-session-core: misc transitions", () => {
         lastAppliedDocVersion: 1,
         rejection: { kind: "pending", id: 1, content: "d", error: unsafe },
       }),
-      { type: "documentChanged", documentVersion: 2, lineageSince: null }
+      documentChanged(2)
     );
     expect(r.effects).toEqual([]);
     expect(r.state.lastAppliedDocVersion).toBe(2);
@@ -811,11 +811,7 @@ describe("host-session-core: misc transitions", () => {
   it("documentChanged same version (autosave after rejection) → no-op, preserves pending rejection, NO post", () => {
     const rejection = { kind: "pending", id: 1, content: "hasBAD", error: unsafe } as const;
     const s = base({ lastAppliedDocVersion: 5, rejection });
-    const r = core.transition(s, {
-      type: "documentChanged",
-      documentVersion: 5,
-      lineageSince: null,
-    });
+    const r = core.transition(s, documentChanged(5));
     expect(r.state).toEqual(s);
     expect(r.state.rejection).toEqual(rejection);
     expect(r.effects).toEqual([]);
@@ -900,7 +896,7 @@ describe("host-session-core: traces", () => {
     const { batches, state } = run(
       base({ lastAppliedDocVersion: 1 }),
       edit({ content: "good", currentContent: "cur", baseDocVersion: 1, documentVersion: 1 }),
-      { type: "documentChanged", documentVersion: 2, lineageSince: null }, // fires before the Promise settles, lock still held
+      documentChanged(2), // fires before the Promise settles, lock still held
       // The deferred documentChanged is the in-flight apply's OWN echo (lock
       // held → no epoch bump), and the settled doc IS the applied bytes → clean,
       // epoch 0.
@@ -920,7 +916,7 @@ describe("host-session-core: traces", () => {
     const { batches, state } = run(
       base({ lastAppliedDocVersion: 1 }),
       edit({ content: "good", currentContent: "cur", baseDocVersion: 1, documentVersion: 1 }),
-      { type: "documentChanged", documentVersion: 2, lineageSince: null }, // fires before the Promise settles, lock still held
+      documentChanged(2), // fires before the Promise settles, lock still held
       settled({ outcome: { kind: "refused" }, settledVersion: 1 })
     );
     expect(batches[1]).toEqual([]); // deferred: NO post while the lock is held
@@ -973,11 +969,7 @@ describe("host-session-core: traces", () => {
     ).state;
     const idA = (s.rejection as { id: number }).id;
     // (2) External resync (onDidChangeTextDocument) clears A's rejection.
-    s = core.transition(s, {
-      type: "documentChanged",
-      documentVersion: 2,
-      lineageSince: null,
-    }).state;
+    s = core.transition(s, documentChanged(2)).state;
     expect(s.rejection).toEqual({ kind: "none" });
     // (3) Edit B fails to parse → rejection B pending (a DISTINCT id).
     s = core.transition(
@@ -1468,11 +1460,7 @@ describe("host-session-core: externalEpoch (S3a)", () => {
     // rewind lastAppliedDocVersion (max clamp) and must not increment the epoch
     // (no forward advance).
     const s = base({ lastAppliedDocVersion: 5, externalEpoch: 3 });
-    const r = core.transition(s, {
-      type: "documentChanged",
-      documentVersion: 2,
-      lineageSince: null,
-    });
+    const r = core.transition(s, documentChanged(2));
     expect(r.state.lastAppliedDocVersion).toBe(5);
     expect(r.state.externalEpoch).toBe(3);
   });
@@ -1486,11 +1474,7 @@ describe("host-session-core: externalEpoch (S3a)", () => {
     expect(st.epochGeneration).toBe(42);
     expect(st.externalEpoch).toBe(0);
     // A foreign advance bumps the epoch but never the generation (identity).
-    const after = c.transition(st, {
-      type: "documentChanged",
-      documentVersion: 2,
-      lineageSince: null,
-    });
+    const after = c.transition(st, documentChanged(2));
     st = after.state;
     expect(st.epochGeneration).toBe(42);
     expect(st.externalEpoch).toBe(1);
@@ -1584,11 +1568,7 @@ describe("host-session-core: settlement ack-label gate (ackLabelObserved)", () =
     // the deferral contract's only receiver. Accepted residual; the backstop is
     // the liveness TODO entry. Narrowing this disjunct turns this test red on
     // purpose — that is the conversation it exists to force.
-    const raised = core.transition(locked, {
-      type: "documentChanged",
-      documentVersion: 2,
-      lineageSince: null,
-    });
+    const raised = core.transition(locked, documentChanged(2));
     const r = core.transition(
       raised.state,
       settled({ settledVersion: null, currentContent: null })
@@ -1700,11 +1680,7 @@ describe("host-session-core: settlement ack-label gate (ackLabelObserved)", () =
       id: 7,
       documentVersion: null,
     });
-    const r = core.transition(withheld.state, {
-      type: "documentChanged",
-      documentVersion: 2,
-      lineageSince: null,
-    });
+    const r = core.transition(withheld.state, documentChanged(2));
     expect(reseedIn(r.effects)).toEqual(pDoc(2, 1));
   });
 });
@@ -1764,11 +1740,7 @@ describe("host-session-core: content-unobserved epoch verdict is positive versio
     // A verdict that read `event.settledVersion` instead of the reducer's label
     // would score 0 here and leave the epoch at 0, while the sibling tests above
     // (which DO observe a version) stay green — this is the arm that catches it.
-    const raised = core.transition(locked, {
-      type: "documentChanged",
-      documentVersion: 3,
-      lineageSince: null,
-    });
+    const raised = core.transition(locked, documentChanged(3));
     expect(raised.effects).toEqual([]); // deferred: the lock is still held
     expect(raised.state.externalEpoch).toBe(0); // a lock-held advance never bumps
     const r = core.transition(
@@ -1884,11 +1856,7 @@ describe("host-session-core: an unobserved ack label still DRAINS (bytes first)"
     // discards the replay buffer holding the keystroke the refusal had just
     // dropped. Re-adding the conjunct to `canDrain` turns this red.
     const r = core.transition(lockedStash("edit1-more"), unobserved);
-    const after = core.transition(r.state, {
-      type: "documentChanged",
-      documentVersion: 2,
-      lineageSince: null,
-    });
+    const after = core.transition(r.state, documentChanged(2));
     expect(after.effects).toEqual([]); // deferred: the lock is held
     expect(after.state.externalEpoch).toBe(0);
     expect(after.state.lastAppliedDocVersion).toBe(2);
@@ -1911,11 +1879,7 @@ describe("host-session-core: an unobserved ack label still DRAINS (bytes first)"
     );
     expect(reseedIn(s2.effects)).toEqual(pDoc(2));
     expect(s2.state.externalEpoch).toBe(0);
-    const after = core.transition(s2.state, {
-      type: "documentChanged",
-      documentVersion: 2,
-      lineageSince: null,
-    });
+    const after = core.transition(s2.state, documentChanged(2));
     expect(after.effects).toEqual([]);
     expect(after.state.externalEpoch).toBe(0);
   });
@@ -2324,11 +2288,7 @@ describe("host-session-core: EOL-only advance keeps the Edit lineage", () => {
   const pending = { kind: "pending", id: 1, content: "d", error: unsafe } as const;
 
   it("a lock-free advance whose text is unchanged posts nothing, keeps the epoch and the rejection", () => {
-    const r = core.transition(base({ rejection: pending }), {
-      type: "documentChanged",
-      documentVersion: 2,
-      lineageSince: 1,
-    });
+    const r = core.transition(base({ rejection: pending }), documentChanged(2, 1));
     expect(r.effects).toEqual([]);
     expect(r.state.lastAppliedDocVersion).toBe(2);
     expect(r.state.externalEpoch).toBe(0);
@@ -2336,11 +2296,7 @@ describe("host-session-core: EOL-only advance keeps the Edit lineage", () => {
   });
 
   it("an Edit built before the switch is still accepted afterwards (Done-when, reducer half)", () => {
-    const switched = core.transition(base(), {
-      type: "documentChanged",
-      documentVersion: 2,
-      lineageSince: 1,
-    }).state;
+    const switched = core.transition(base(), documentChanged(2, 1)).state;
     const r = core.transition(
       switched,
       edit({
@@ -2407,11 +2363,7 @@ describe("host-session-core: EOL-only advance keeps the Edit lineage", () => {
   });
 
   it("without a lineage the advance is foreign, exactly as before", () => {
-    const r = core.transition(base(), {
-      type: "documentChanged",
-      documentVersion: 2,
-      lineageSince: null,
-    });
+    const r = core.transition(base(), documentChanged(2));
     expect(r.effects).toEqual([pDoc(2, 1)]);
     const e = core.transition(
       base(),
@@ -2421,11 +2373,10 @@ describe("host-session-core: EOL-only advance keeps the Edit lineage", () => {
   });
 
   it("under the write lock the lineage changes nothing (deferred, adjudicated at settlement)", () => {
-    const r = core.transition(base({ pendingApplyBaseVersion: 1, rejection: pending }), {
-      type: "documentChanged",
-      documentVersion: 2,
-      lineageSince: 1,
-    });
+    const r = core.transition(
+      base({ pendingApplyBaseVersion: 1, rejection: pending }),
+      documentChanged(2, 1)
+    );
     expect(r.effects).toEqual([]);
     expect(r.state.rejection).toEqual({ kind: "none" });
     expect(r.state.externalEpoch).toBe(0);

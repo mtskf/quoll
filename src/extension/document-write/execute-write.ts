@@ -274,9 +274,10 @@ export async function executeDocumentWrite<TEdit>(
 
   // No-op short-circuit (defensive — the reducer already gates no-ops via its
   // EOL-insensitive currentContent compare; only a mixed-EOL literal buffer, or
-  // the revert-rescue restore path that has no reducer gate, reaches here). Settle `applied` with the UNCHANGED document WITHOUT
-  // submitting an empty WorkspaceEdit (the ok/refused of an empty edit is not
-  // API-guaranteed). Never `diverged`: this path runs no compare at all. It yields
+  // the revert-rescue restore path that has no reducer gate, reaches here).
+  // Settle `applied` with the UNCHANGED document WITHOUT submitting an empty
+  // WorkspaceEdit (the ok/refused of an empty edit is not API-guaranteed).
+  // Never `diverged`: this path runs no compare at all. It yields
   // `applied`, or `appliedUnverified` if the settle-time content read throws — the
   // arrangement that makes `appliedUnverified` reachable with NOTHING applied.
   if (span.from === span.to && span.insert.length === 0) {
@@ -326,9 +327,10 @@ export async function executeDocumentWrite<TEdit>(
   // an EOL-mode switch landing inside the apply→settle window re-canonicalises
   // the settled read to the new EOL, and the same text in new line endings is
   // not a divergence (the reducer's inFlight compare is EOL-insensitive for the
-  // same reason; one predicate, `sameTextIgnoringEol`). A TEXT mismatch means a racing edit spliced at a stale offset (S5: desktop
-  // MISPLACES) OR an external edit won the apply→settle race — indistinguishable
-  // by bytes, handled identically by convergence (diverged). The one
+  // same reason; one predicate, `sameTextIgnoringEol`). A TEXT mismatch means a
+  // racing edit spliced at a stale offset (S5: desktop MISPLACES) OR an external
+  // edit won the apply→settle race — indistinguishable by bytes, handled
+  // identically by convergence (diverged). The one
   // undetectable escape: a wrong splice whose final bytes coincidentally equal
   // the intended bytes (reported `applied`).
   const settled = settle("applied");
