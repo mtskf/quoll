@@ -269,14 +269,14 @@ export type EditSync = {
    *     genuine external divergence — whose text never matches our posted
    *     bytes — still reseeds.
    *  2. The Document's identity pair CONTINUES the lineage we are carrying —
-   *     same generation with the epoch not advanced. Content equality alone does not make a
-   *     Document ours: another writer can produce byte-identical bytes, and the
-   *     host then reports a foreign epoch advance / a new generation. The
-   *     lineage compared against is the held replay buffer's stamp when one is
-   *     held (it is the content whose survival the fold predicts) and the
-   *     recorded pair otherwise. Pass the incoming pair BEFORE `onHostSnapshot`
-   *     records it (applyDocument's order), so the comparison is
-   *     incoming-vs-previous.
+   *     same generation with the epoch not advanced. Content equality alone
+   *     does not make a Document ours: another writer can produce
+   *     byte-identical bytes, and the host then reports a foreign epoch advance
+   *     / a new generation. The lineage compared against is the held replay
+   *     buffer's stamp when one is held (it is the content whose survival the
+   *     fold predicts) and the recorded pair otherwise. Pass the incoming pair
+   *     BEFORE `onHostSnapshot` records it (applyDocument's order), so the
+   *     comparison is incoming-vs-previous.
    *
    *  The reseed path (editor.ts applyDocument) uses this to recognise a host
    *  Document that merely ECHOES our own in-flight edit back. When the live
@@ -293,10 +293,9 @@ export type EditSync = {
   acksInFlightEdit: (content: string, externalEpoch: number, epochGeneration: number) => boolean;
   /** The Document identity pair (externalEpoch, epochGeneration) recorded from
    *  the most recent accepted host snapshot — `null` before the first snapshot.
-   *  TWO consumers read
-   *  it through the shared `supersedesIdentity` rule: the replay side
-   *  (`shouldDropBufferedForEpoch`, which drops a held buffer on a foreign epoch
-   *  advance or an identity transition) and the display side
+   *  TWO consumers read it through the shared `supersedesIdentity` rule: the
+   *  replay side (`shouldDropBufferedForEpoch`, which drops a held buffer on a
+   *  foreign epoch advance or an identity transition) and the display side
    *  (`acksInFlightEdit`, which gates the reseed path's ok-ack fold and falls
    *  back to this pair when no buffer is held). They must agree — see
    *  `supersedesIdentity`. */
@@ -304,12 +303,12 @@ export type EditSync = {
   /** Pure predicate (no side effects): would an incoming Document's identity
    *  pair be an identity transition against the CURRENTLY recorded pair? True
    *  on a different generation; false for a same-generation Document or before
-   *  the first snapshot (the seed is an adoption, not a transition). The shell reads this
-   *  BEFORE `applyDocument` to bypass its whole-Document stale-version drop on a
-   *  transition; `onHostSnapshot` recomputes it internally to bypass its own
-   *  stale guard, count the tripwire, and adopt the pair (both read the same
-   *  unchanged recorded pair, so they agree). Version ordering is meaningful
-   *  only WITHIN one host generation (S3b). */
+   *  the first snapshot (the seed is an adoption, not a transition). The shell
+   *  reads this BEFORE `applyDocument` to bypass its whole-Document
+   *  stale-version drop on a transition; `onHostSnapshot` recomputes it
+   *  internally to bypass its own stale guard, count the tripwire, and adopt the
+   *  pair (both read the same unchanged recorded pair, so they agree). Version
+   *  ordering is meaningful only WITHIN one host generation (S3b). */
   isIdentityTransition: (externalEpoch: number, epochGeneration: number) => boolean;
 };
 
@@ -344,17 +343,16 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
   let timer: ReturnType<typeof setTimeout> | null = null;
   // Document identity pair from the most recent accepted host snapshot (S3a
   // recorded it; S3b now acts on it). Both fields are `null` before the first
-  // snapshot. Read in replayIfNeeded's drop
-  // check, at each buffer capture (via stampHeld), by isIdentityTransition,
-  // and — via recordedIdentity(), as the no-buffer-held fallback — by
-  // acksInFlightEdit's lineage conjunct. So BOTH the replay side and the
-  // display (ok-ack fold) side read it, not the replay side alone.
+  // snapshot. Read in replayIfNeeded's drop check, at each buffer capture (via
+  // stampHeld), by isIdentityTransition, and — via recordedIdentity(), as the
+  // no-buffer-held fallback — by acksInFlightEdit's lineage conjunct. So BOTH
+  // the replay side and the display (ok-ack fold) side read it, not the replay
+  // side alone.
   // ONE variable holding the PAIR, not two independent wings: with two `let`s a
   // write could land on one and miss the other, leaving the wings disagreeing.
-  // Here every write
-  // names the whole pair — the initializer below and the adoption in
-  // onHostSnapshot are the only two — and `DocumentIdentity`'s `readonly`
-  // fields stop the pair being amended in place afterwards.
+  // Here every write names the whole pair — the initializer below and the
+  // adoption in onHostSnapshot are the only two — and `DocumentIdentity`'s
+  // `readonly` fields stop the pair being amended in place afterwards.
   let recorded: DocumentIdentity = { epoch: null, generation: null };
   const now = opts.now ?? (() => Date.now());
   // Rolling window of identity-transition timestamps + once-per-session latch
@@ -398,11 +396,11 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
   // `epoch` is compared for magnitude only WITHIN one generation; `generation`
   // is identity, never ordering (protocol.ts's DocumentMessage doc).
   //
-  // DIRECTIONAL: only the epoch arm asks which side is
-  // ahead, so a swapped call inverts exactly that arm and nothing else — no type
-  // error, and no symptom until a same-generation foreign advance arrives. The
-  // named fields, not argument positions, are what keep the call sites readable
-  // and typo-proof; the DIRECTION is held by behaviour, not by the naming.
+  // DIRECTIONAL: only the epoch arm asks which side is ahead, so a swapped call
+  // inverts exactly that arm and nothing else — no type error, and no symptom
+  // until a same-generation foreign advance arrives. The named fields, not
+  // argument positions, are what keep the call sites readable and typo-proof;
+  // the DIRECTION is held by behaviour, not by the naming.
   // Measured: swapping `from`/`to` reds 7 tests either way — the acksInFlightEdit
   // swap reds 4 in cm-edit-sync.test.ts plus 2 in editor.test.ts's (d3) block
   // and 1 in shell.test.ts; the shouldDropBufferedForEpoch swap reds 5 in

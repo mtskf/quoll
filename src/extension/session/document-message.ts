@@ -53,8 +53,7 @@ export type BuildDocumentMessageInput = {
  *  as a TS error at every call site rather than as a silently-accepted
  *  extra field, and the Object.keys assertion in the unit test catches
  *  it before it reaches the wire. Always emits `externalEpoch` +
- *  `epochGeneration` — the key-set test pins their
- *  presence. */
+ *  `epochGeneration` — the key-set test pins their presence. */
 export function buildDocumentMessage(input: BuildDocumentMessageInput): DocumentMessage {
   return {
     protocol: PROTOCOL_VERSION,
