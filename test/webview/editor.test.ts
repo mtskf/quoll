@@ -1309,6 +1309,18 @@ describe("editor — caret preserved across accept-and-reseed (q)", () => {
     expect(view.state.selection.main.head).toBe(3);
   });
 
+  it("an EOL-only reseed keeps every cursor (no change, so no selection to restore)", () => {
+    const { handle, view } = mount();
+    handle.applyDocument({ content: "a\nb\nc", eol: "\n", canWrite: true, docVersion: 1 });
+    view.dispatch({
+      selection: EditorSelection.create([EditorSelection.cursor(1), EditorSelection.cursor(3)]),
+    });
+    handle.applyDocument({ content: "a\r\nb\r\nc", eol: "\r\n", canWrite: true, docVersion: 2 });
+    expect(hostBytes(view)).toBe("a\r\nb\r\nc");
+    expect(view.state.selection.ranges.map((r) => r.head)).toEqual([1, 3]);
+    expect(view.state.selection.ranges.length).toBe(2);
+  });
+
   it("seeding guard resets to false even when dispatch throws inside applyDocument", () => {
     vi.useFakeTimers();
     const { handle, view } = mount();

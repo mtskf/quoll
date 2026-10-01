@@ -966,16 +966,6 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       const foldsOkAck =
         aheadOfHost && canWrite && sync.acksInFlightEdit(content, externalEpoch, epochGeneration);
       const needsReseed = aheadOfHost && !foldsOkAck;
-      // Capture BEFORE the reseed. The needsReseed branch replaces ONE minimal
-      // span (computeReseedChange below, not a wholesale `0..doc.length`
-      // replace), but CodeMirror's default selection mapping still collapses a
-      // cursor that sits INSIDE the deleted span to that span's start — which
-      // is exactly where the accept-mid-typing race puts it. We re-set the
-      // caret in the SAME transaction below, clamped to the new doc bounds,
-      // so typing through an accept boundary keeps the edit point — and the
-      // atomic doc+editable contract (test "l") still holds because it is
-      // one dispatch.
-      const prevSelection = needsReseed ? view.state.selection : null;
       // Compute the inserted Text once so we can read its length for the
       // selection clamp WITHOUT depending on a post-dispatch state read —
       // selection is applied in resulting-doc coords inside this single
@@ -986,12 +976,30 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       // here; see cm/seed.ts for the byte rationale.
       const insertText = needsReseed ? splitToCmText(content) : null;
       const newDocLength = insertText !== null ? insertText.length : view.state.doc.length;
-      const prevMain = prevSelection?.main;
       // Computed BEFORE dispatch (needs the PRE-change view.state.doc — see the
       // helper's CRLF note). Reused below, post-dispatch, to derive the edited
       // span in POST-change coordinates for reconcileReseedFolds's orphan gate.
-      const reseedChange =
+      const computedChange =
         insertText !== null ? computeReseedChange(view.state.doc, insertText) : null;
+      // An EMPTY change (from === to AND no insert) means the two docs are
+      // content-identical — an EOL-only switch on a multi-line document. Treat it
+      // as no reseed at all: only the compartments are reconfigured, so the
+      // selection (secondary ranges included) and the folds are left untouched.
+      const reseedChange =
+        computedChange !== null &&
+        (computedChange.from !== computedChange.to || computedChange.insert.length > 0)
+          ? computedChange
+          : null;
+      // Capture BEFORE the reseed. The needsReseed branch replaces ONE minimal
+      // span (computeReseedChange above, not a wholesale `0..doc.length`
+      // replace), but CodeMirror's default selection mapping still collapses a
+      // cursor that sits INSIDE the deleted span to that span's start — which
+      // is exactly where the accept-mid-typing race puts it. We re-set the
+      // caret in the SAME transaction below, clamped to the new doc bounds,
+      // so typing through an accept boundary keeps the edit point — and the
+      // atomic doc+editable contract (test "l") still holds because it is
+      // one dispatch.
+      const prevMain = reseedChange !== null ? view.state.selection.main : undefined;
       seeding = true;
       try {
         view.dispatch({
@@ -1062,17 +1070,13 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       // reconcileReseedFolds uses it to gate the orphan-release path to folds whose OWN
       // line OR span the reseed actually touched, per its JSDoc.
       //
-      // Skip an EMPTY change (from === to AND no insert): computeReseedChange yields
-      // that iff the two docs are content-identical (a no-op reseed — e.g. EOL-only
-      // normalisation), so the fold structure is unchanged and there is nothing to
-      // reconcile. Skipping is also load-bearing, not just an optimisation: the
-      // orphan gate's span test is boundary-inclusive, so a zero-width edited span
-      // sitting on a fold's boundary would otherwise (mis)count as touching it and
-      // spring a still-valid fold open. Bailing on the empty change keeps the no-op
-      // reseed a true no-op for folds (pinned by (r5)).
+      // An EMPTY change never reaches here (reseedChange is null for it, above).
+      // That is load-bearing, not just an optimisation: the orphan gate's span
+      // test is boundary-inclusive, so a zero-width edited span sitting on a
+      // fold's boundary would otherwise (mis)count as touching it and spring a
+      // still-valid fold open (pinned by (r5)).
       if (
         reseedChange !== null &&
-        (reseedChange.from !== reseedChange.to || reseedChange.insert.length > 0) &&
         // Only reconcile — and only pay for the forced parse — when there are active
         // folds to reconcile. Folding is opt-in, so the overwhelming majority of
         // reseeds have no folds and nothing to clamp; skipping keeps the whole-doc
