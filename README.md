@@ -87,7 +87,7 @@ Prefer to build from source? Clone the repo and package the `.vsix` yourself:
 git clone https://github.com/mtskf/quoll.git
 cd quoll
 pnpm install
-pnpm package        # produces quoll-<version>.vsix
+pnpm package        # builds, then produces quoll-<version>.vsix
 code --install-extension quoll-*.vsix
 ```
 
@@ -153,7 +153,7 @@ Contributions are welcome. The project is a single-root pnpm package (extension 
 ```bash
 pnpm install        # install all deps
 pnpm build          # full build (tsc + esbuild → dist/)
-pnpm package        # produce a .vsix via vsce
+pnpm package        # build + produce a .vsix via vsce
 pnpm test           # run the vitest unit suite
 ```
 
