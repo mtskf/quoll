@@ -39,7 +39,7 @@ esbuild into `dist/`:
 - Or build and install a `.vsix`:
 
   ```bash
-  pnpm package                                    # → quoll-<version>.vsix
+  pnpm package                                    # build → quoll-<version>.vsix
   code --install-extension quoll-<version>.vsix --force
   ```
 
