@@ -57,6 +57,8 @@ describe("outline navigation integration", () => {
       eol: "\n",
       canWrite: true,
       docVersion: 1,
+      externalEpoch: 0,
+      epochGeneration: 1,
     });
 
     const mountEl = container?.querySelector(".quoll-editor") as HTMLElement;

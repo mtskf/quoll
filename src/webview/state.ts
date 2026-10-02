@@ -58,13 +58,12 @@ export type Action =
       readonly themeKind: ThemeKind;
       /** Identity-transition adoption (S3b): when true, bypass the stale
        *  two-comparison drop and adopt this Document unconditionally. A new host
-       *  session (fresh epochGeneration, or a legacy host that dropped the pair)
-       *  legitimately restarts at a LOWER docVersion; version ordering is
-       *  meaningful only within one generation. The shell computes this (via
-       *  edit-sync's `isIdentityTransition`) and threads it here so the reducer's
-       *  inlined copy of the stale guard cannot re-drop the adoption and strand
-       *  the webview permanently deaf to the live host. Absent/false on ordinary
-       *  same-generation (or pure-absent legacy) Documents. */
+       *  session (fresh epochGeneration) legitimately restarts at a LOWER
+       *  docVersion; version ordering is meaningful only within one generation.
+       *  The shell computes this (via edit-sync's `isIdentityTransition`) and
+       *  threads it here so the reducer's inlined copy of the stale guard cannot
+       *  re-drop the adoption and strand the webview permanently deaf to the
+       *  live host. Absent/false on ordinary same-generation Documents. */
       readonly adopt?: boolean;
     }
   | { readonly type: "theme"; readonly themeKind: ThemeKind }

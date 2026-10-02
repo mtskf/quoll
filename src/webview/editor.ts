@@ -206,7 +206,7 @@ export type EditorHandle = {
    *  the currently recorded pair? (S3b) The shell calls this BEFORE applyDocument
    *  so it can bypass its whole-Document stale-version drop and thread the
    *  `adopt` flag to the reducer. Delegates to edit-sync's pure predicate. */
-  isIdentityTransition(externalEpoch?: number, epochGeneration?: number): boolean;
+  isIdentityTransition(externalEpoch: number, epochGeneration: number): boolean;
 };
 
 /** Dispatch `post-edit` and ship the Edit message in the same tick.

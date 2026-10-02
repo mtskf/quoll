@@ -90,7 +90,7 @@ The page stubs the VS Code webview runtime just enough to boot the real bundle:
    posts `{ protocol, type: "ready" }` through the shim when it mounts (after
    its `window` message listener is wired). The shim detects that and only then
    `window.postMessage`es the `document` seed
-   (`{ protocol, type: "document", content, docVersion: 1, themeKind, canWrite: true, eol }`).
+   (`{ protocol, type: "document", content, docVersion: 1, themeKind, canWrite: true, eol, externalEpoch: 0, epochGeneration: 1 }`).
    `protocol` is `serve.mjs`'s `PREVIEW_PROTOCOL_VERSION`, pinned equal to
    `src/shared/protocol.ts`'s `PROTOCOL_VERSION` by
    `test/build/preview-server-theme.test.ts` — a stale value makes the shell

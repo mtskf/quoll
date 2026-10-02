@@ -442,14 +442,14 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
         return;
       case "document": {
         // Identity-transition bypass (S3b): a new host session (fresh
-        // epochGeneration, or a legacy host that dropped the pair) legitimately
-        // restarts at a LOWER docVersion. Version ordering is meaningful only
-        // WITHIN one host generation, so on a transition we SKIP the stale drop
-        // and adopt the Document unconditionally — threading `adopt` so the
-        // reducer's inlined copy of the same guard also adopts (otherwise the
-        // webview goes permanently deaf to the live host). editor is non-null
-        // whenever a stale compare could fire (docVersion only advances past 0
-        // after the editor mounted), so the null-guard here is defensive.
+        // epochGeneration) legitimately restarts at a LOWER docVersion. Version
+        // ordering is meaningful only WITHIN one host generation, so on a
+        // transition we SKIP the stale drop and adopt the Document
+        // unconditionally — threading `adopt` so the reducer's inlined copy of
+        // the same guard also adopts (otherwise the webview goes permanently
+        // deaf to the live host). editor is non-null whenever a stale compare
+        // could fire (docVersion only advances past 0 after the editor
+        // mounted), so the null-guard here is defensive.
         const isTransition =
           editor?.isIdentityTransition(message.externalEpoch, message.epochGeneration) ?? false;
         if (!isTransition && message.docVersion < state.docVersion) {

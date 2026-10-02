@@ -95,6 +95,8 @@ function buildDocument(
     themeKind: "light",
     canWrite: true,
     eol: "\n",
+    externalEpoch: 0,
+    epochGeneration: 1,
     ...overrides,
   };
 }
