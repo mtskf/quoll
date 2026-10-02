@@ -401,10 +401,9 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
   // until a same-generation foreign advance arrives. The named fields, not
   // argument positions, are what keep the call sites readable and typo-proof;
   // the DIRECTION is held by behaviour, not by the naming.
-  // Measured: swapping `from`/`to` reds 7 tests either way — the acksInFlightEdit
-  // swap reds 4 in cm-edit-sync.test.ts plus 2 in editor.test.ts's (d3) block
-  // and 1 in shell.test.ts; the shouldDropBufferedForEpoch swap reds 5 in
-  // cm-edit-sync.test.ts plus the same 2. Do not delete those in a tidy-up.
+  // Measured: swapping `from`/`to` at either call site reds tests across
+  // cm-edit-sync.test.ts, editor.test.ts and shell.test.ts. Those tests are what
+  // hold the direction — do not delete them in a tidy-up.
   //
   // Two consumers read it, and they MUST agree — that is the point of sharing
   // one predicate rather than two hand-written copies. `shouldDropBufferedForEpoch`
