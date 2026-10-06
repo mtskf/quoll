@@ -144,6 +144,9 @@ export type EditSyncOptions = {
    *  explicit `false` retries: a throw counts as shown, because a notifier that
    *  failed part-way may have drawn the notice, and retrying a persistently
    *  throwing one would log on every blur.
+   *  The console trace of the hold does not follow this answer: it is written
+   *  once per readonly episode, before the call, so a hold whose notice is
+   *  declined until the editor closes still leaves a record.
    *  Why `flush` and not the drain at flip time: a transient readonly that
    *  re-grants at once would flash a notice for edits that are about to replay.
    *  `flush` runs when the user leaves the editor, which is when held edits
@@ -580,7 +583,11 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
   // rationale for that, and for the latch, is on `EditSyncOptions.onReadonlyHold`).
   // Under readonly no capture site runs, so the buffer cannot be replaced: one
   // shown notice per readonly episode is one per held buffer.
+  // Two latches, both per episode: the notice's can be handed back by a
+  // declining notifier, the console trace's cannot — the trace records that a
+  // hold EXISTS, whether or not the user has been told yet.
   let readonlyHoldAnnounced = false;
+  let readonlyHoldTraced = false;
   const noteReadonlyHold = (): void => {
     // `seeded`: `canWrite` starts false, but "readonly" means nothing until the
     // host has said so — a pre-seed capture is not a held writable-era edit.
@@ -602,6 +609,19 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
     // Read before the call too — a re-entrant notifier can change `buffered`.
     // Length only: buffered document bytes must never reach the console.
     const trace = { heldLength: buffered.content.length, liveLength: liveDoc.length };
+    // Traced BEFORE the call and regardless of its answer: one record per
+    // episode, at the first flush that sees the hold. A notice can wait behind
+    // a stronger one for the whole episode, and an editor closed in that window
+    // would otherwise leave nothing saying edits were being held. Never written
+    // after the call — a notifier that re-enters a re-grant has already re-armed
+    // it for the next episode.
+    if (!readonlyHoldTraced) {
+      readonlyHoldTraced = true;
+      console.warn(
+        "[quoll] holding un-posted edits under readonly (replays if write is re-granted)",
+        trace
+      );
+    }
     // The catch answers a notifier that throws: `flush` is called from bare DOM
     // listeners (shell.ts), so an escaping throw would surface as an
     // unattributed uncaught error. A throw leaves `declined` false — the latch
@@ -616,14 +636,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
       // Not shown: give the next flush another try. This only ever writes
       // `false`, so it cannot undo a re-grant the notifier re-entered into.
       readonlyHoldAnnounced = false;
-      return;
     }
-    // Traced after the call so a declined hold leaves no line: one record per
-    // announcement, not one per blur spent waiting behind a stronger notice.
-    console.warn(
-      "[quoll] holding un-posted edits under readonly (replays if write is re-granted)",
-      trace
-    );
   };
 
   const clearTimer = (): void => {
@@ -877,7 +890,9 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
         noteIdentityTransition();
       }
       if (nextCanWrite) {
-        readonlyHoldAnnounced = false; // write is back: the readonly episode is over
+        // Write is back: the readonly episode is over.
+        readonlyHoldAnnounced = false;
+        readonlyHoldTraced = false;
       }
       docVersion = nextVersion;
       canWrite = nextCanWrite;

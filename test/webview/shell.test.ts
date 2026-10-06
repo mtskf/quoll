@@ -793,6 +793,40 @@ describe("shell — readonly hold notice", () => {
     }
   });
 
+  it("a second episode's hold aggregated into the notice still on screen spends the latch", async () => {
+    await mount();
+    vi.useFakeTimers();
+    try {
+      holdThenReadonly();
+      window.dispatchEvent(new Event("blur"));
+      const first = holdNotices()?.[0] as HTMLElement;
+      expect(first).toBeDefined();
+      // Episode 1 ends: re-grant replays, the host acks. The notice is NOT dismissed.
+      deliver(buildDocument({ docVersion: 2, content: "s", canWrite: true }));
+      expect(postedEdits().map((m) => m.content)).toEqual(["sx", "sxy"]);
+      deliver(buildDocument({ docVersion: 3, content: "sxy", canWrite: true }));
+      expect(holdNotices()?.[0]).toBe(first);
+      // Episode 2: a fresh hold, announced into the slot that already says it.
+      // (Typed bytes must differ from the readonly content, or the hold is
+      // silent by the "host already carries these bytes" rule.)
+      const view = mountedView();
+      view.dispatch({ changes: { from: view.state.doc.length, insert: "p" } });
+      vi.advanceTimersByTime(300); // posts — in flight
+      view.dispatch({ changes: { from: view.state.doc.length, insert: "q" } });
+      vi.advanceTimersByTime(300); // buffers
+      deliver(buildDocument({ docVersion: 4, content: "sxy", canWrite: false }));
+      window.dispatchEvent(new Event("blur"));
+      expect(holdNotices()?.length).toBe(1);
+      expect(holdNotices()?.[0]).toBe(first); // aggregated, not re-created
+      // Aggregated counts as shown: dismissed stays dismissed.
+      dismissNotice();
+      window.dispatchEvent(new Event("blur"));
+      expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("a discard REPLACES a hold notice already on screen", async () => {
     await mount();
     vi.useFakeTimers();

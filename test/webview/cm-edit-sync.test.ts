@@ -1746,7 +1746,7 @@ describe("cm edit-sync — a writable-era buffer survives readonly", () => {
     expect(s.posted[1]).toEqual({ content: "ab", baseDocVersion: 3 });
   });
 
-  it("a DECLINED hold is retried on each flush until it is shown, and traced only then", () => {
+  it("a DECLINED hold is retried on each flush until it is shown, and traced once on the first", () => {
     // `false` = the notice was not shown (the shell's slot held a stronger
     // claim). Spending the latch on it would end the episode with the hold
     // never drawn.
@@ -1764,14 +1764,16 @@ describe("cm edit-sync — a writable-era buffer survives readonly", () => {
       readonlyAck(s, 2, "a");
       s.sync.flush();
       expect(onReadonlyHold).toHaveBeenCalledTimes(1);
-      s.sync.flush();
-      expect(onReadonlyHold).toHaveBeenCalledTimes(2);
-      expect(holdTraces()).toEqual([]); // a decline is not an announcement
-      s.sync.flush(); // shown this time
-      expect(onReadonlyHold).toHaveBeenCalledTimes(3);
+      // The trace records the hold itself, so a decline does not withhold it.
       expect(holdTraces()).toEqual([
         [expect.stringContaining("[quoll]"), { heldLength: 2, liveLength: 1 }],
       ]);
+      s.sync.flush();
+      expect(onReadonlyHold).toHaveBeenCalledTimes(2);
+      expect(holdTraces().length).toBe(1); // not one per blur spent waiting
+      s.sync.flush(); // shown this time
+      expect(onReadonlyHold).toHaveBeenCalledTimes(3);
+      expect(holdTraces().length).toBe(1); // being shown adds no second line
       s.sync.flush();
       s.sync.flush();
       expect(onReadonlyHold).toHaveBeenCalledTimes(3); // latched once shown
@@ -2022,13 +2024,65 @@ describe("cm edit-sync — a writable-era buffer survives readonly", () => {
       },
     });
     target = s;
-    holdAb(s);
-    readonlyAck(s, 2, "a");
-    s.sync.flush();
-    expect(calls).toBe(1);
-    expect(s.posted.length).toBe(1);
-    regrant(s, 2);
-    expect(s.posted[1]).toEqual({ content: "ab", baseDocVersion: 2 });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const holdTraces = () =>
+      warn.mock.calls.filter((c) => String(c[0]).includes("holding un-posted edits"));
+    try {
+      holdAb(s);
+      readonlyAck(s, 2, "a");
+      s.sync.flush();
+      expect(calls).toBe(1);
+      expect(holdTraces().length).toBe(1);
+      expect(s.posted.length).toBe(1);
+      regrant(s, 2);
+      expect(s.posted[1]).toEqual({ content: "ab", baseDocVersion: 2 });
+      // A second episode is traced again: the re-grant re-armed the trace.
+      s.setDoc("ab");
+      regrant(s, 3);
+      s.type("abc"); // posts — in flight
+      s.type("abcd"); // buffered
+      readonlyAck(s, 4, "abc");
+      s.sync.flush();
+      expect(calls).toBe(2);
+      expect(holdTraces().length).toBe(2);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("a notifier that RE-ENTERS A RE-GRANT leaves the next episode traced", () => {
+    // The re-grant inside the call ends the episode and re-arms the trace;
+    // nothing after the call may set it again.
+    let target: ReturnType<typeof setup> | null = null;
+    let regrantInside = true;
+    const s = setup({
+      onReadonlyHold: () => {
+        if (regrantInside && target !== null) {
+          regrantInside = false;
+          regrant(target, 2);
+        }
+        return true;
+      },
+    });
+    target = s;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const holdTraces = () =>
+      warn.mock.calls.filter((c) => String(c[0]).includes("holding un-posted edits"));
+    try {
+      holdAb(s);
+      readonlyAck(s, 2, "a");
+      s.sync.flush();
+      expect(holdTraces().length).toBe(1);
+      expect(s.posted[1]).toEqual({ content: "ab", baseDocVersion: 2 }); // replayed inside
+      // The next episode starts with NO further write-granting snapshot — the
+      // one inside the call is the only thing that can have re-armed the trace.
+      s.type("abc"); // buffered behind the replay still in flight
+      readonlyAck(s, 3, "ab");
+      s.sync.flush();
+      expect(holdTraces().length).toBe(2);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("a RE-ENTRANT notifier that DECLINES fires once per flush and posts nothing", () => {
