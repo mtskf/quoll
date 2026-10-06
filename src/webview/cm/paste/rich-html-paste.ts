@@ -258,9 +258,12 @@ export function richHtmlPaste(opts: { canWrite: () => boolean }): Extension {
         // host will accept the file; if they refuse, the prose is simply all that
         // lands. Known residual: undoing the inserted prose does not cancel the
         // pending anchor — it maps back to the insert position and a later
-        // successful host reply still inserts the image there. Pinned in
-        // cm-rich-html-image-paste.test.ts; closing it is left to the PASTE-03
-        // clipboard-arbitration work.
+        // successful host reply still inserts the image there. That late insert is
+        // a history event, so it also discards the redo branch of the undone prose.
+        // The cause is not here: resolve() (image-paste.ts) records its insert as
+        // ordinary history, a property of ANY pending image — this path is a new
+        // way to reach it. Pinned in cm-rich-html-image-paste.test.ts; closing it
+        // is left to the PASTE-03 clipboard-arbitration work.
         const md = converted.markdown;
         if (!opts.canWrite()) {
           event.preventDefault();

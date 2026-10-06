@@ -444,6 +444,9 @@ export function createImagePasteDrop(opts: {
     try {
       // resolve runs synchronously from the shell's `editor?.` null-guarded handler
       // (view alive), but guard the dispatch for symmetry with the async paths.
+      // History-recorded on purpose, so the image link stays undoable — at the cost
+      // of the redo branch of anything undone during the round-trip. Change only
+      // with a decision record.
       view.dispatch({
         changes: { from: anchor, insert },
         selection: { anchor: anchor + insert.length },

@@ -3,7 +3,7 @@
 // first; it is Prec.high regardless). cm-rich-html-paste.test.ts pins the hand-off
 // against a sentinel; this file pins what the two handlers produce together when
 // one clipboard carries a convertible `text/html` flavour AND an image file item.
-import { history, undo } from "@codemirror/commands";
+import { history, redo, redoDepth, undo } from "@codemirror/commands";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -19,7 +19,7 @@ import { imageWrites, sizedImageFile } from "../helpers/image-paste-doubles.js";
 
 const CAPTION_HTML = "<div>caption</div>";
 
-function mount(doc: string, canWrite = true) {
+function mount(doc: string, canWrite = true, withRichHtml = true) {
   const post = vi.fn<(message: WebviewToHost) => void>();
   const paste = createImagePasteDrop({ canWrite: () => canWrite, post });
   const view = new EditorView({
@@ -29,7 +29,7 @@ function mount(doc: string, canWrite = true) {
       extensions: [
         history(),
         EditorState.readOnly.of(!canWrite),
-        richHtmlPaste({ canWrite: () => canWrite }),
+        withRichHtml ? richHtmlPaste({ canWrite: () => canWrite }) : [],
         paste.extension,
       ],
     }),
@@ -99,20 +99,50 @@ describe("richHtmlPaste + imagePaste — one clipboard carrying HTML and an imag
     view.destroy();
   });
 
-  it("KNOWN RESIDUAL: undoing the caption does not cancel the pending image — it still lands at the insert position", async () => {
-    // Pinned, not endorsed: the anchor is a mapped position, not part of the
-    // caption's history event. Closing this belongs to the PASTE-03
-    // clipboard-arbitration work; update this test with that change.
+  it("KNOWN RESIDUAL: undoing the caption does not cancel the pending image — it still lands, and the caption can no longer be redone", async () => {
+    // Pinned, not endorsed. Two halves: the anchor is a mapped position, not part
+    // of the caption's history event, so the image still lands; and resolve()'s
+    // insert is an ordinary history event, so it discards the redo branch the undo
+    // just created. Closing this belongs to the PASTE-03 clipboard-arbitration
+    // work; update this test with that change.
     const { view, paste, post } = mount("intro\n");
     firePasteAt(view.contentDOM, { html: CAPTION_HTML, files: IMAGE_FILE });
     expect(view.state.doc.toString()).toBe("intro\n\ncaption\n");
     expect(undo(view)).toBe(true);
     expect(view.state.doc.toString()).toBe("intro\n");
+    expect(redoDepth(view.state)).toBe(1);
     expect(anchors(view)).toEqual([{ requestId: expect.any(String), anchor: 6 }]);
     await vi.waitFor(() => expect(imageWrites(post)).toHaveLength(1));
     paste.resolve(view, imageWrites(post)[0].requestId, "assets/a.png");
     expect(view.state.doc.toString()).toBe("intro\n![](assets/a.png)\n");
     expect(anchors(view)).toEqual([]);
+    expect(redoDepth(view.state)).toBe(0);
+    expect(redo(view)).toBe(false);
+    expect(view.state.doc.toString()).toBe("intro\n![](assets/a.png)\n");
+    view.destroy();
+  });
+
+  it("KNOWN RESIDUAL baseline: an image-only paste loses the redo of unrelated typing the same way, without richHtmlPaste", async () => {
+    // The mechanism above is not the caption path's: any edit undone while an
+    // image is pending loses its redo when the reply lands. richHtmlPaste is not
+    // even mounted here.
+    const { view, paste, post } = mount("intro\n", true, false);
+    view.dispatch({
+      changes: { from: 6, insert: "typed\n" },
+      selection: { anchor: 12 },
+      userEvent: "input.type",
+    });
+    firePasteAt(view.contentDOM, { files: IMAGE_FILE });
+    expect(anchors(view)).toEqual([{ requestId: expect.any(String), anchor: 12 }]);
+    expect(undo(view)).toBe(true);
+    expect(view.state.doc.toString()).toBe("intro\n");
+    expect(redoDepth(view.state)).toBe(1);
+    expect(anchors(view)).toEqual([{ requestId: expect.any(String), anchor: 6 }]);
+    await vi.waitFor(() => expect(imageWrites(post)).toHaveLength(1));
+    paste.resolve(view, imageWrites(post)[0].requestId, "assets/a.png");
+    expect(view.state.doc.toString()).toBe("intro\n![](assets/a.png)\n");
+    expect(redoDepth(view.state)).toBe(0);
+    expect(redo(view)).toBe(false);
     view.destroy();
   });
 
