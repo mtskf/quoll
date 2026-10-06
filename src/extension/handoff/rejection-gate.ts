@@ -12,11 +12,8 @@
 
 export type RejectionGateDeps = {
   /** True while the host session holds a pending write-gate rejection. A bare
-   *  predicate (no side effect): handlers call refusedForRejection at entry and
-   *  after each await inside the abortable range; after the insert command
-   *  resolved the Claude handler reads it directly to skip the insurance
-   *  clipboard write WITHOUT a notice; after the fallback clipboard write
-   *  started nothing is re-checked. */
+   *  predicate (no side effect), so the Claude handler can also read it directly
+   *  for its notice-free skip — when each read happens is in the header above. */
   isRejectionPending: () => boolean;
   /** Surface the one refusal notice. Total (never throws) — the wiring binds it
    *  to the panel's showError. */
