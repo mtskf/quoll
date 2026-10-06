@@ -140,10 +140,11 @@ export type EditorOptions = {
    *  — do not restate it here; this is a pass-through. */
   onLocalEditDiscarded?: () => void;
   /** Fired when edit-sync is holding un-posted edits under a readonly document
-   *  (at most once per readonly episode). The shell wires it to a user-visible
-   *  notice. Pass-through — the rule lives on `EditSyncOptions.onReadonlyHold`
-   *  (cm/edit-sync.ts). */
-  onReadonlyHold?: () => void;
+   *  (shown at most once per readonly episode). The shell wires it to a
+   *  user-visible notice and returns whether that notice was shown — `false`
+   *  asks for a retry. Pass-through — the rule lives on
+   *  `EditSyncOptions.onReadonlyHold` (cm/edit-sync.ts). */
+  onReadonlyHold?: () => boolean;
 };
 
 /** The part of a host `DocumentMessage` the editor consumes. An object, not

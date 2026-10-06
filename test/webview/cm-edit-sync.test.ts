@@ -9,7 +9,7 @@ function setup(opts?: {
   now?: () => number;
   onResyncStorm?: () => void;
   onLocalEditDiscarded?: () => void;
-  onReadonlyHold?: () => void;
+  onReadonlyHold?: () => boolean;
 }) {
   let doc = "hello";
   const posted: Posted[] = [];
@@ -1591,12 +1591,12 @@ describe("cm edit-sync — readonly hard drops are traced", () => {
   });
 
   it("reports liveLength and bufferedLength as DISTINCT values when a buffer survives a readonly reseed", () => {
-    // Reachability (per the module's warnReadonlyDrop comment): a buffer
-    // stashed under single-flight survives a readonly Document because
-    // replayIfNeeded's `!canWrite` guard returns WITHOUT nulling it — so by
-    // the time a further readonly keystroke hits trySend's hard-drop branch,
-    // the held buffer and the live doc disagree. Picking either one via `??`
-    // would under-report the loss; this pins that both are reported, and
+    // A buffer stashed under single-flight survives a readonly Document because
+    // replayIfNeeded's `!canWrite` guard returns WITHOUT nulling it — so by the
+    // time a further readonly change hits trySend's drop branch, the RETAINED
+    // buffer and the dropped live doc disagree. The two lengths mean different
+    // things (what was dropped vs what is still held for a re-grant), so picking
+    // one via `??` would hide the other; this pins that both are reported, and
     // that they are genuinely different numbers (not a coincidental match).
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
@@ -1628,8 +1628,9 @@ describe("cm edit-sync — readonly hard drops are traced", () => {
 // the drain holds them under `!canWrite`, and a re-grant replays them. The three
 // readonly arms (trySend / cancelPendingFlush / flush) drop only the LIVE change
 // — a docChanged under readonly is programmatic — and leave that buffer alone.
-// `flush` additionally tells the user, once per readonly episode, that edits are
-// being held.
+// `flush` additionally tells the user that edits are being held — asking the
+// notifier on each call until it reports the notice shown, then staying quiet
+// for the rest of the readonly episode.
 //
 // THE STUB HAS NO VIEW. Production's `canWrite: false` Document reseeds the view
 // to the HOST's content, so after the flip the held bytes are no longer on
@@ -1655,7 +1656,7 @@ describe("cm edit-sync — a writable-era buffer survives readonly", () => {
   };
   // The real debounce path (no scheduleFlush override): the only way to hold a
   // LIVE timer, which the cancelPendingFlush and flush-with-timer arms need.
-  const timerSetup = (opts?: { onReadonlyHold?: () => void }) => {
+  const timerSetup = (opts?: { onReadonlyHold?: () => boolean }) => {
     let doc = "";
     const posted: Posted[] = [];
     const sync = createEditSync({
@@ -1724,6 +1725,63 @@ describe("cm edit-sync — a writable-era buffer survives readonly", () => {
     readonlyAck(s, 4, "abc");
     s.sync.flush();
     expect(onReadonlyHold).toHaveBeenCalledTimes(2);
+  });
+
+  it("a readonly repost inside the episode does not re-arm the announcement", () => {
+    const onReadonlyHold = vi.fn();
+    const s = setup({ onReadonlyHold });
+    holdAb(s);
+    readonlyAck(s, 2, "a");
+    s.sync.flush();
+    expect(onReadonlyHold).toHaveBeenCalledTimes(1);
+    // The host reposts while STILL readonly (hidden-webview resync / no-op
+    // repost): only a snapshot that grants write ends the episode.
+    readonlyAck(s, 2, "a");
+    s.sync.flush();
+    readonlyAck(s, 3, "a");
+    s.sync.flush();
+    expect(onReadonlyHold).toHaveBeenCalledTimes(1);
+    // ...and the buffer is still held for the re-grant.
+    regrant(s, 3);
+    expect(s.posted[1]).toEqual({ content: "ab", baseDocVersion: 3 });
+  });
+
+  it("a DECLINED hold is retried on each flush until it is shown, and traced only then", () => {
+    // `false` = the notice was not shown (the shell's slot held a stronger
+    // claim). Spending the latch on it would end the episode with the hold
+    // never drawn.
+    const onReadonlyHold = vi
+      .fn<() => boolean>()
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(false)
+      .mockReturnValue(true);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const holdTraces = () =>
+      warn.mock.calls.filter((c) => String(c[0]).includes("holding un-posted edits"));
+    try {
+      const s = setup({ onReadonlyHold });
+      holdAb(s);
+      readonlyAck(s, 2, "a");
+      s.sync.flush();
+      expect(onReadonlyHold).toHaveBeenCalledTimes(1);
+      s.sync.flush();
+      expect(onReadonlyHold).toHaveBeenCalledTimes(2);
+      expect(holdTraces()).toEqual([]); // a decline is not an announcement
+      s.sync.flush(); // shown this time
+      expect(onReadonlyHold).toHaveBeenCalledTimes(3);
+      expect(holdTraces()).toEqual([
+        [expect.stringContaining("[quoll]"), { heldLength: 2, liveLength: 1 }],
+      ]);
+      s.sync.flush();
+      s.sync.flush();
+      expect(onReadonlyHold).toHaveBeenCalledTimes(3); // latched once shown
+      expect(holdTraces().length).toBe(1);
+      expect(s.posted.length).toBe(1);
+      regrant(s, 2);
+      expect(s.posted[1]).toEqual({ content: "ab", baseDocVersion: 2 });
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("traces the hold with lengths only — never the held bytes", () => {
@@ -1880,7 +1938,7 @@ describe("cm edit-sync — a writable-era buffer survives readonly", () => {
   });
 
   it("a THROWING hold notifier neither escapes flush nor costs the buffer", () => {
-    const onReadonlyHold = vi.fn(() => {
+    const onReadonlyHold = vi.fn((): boolean => {
       throw new Error("notice failed");
     });
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -1894,6 +1952,12 @@ describe("cm edit-sync — a writable-era buffer survives readonly", () => {
         expect.stringContaining("onReadonlyHold threw"),
         expect.any(Error)
       );
+      // A throw is not a decline: the notice may have been drawn part-way, so
+      // later flushes do not call (and do not log) again.
+      s.sync.flush();
+      s.sync.flush();
+      expect(onReadonlyHold).toHaveBeenCalledTimes(1);
+      expect(errorSpy).toHaveBeenCalledTimes(1);
       regrant(s, 2);
       expect(s.posted[1]).toEqual({ content: "ab", baseDocVersion: 2 });
     } finally {
@@ -1954,6 +2018,7 @@ describe("cm edit-sync — a writable-era buffer survives readonly", () => {
         calls++;
         target?.sync.flush(); // re-enter the announcing site mid-notice
         target?.sync.onReducerCommit(false); // and the drain
+        return true;
       },
     });
     target = s;
@@ -1961,6 +2026,32 @@ describe("cm edit-sync — a writable-era buffer survives readonly", () => {
     readonlyAck(s, 2, "a");
     s.sync.flush();
     expect(calls).toBe(1);
+    expect(s.posted.length).toBe(1);
+    regrant(s, 2);
+    expect(s.posted[1]).toEqual({ content: "ab", baseDocVersion: 2 });
+  });
+
+  it("a RE-ENTRANT notifier that DECLINES fires once per flush and posts nothing", () => {
+    // The latch is released only AFTER the notifier returns, so the nested
+    // flush still finds it set; the decline then re-opens it for the next one.
+    let target: ReturnType<typeof setup> | null = null;
+    let calls = 0;
+    const s = setup({
+      onReadonlyHold: () => {
+        calls++;
+        target?.sync.flush();
+        target?.sync.onReducerCommit(false);
+        return false;
+      },
+    });
+    target = s;
+    holdAb(s);
+    readonlyAck(s, 2, "a");
+    s.sync.flush();
+    expect(calls).toBe(1);
+    expect(s.posted.length).toBe(1);
+    s.sync.flush(); // the retry — again exactly one call
+    expect(calls).toBe(2);
     expect(s.posted.length).toBe(1);
     regrant(s, 2);
     expect(s.posted[1]).toEqual({ content: "ab", baseDocVersion: 2 });

@@ -180,8 +180,9 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   // told about is a fresh loss — but a repeat discard while the notice is still
   // on screen is AGGREGATED: the DOM and the text are left untouched, because
   // re-rendering an identical notice reads as a new, second loss. Hold has NO
-  // display-side latch: edit-sync fires it at most once per readonly episode,
-  // which is also why a dismissed hold notice stays dismissed.
+  // display-side latch: edit-sync stops firing it for the readonly episode once
+  // showHoldNotice reports it shown, which is also why a dismissed hold notice
+  // stays dismissed.
   //
   // Consequence of the shared slot: a stronger claim REPLACES a weaker one
   // (showNotice's replaceChildren) and a weaker one is declined — discard over
@@ -189,9 +190,13 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   // turns into when foreign bytes land during the readonly window. The hold
   // names specific edits at risk, where the storm only says some may be. Both
   // weaker kinds are latched at their source — the storm for the session, the
-  // hold for its readonly episode — so one that was replaced or declined is not
-  // drawn again within that span: "the storm notice disappeared" (or the hold
-  // notice did) is expected behaviour, not a bug to chase.
+  // hold for its readonly episode — so one that was SHOWN and then replaced is
+  // not drawn again within that span: "the storm notice disappeared" (or the
+  // hold notice did) is expected behaviour, not a bug to chase. A DECLINED one
+  // differs by kind: the storm's latch is spent either way, while the hold
+  // reports the decline (showNotice's return) and edit-sync offers it again on
+  // the next flush — the hold is the only signal those specific edits get, and
+  // the discard in its way may be about an unrelated, earlier loss.
   //
   // The hold text promises a RETRY, not durability: after a re-grant the replay
   // reaches the host, but the view was reseeded at the flip and a keystroke
@@ -221,9 +226,11 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   const NOTICE_PRIORITY: Record<NoticeKind, number> = { discard: 3, hold: 2, storm: 1 };
   let noticeKind: NoticeKind | null = null;
   let stormNoticeShown = false;
-  function showNotice(kind: NoticeKind): void {
+  // Returns whether the slot now carries `kind`: false only for the priority
+  // decline. showHoldNotice forwards it; the other writers ignore it.
+  function showNotice(kind: NoticeKind): boolean {
     if (noticeKind === kind) {
-      return; // aggregate: the slot already says exactly this
+      return true; // aggregate: the slot already says exactly this
     }
     // Choke point for NOTICE_PRIORITY: every writer (showDiscardNotice,
     // showHoldNotice, showStormNotice's deferred render, and any future notice
@@ -241,7 +248,7 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
     // this guard exists so the next kind added above discard is protected by
     // construction, not by discard happening to still be the strongest.
     if (noticeKind !== null && NOTICE_PRIORITY[noticeKind] > NOTICE_PRIORITY[kind]) {
-      return; // a strictly stronger claim holds the slot — never restate it more weakly
+      return false; // a strictly stronger claim holds the slot — never restate it more weakly
     }
     const notice = document.createElement("div");
     notice.className = `quoll-resync-notice quoll-notice-${kind}`;
@@ -259,12 +266,13 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
     notice.append(text, dismiss);
     noticeHost.replaceChildren(notice);
     noticeKind = kind;
+    return true;
   }
   function showDiscardNotice(): void {
     showNotice("discard");
   }
-  function showHoldNotice(): void {
-    showNotice("hold");
+  function showHoldNotice(): boolean {
+    return showNotice("hold");
   }
   function showStormNotice(): void {
     if (stormNoticeShown) {

@@ -132,11 +132,18 @@ export type EditSyncOptions = {
    *  held, they replay if write is re-granted, and they are gone if the editor
    *  closes first (the buffer lives in this iframe). It does NOT claim they are
    *  lost, and nothing here makes them durable.
-   *  At most ONCE per readonly episode — latched here, unlike
+   *  SHOWN at most once per readonly episode — latched here, unlike
    *  `onLocalEditDiscarded`: a discard is a fresh event each time, whereas a hold
    *  is a STATE and `flush` runs on every blur, so an unlatched hold would
    *  re-raise a dismissed notice on each focus change. The latch re-arms when a
    *  snapshot grants write.
+   *  Returns whether the notice reached the user. `false` — the caller declined
+   *  to show it (the shell's slot holds a stronger claim) — does NOT spend the
+   *  latch, so the next `flush` asks again for as long as the hold is still
+   *  true; otherwise an episode could end with the hold never shown. Only an
+   *  explicit `false` retries: a throw counts as shown, because a notifier that
+   *  failed part-way may have drawn the notice, and retrying a persistently
+   *  throwing one would log on every blur.
    *  Why `flush` and not the drain at flip time: a transient readonly that
    *  re-grants at once would flash a notice for edits that are about to replay.
    *  `flush` runs when the user leaves the editor, which is when held edits
@@ -144,8 +151,8 @@ export type EditSyncOptions = {
    *  A change made WHILE readonly never fires this — it is dropped with a
    *  console trace only (see `warnReadonlyDrop`).
    *  Wrapped in a local try/catch: a failed notice must not escape into the
-   *  teardown listeners that call `flush`. Defaults to a no-op. */
-  onReadonlyHold?: () => void;
+   *  teardown listeners that call `flush`. Unset counts as shown. */
+  onReadonlyHold?: () => boolean;
 };
 
 export type EditSync = {
@@ -261,12 +268,15 @@ export type EditSync = {
    *
    *  Posts NOTHING under readonly: a change still inside the debounce window is
    *  dropped (see `warnReadonlyDrop`), while a buffer held from before the flip
-   *  is KEPT for a re-grant to replay and announced once through
-   *  `onReadonlyHold`. Before the first snapshot `canWrite` is still false, so
-   *  the same arm runs — silently, with any pre-seed capture left for the seed's
-   *  drain to judge. A buffer-keeping hold while the serialize-error gate is
-   *  closed, and when the post itself fails. NOT a mid-session call — for a
-   *  reseed always use `cancelPendingFlush` (capture-preserving), never `flush`. */
+   *  is KEPT for a re-grant to replay and announced through `onReadonlyHold`
+   *  until that notice has been shown once. Before the first snapshot `canWrite`
+   *  is still false, so the same arm runs: an in-window change is dropped with
+   *  the same console trace, but NO notice fires, and a pre-seed capture
+   *  (cancelPendingFlush) is left for the seed's drain to judge.
+   *  Two other cases keep the buffer WITHOUT posting and without any notice: the
+   *  serialize-error gate is closed, or the post itself fails.
+   *  NOT a mid-session call — for a reseed always use `cancelPendingFlush`
+   *  (capture-preserving), never `flush`. */
   flush: () => void;
   /** Mid-session flush barrier (context-handoff): clear the debounce timer and,
    *  if a keystroke was typed inside the window, post it NOW — but RESPECT
@@ -537,8 +547,9 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
   // can only be programmatic, and retaining it would let a later write-granting
   // ack replay content that was never legitimately editable. `buffered`, when
   // non-null after the seed, is the opposite — every site that fills it requires
-  // `canWrite`, so it holds bytes typed while writable that the host never
-  // applied.
+  // `canWrite`, so it holds bytes typed while writable that the host has not
+  // ACKED. Not necessarily un-applied: flush's retain arm keeps bytes it just
+  // force-posted, which the host may well carry — `noteReadonlyHold` checks.
   //
   // ASSUMPTION, held outside this module: a debounce timer that is live while
   // readonly was SCHEDULED under readonly. `canWrite` changes only in
@@ -567,8 +578,8 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
 
   // The user-visible half of the readonly hold, called from `flush` only (the
   // rationale for that, and for the latch, is on `EditSyncOptions.onReadonlyHold`).
-  // Under readonly no capture site runs, so the buffer cannot be replaced: once
-  // per readonly episode is once per held buffer.
+  // Under readonly no capture site runs, so the buffer cannot be replaced: one
+  // shown notice per readonly episode is one per held buffer.
   let readonlyHoldAnnounced = false;
   const noteReadonlyHold = (): void => {
     // `seeded`: `canWrite` starts false, but "readonly" means nothing until the
@@ -585,24 +596,34 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
     if (sameTextIgnoringEol(buffered.content, liveDoc)) {
       return;
     }
-    readonlyHoldAnnounced = true; // latched BEFORE the call: no retry either way
+    // Latched BEFORE the call: that is what answers a notifier that
+    // synchronously re-enters `flush`.
+    readonlyHoldAnnounced = true;
+    // Read before the call too — a re-entrant notifier can change `buffered`.
     // Length only: buffered document bytes must never reach the console.
-    console.warn(
-      "[quoll] holding un-posted edits under readonly (replays if write is re-granted)",
-      {
-        heldLength: buffered.content.length,
-        liveLength: liveDoc.length,
-      }
-    );
-    // Latching first is also what answers a notifier that synchronously
-    // re-enters `flush`; the catch answers one that throws. `flush` is called
-    // from bare DOM listeners (shell.ts), so an escaping throw would surface as
-    // an unattributed uncaught error.
+    const trace = { heldLength: buffered.content.length, liveLength: liveDoc.length };
+    // The catch answers a notifier that throws: `flush` is called from bare DOM
+    // listeners (shell.ts), so an escaping throw would surface as an
+    // unattributed uncaught error. A throw leaves `declined` false — the latch
+    // stays spent (see `EditSyncOptions.onReadonlyHold`).
+    let declined = false;
     try {
-      opts.onReadonlyHold?.();
+      declined = opts.onReadonlyHold?.() === false;
     } catch (err) {
       console.error("[quoll] onReadonlyHold threw", err);
     }
+    if (declined) {
+      // Not shown: give the next flush another try. This only ever writes
+      // `false`, so it cannot undo a re-grant the notifier re-entered into.
+      readonlyHoldAnnounced = false;
+      return;
+    }
+    // Traced after the call so a declined hold leaves no line: one record per
+    // announcement, not one per blur spent waiting behind a stronger notice.
+    console.warn(
+      "[quoll] holding un-posted edits under readonly (replays if write is re-granted)",
+      trace
+    );
   };
 
   const clearTimer = (): void => {
@@ -951,7 +972,9 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
         return; // nothing pending — genuine no-op
       }
       if (!seeded || !canPost()) {
-        buffered = stampHeld(content); // pre-seed / gate closed: keep for a later drain
+        // Gate closed: keep for a later drain. (`!seeded` is defensive — pre-seed
+        // never passes the `!canWrite` return above.)
+        buffered = stampHeld(content);
         return;
       }
       const wasInFlight = editInFlight;
