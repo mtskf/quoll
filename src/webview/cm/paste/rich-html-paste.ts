@@ -1,12 +1,15 @@
 // CodeMirror paste handler: when the clipboard carries a `text/html` fragment
 // that converts to Markdown AND that conversion actually emitted Markdown syntax,
 // insert the Markdown instead of the raw HTML/plain text. A fragment can convert
-// perfectly and still not be inserted — see the third defer below.
+// perfectly and still not be inserted — see the no-syntax defer in the handler
+// (and its image-item exception, which inserts it after all).
 //
 // Follows html-table-paste.ts — Prec.high, defer (return false WITHOUT
 // preventDefault so the handlers after this one still run), preventDefault only
 // AFTER committing to insert, read-only swallow, and one dispatch through the
-// normal edit-sync → host write-lock → validateMarkdownForWrite pipeline.
+// normal edit-sync → host write-lock → validateMarkdownForWrite pipeline. One
+// deviation on the insert itself: when an image file item rides along, this handler
+// inserts and STILL returns false un-prevented, so imagePaste gets the same event.
 //
 // What a defer actually reaches: CM runs handlers in precedence order — within one
 // precedence, in extension order — stopping at the first that returns true. This
@@ -25,12 +28,10 @@
 // requires that a defer be harmless — see canDeferWithoutDataLoss, which they
 // share: a plain / uri-list fallback for CM core, an image file item for
 // imagePaste, OR an empty main selection, since `doPaste("")` at a bare caret
-// deletes nothing. The no-syntax site is NOT a consume branch — not deferring there
-// INSERTS this conversion, so there is no swallowed paste to avoid — but it asks
-// the same downstream question, through the same funnel. That funnel is
-// pasteWouldBeDropped: the ONE place "can anything downstream insert this
-// clipboard" is answered, over hasPlainFallback / hasImageFileItem. All three sites
-// ask it there.
+// deletes nothing. Both ask "can anything downstream insert this clipboard"
+// through pasteWouldBeDropped. The no-syntax site is NOT a consume branch and asks
+// a narrower question — will CM's PLAIN paste actually run — because not deferring
+// there INSERTS this conversion; see the comment at the site.
 // The `!html` defer is unconditional: with no HTML flavour this handler has nothing
 // to insert either, so CM's own fallback behaviour is the whole story there.
 
@@ -94,9 +95,10 @@ function hasPlainFallback(event: ClipboardEvent): boolean {
  *
  *  What stays local here is only the CLIPBOARD-shaped part: with no `items` at all
  *  the answer is false. That is the safe side: at the two consume branches false
- *  falls back to swallowing the event, which leaves the document intact (at the
- *  no-syntax defer it falls back to inserting this conversion — also
- *  non-destructive), whereas a wrong true routes to the deletion above. */
+ *  falls back to swallowing the event, which leaves the document intact (on the
+ *  insert path it falls back to consuming after the insert — the image is not
+ *  pasted, nothing is destroyed), whereas a wrong true routes to the deletion
+ *  above. */
 function hasImageFileItem(event: ClipboardEvent): boolean {
   const items = event.clipboardData?.items;
   if (!items) {
@@ -212,31 +214,18 @@ export function richHtmlPaste(opts: { canWrite: () => boolean }): Extension {
         // still holds. Requires a plain fallback to defer into, for the reason
         // hasPlainFallback documents.
         //
-        // An image file item is the second thing this defer can land in: imagePaste
-        // consumes the event and performs the paste itself, so unlike a bare defer
-        // it can never reach CM's doPaste(""). Without this clause a syntax-free
-        // fragment arriving BESIDE a copied image (a caption <div>, no text/plain)
-        // was converted and consumed here, and the image was never pasted at all.
-        // Both are asked through the one funnel — `!pasteWouldBeDropped(event)` IS
-        // "a plain fallback or an image file item exists" — so a future third
-        // absorber is added there and this site follows. Spelling the disjunction
-        // out here would be a second answer to a question the funnel already asks.
-        //
-        // ⚠️ They are NOT interchangeable outcomes, only interchangeable answers to
-        // "can the EVENT be absorbed". imagePaste calls preventDefault()
+        // ...and requires that NO image file item rides along, because then the
+        // plain flavour can never land: imagePaste calls preventDefault()
         // unconditionally once it sees an ingestible image item (image-paste.ts),
-        // and CM's dispatcher breaks the handler chain on defaultPrevented, so with
-        // an image item present CM's builtin plain-text paste NEVER runs — even when
-        // a text/plain flavour also exists. So on an image clipboard this defer trades the prose
-        // away for the bitmap; it does not get both. Deferring is still right (the
-        // escaped rendering would corrupt hand-typed Markdown), and the caption loss
-        // is the tracked "no-syntax + image → caption lost" trade whose real fix is
-        // the protocol change the branch below points at. Do not read this comment
-        // as promising a plain-text landing that provably never happens.
-        //
-        // Deliberately NOT canDeferWithoutDataLoss itself: an empty selection is no
-        // reason to defer here, because NOT deferring inserts this conversion rather
-        // than consuming the event — there is no swallowed paste to avoid.
+        // and CM's dispatcher breaks the handler chain on defaultPrevented, so CM's
+        // builtin plain-text paste never runs — with or without a text/plain
+        // flavour. Deferring there used to lose the caption outright, and the whole
+        // paste when imagePaste then refused the file. So with an image item the
+        // escaped conversion is inserted below even though text/plain exists.
+        // Hence the two predicates spelled out rather than `!pasteWouldBeDropped`:
+        // that funnel asks "can the EVENT be absorbed", this site needs "will the
+        // TEXT land". Nor canDeferWithoutDataLoss: an empty selection is no reason
+        // to defer here, since not deferring inserts rather than swallows.
         //
         // What this deliberately gives up: the `text/html` flavour is NOT
         // strictly redundant here. LINE STRUCTURE is real information only it
@@ -257,24 +246,32 @@ export function richHtmlPaste(opts: { canWrite: () => boolean }): Extension {
         // EditorView.editable (editor.ts's `editableComp`) are reconfigured from
         // the same `canWrite` wire value that drives opts.canWrite(), so the two
         // cannot diverge — the same invariant html-table-paste.ts relies on.
-        if (!converted.emittedMarkdownSyntax && !pasteWouldBeDropped(event)) {
+        const imageRidesAlong = hasImageFileItem(event);
+        if (!converted.emittedMarkdownSyntax && hasPlainFallback(event) && !imageRidesAlong) {
           return false;
         }
-        // NO image-file exemption here, unlike the two consume branches above, and
-        // deliberately so. This path INSERTS the conversion, so exempting would mean
-        // deferring — handing imagePaste an event whose text this handler has no way
-        // to pass along, and the prose would be dropped to paste the bitmap alone.
-        // On a clipboard carrying both (Word / Outlook copying a paragraph with an
-        // embedded picture) keeping the prose is the smaller loss. The dominant
-        // image clipboard is unaffected: "Copy image" carries a bare <img>, which
-        // converts to null and takes the exempted branch above. Carrying fallback
-        // text into imagePaste would remove the trade-off entirely; that is a
-        // protocol change, tracked separately. Pinned by "inserts a syntax-bearing
-        // conversion even when an image file rides along".
+        // An image file item does not stop the insert, and the insert does not stop
+        // the image: after dispatching, this handler returns false WITHOUT
+        // preventDefault, so imagePaste runs next on the same event and anchors its
+        // pending image at the selection head this dispatch just moved — after the
+        // prose. On success BOTH remain, prose then `![](…)` (deliberate: it used
+        // to be one or the other). Nothing here predicts whether imagePaste or the
+        // host will accept the file; if they refuse, the prose is simply all that
+        // lands. Known residual: undoing the inserted prose does not cancel the
+        // pending anchor — it maps back to the insert position and a later
+        // successful host reply still inserts the image there. That late insert is
+        // a history event, so it also discards the redo branch of the undone prose.
+        // The cause is not here: resolve() (image-paste.ts) records its insert as
+        // ordinary history, a property of ANY pending image — this path is a new
+        // way to reach it. Pinned in cm-rich-html-image-paste.test.ts; closing it
+        // is left to the PASTE-03 clipboard-arbitration work.
         const md = converted.markdown;
-        event.preventDefault();
         if (!opts.canWrite()) {
+          event.preventDefault();
           return true; // read-only: swallow, no fallback insert (mirrors siblings)
+        }
+        if (!imageRidesAlong) {
+          event.preventDefault();
         }
         const before = view.state.doc.sliceString(0, from);
         const after = view.state.doc.sliceString(to);
@@ -285,7 +282,7 @@ export function richHtmlPaste(opts: { canWrite: () => boolean }): Extension {
           scrollIntoView: true,
           userEvent: "input.paste",
         });
-        return true;
+        return !imageRidesAlong;
       },
     })
   );

@@ -4,7 +4,6 @@ import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
-  type ImageWriteMessage,
   isWebviewToHost,
   MAX_IMAGE_BYTES,
   PROTOCOL_VERSION,
@@ -24,6 +23,7 @@ import {
   IMAGE_FILE,
   makeClipboardData,
 } from "../helpers/clipboard-double.js";
+import { imageWrites, sizedImageFile } from "../helpers/image-paste-doubles.js";
 
 function mount(doc: string, canWrite = true, extras: Extension = []) {
   const post = vi.fn<(message: WebviewToHost) => void>();
@@ -51,13 +51,6 @@ const throwingField = StateField.define<null>({
   },
 });
 
-// No hand-written `m is ImageWriteMessage` on the filter: TypeScript takes a written
-// predicate on trust and never checks it against the body, so a wrong one compiles.
-// Left off, TS infers the narrowing and the declared return type verifies it.
-function imageWrites(post: ReturnType<typeof mount>["post"]): ImageWriteMessage[] {
-  return post.mock.calls.map(([message]) => message).filter((m) => m.type === "image-write");
-}
-
 const anchorIds = (view: EditorView): string[] =>
   view.state.field(pendingImageAnchors).map((p) => p.requestId);
 
@@ -77,15 +70,6 @@ const decodeBase64 = (data: string): Uint8Array =>
 /** The unit the production SIZE thresholds are expressed in. (The per-event COUNT
  *  cap is a number of files, not a byte size — see the per-event caps describe.) */
 const MIB = 1024 * 1024;
-
-/** A file that REPORTS `bytes` while its content stays one byte. Both size caps are
- *  decided from `file.size` before the FileReader ever runs, so allocating a real
- *  10–15 MiB buffer per file would only slow the suite down. */
-function sizedImageFile(bytes: number): File {
-  const file = new File(["x"], "f", { type: "image/png" });
-  Object.defineProperty(file, "size", { value: bytes });
-  return file;
-}
 
 // A FileReader stand-in, installed per test, so the async read can be driven to a
 // chosen outcome — including outcomes a real FileReader will not produce on demand

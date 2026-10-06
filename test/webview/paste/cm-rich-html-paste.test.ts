@@ -37,14 +37,16 @@ function mountMd(doc: string, canWrite = true) {
  *  runs on a defer and preventDefaults on its own. `consume: true` models
  *  imagePaste ACCEPTING the event (preventDefault + return true); the default
  *  models it declining, leaving CM core to handle the paste. */
-function mountWithNextHandler(doc: string, opts: { consume?: boolean } = {}) {
+function mountWithNextHandler(doc: string, opts: { consume?: boolean; canWrite?: boolean } = {}) {
   const seen = { reachedNextHandler: false };
+  const canWrite = opts.canWrite ?? true;
   const view = new EditorView({
     state: EditorState.create({
       doc,
       extensions: [
         markdown(),
-        richHtmlPaste({ canWrite: () => true }),
+        EditorState.readOnly.of(!canWrite),
+        richHtmlPaste({ canWrite: () => canWrite }),
         EditorView.domEventHandlers({
           paste: (event) => {
             seen.reachedNextHandler = true;
@@ -141,21 +143,28 @@ describe("richHtmlPaste — handler", () => {
     view.destroy();
   });
 
-  it("inserts a syntax-bearing conversion even when an image file rides along", () => {
-    // The one consuming path that does NOT exempt an image file item, pinned
-    // deliberately rather than left to be discovered. A clipboard carrying BOTH
-    // real Markdown syntax and a bitmap (Word / Outlook copying a paragraph with an
-    // embedded picture) can only keep one of them here: this handler has no way to
-    // hand imagePaste the converted text, so deferring would drop the prose
-    // entirely and paste the image alone. Keeping the prose is the smaller loss,
-    // and the dominant image clipboard ("Copy image") is unaffected — its HTML is a
-    // bare <img>, which converts to null and takes the exempted path instead.
-    // Carrying the text through to imagePaste is tracked separately; change this
-    // expectation only with that design in hand.
+  it("inserts a syntax-bearing conversion AND hands the event on when an image file rides along", () => {
+    // A clipboard carrying both real Markdown syntax and a bitmap (Word / Outlook
+    // copying a paragraph with an embedded picture) keeps both: the prose is
+    // inserted here, and the event is left un-prevented so imagePaste — the
+    // sentinel's slot — still gets it. Consuming here (the old behaviour) pasted the
+    // prose and silently dropped the image. The real handler pair is pinned in
+    // cm-rich-html-image-paste.test.ts.
     const { view, seen } = mountWithNextHandler("", { consume: true });
     firePaste(view, { html: "<p><strong>bold</strong></p>", files: IMAGE_FILE });
-    expect(seen.reachedNextHandler).toBe(false);
+    expect(seen.reachedNextHandler).toBe(true);
     expect(view.state.doc.toString()).toBe("**bold**\n");
+    view.destroy();
+  });
+
+  it("swallows a rich paste carrying an image file in a read-only editor", () => {
+    // Read-only is decided before the image hand-off: nothing is inserted and the
+    // event is consumed here, so imagePaste is not reached either.
+    const { view, seen } = mountWithNextHandler("", { consume: true, canWrite: false });
+    const event = firePaste(view, { html: "<div>caption</div>", files: IMAGE_FILE });
+    expect(event.defaultPrevented).toBe(true);
+    expect(seen.reachedNextHandler).toBe(false);
+    expect(view.state.doc.toString()).toBe("");
     view.destroy();
   });
 
@@ -420,15 +429,27 @@ describe("richHtmlPaste — plain-text-like fragments defer", () => {
     view.destroy();
   });
 
-  it("defers a syntax-free fragment that arrives with an image file and no text/plain", () => {
-    // A caption <div> beside a copied image. Converting and consuming here (the
-    // behaviour before the image exemption) starved imagePaste and dropped the
-    // image; deferring keeps the image, at the cost of the caption text — the same
-    // trade the <br> case below makes, and the one the user can actually see.
+  it("inserts a syntax-free fragment that arrives with an image file and no text/plain", () => {
+    // A caption <div> beside a copied image. Deferring here (the old behaviour)
+    // could not land the caption anywhere — imagePaste consumes the event, so CM's
+    // plain paste never runs — and when the image was then refused the whole paste
+    // vanished. Now the caption is inserted and the event still reaches imagePaste.
     const { view, seen } = mountWithNextHandler("", { consume: true });
     firePaste(view, { html: "<div>caption</div>", files: IMAGE_FILE });
     expect(seen.reachedNextHandler).toBe(true);
-    expect(view.state.doc.toString()).toBe("");
+    expect(view.state.doc.toString()).toBe("caption\n");
+    view.destroy();
+  });
+
+  it("inserts a syntax-free fragment once when an image file AND text/plain ride along", () => {
+    // With an image item present the plain flavour can never land (imagePaste
+    // prevents CM's builtin paste), so the plain-fallback defer must not fire —
+    // deferring would lose the caption. The sentinel consumes like imagePaste does,
+    // so the exact doc string also pins that only ONE copy lands.
+    const { view, seen } = mountWithNextHandler("", { consume: true });
+    firePaste(view, { html: "<div>caption</div>", text: "caption", files: IMAGE_FILE });
+    expect(seen.reachedNextHandler).toBe(true);
+    expect(view.state.doc.toString()).toBe("caption\n");
     view.destroy();
   });
 
