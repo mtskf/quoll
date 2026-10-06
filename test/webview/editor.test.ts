@@ -365,10 +365,10 @@ describe("editor — ok-ack while ahead does not reseed backwards (d2)", () => {
     // when the editor is ahead — so the user MUST have typed past the acked bytes
     // for this to exercise the gate (an ack with live == acked never folds
     // regardless of canWrite). When write access is revoked simultaneously with
-    // the echo ack, cancelPendingFlush's readonly hard-drop path means the
-    // live-ahead content could never replay; folding must be suppressed so the
-    // doc reseeds to the host's authoritative readonly bytes rather than
-    // stranding unsavable content ahead of the host.
+    // the echo ack, nothing can post until write is re-granted — edit-sync only
+    // HOLDS the buffer under readonly; folding must be suppressed so the doc
+    // reseeds to the host's authoritative readonly bytes rather than leaving
+    // unsaved content on screen ahead of a host that will not take it.
     // Revert-check: strip `&& canWrite` from foldsOkAck → this test goes red
     // (foldsOkAck becomes true, the doc keeps the live-ahead "D123").
     vi.useFakeTimers();

@@ -127,12 +127,13 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   bannerHost.className = "quoll-banner-host";
   main.appendChild(bannerHost);
 
-  // ONE notice slot shared by the two edit-sync lifecycle signals — the S3b
-  // clustering tripwire (onResyncStorm) and discarded un-acked local bytes from
+  // ONE notice slot shared by the three edit-sync lifecycle signals — the S3b
+  // clustering tripwire (onResyncStorm), discarded un-acked local bytes from
   // EITHER holder, the pre-ack replay buffer or an Edit still awaiting its ack
-  // (onLocalEditDiscarded). It lives OUTSIDE bannerHost so the reducer-driven
+  // (onLocalEditDiscarded), and un-posted edits held under a readonly document
+  // (onReadonlyHold). It lives OUTSIDE bannerHost so the reducer-driven
   // renderBanners (replaceChildren) never clobbers it, and it is NOT reducer
-  // state — neither signal is a document error.
+  // state — none of the signals is a document error.
   //
   // The CONTAINER is created here, at mount, and is never removed — only
   // emptied. A live region inserted at the same moment as its text is not
@@ -159,10 +160,11 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   // Notice slot behaviour. Declared AFTER `shellDisposed` because the deferred
   // storm render reads it.
   //
-  // Two classes, TWO texts, deliberately not merged into one sentence: a storm
-  // can fire with no input and no discard at all (pinned in shell.test.ts), so a
-  // shared wording would either soften a near-certain loss to "may", or assert a
-  // loss the storm case cannot prove. (Narrowed by the one-subject drain
+  // Three classes, THREE texts, deliberately not merged into one sentence: a
+  // storm can fire with no input and no discard at all (pinned in shell.test.ts),
+  // so a shared wording would either soften a near-certain loss to "may", or
+  // assert a loss the storm case cannot prove; and a hold is not a loss at all
+  // yet. (Narrowed by the one-subject drain
   // judgement in cm/edit-sync.ts: a superseded holder whose bytes the
   // authoritative document carries VERBATIM (line endings aside) — the
   // byte-identical foreign write, a foreign write equal to the user's latest
@@ -177,20 +179,32 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   // half). Discard is NOT latched — every discard the user has not already been
   // told about is a fresh loss — but a repeat discard while the notice is still
   // on screen is AGGREGATED: the DOM and the text are left untouched, because
-  // re-rendering an identical notice reads as a new, second loss.
+  // re-rendering an identical notice reads as a new, second loss. Hold has NO
+  // display-side latch: edit-sync fires it at most once per readonly episode,
+  // which is also why a dismissed hold notice stays dismissed.
   //
-  // Consequence of the shared slot, in BOTH directions: a discard REPLACES a
-  // storm notice (showNotice's replaceChildren), and since `stormNoticeShown`
-  // latched when the storm first fired, that storm is never drawn again. That
-  // is deliberate — the discard states a certain loss and the storm would only
-  // restate it more weakly — but it means "the storm notice disappeared" is
-  // expected behaviour, not a bug to chase.
+  // Consequence of the shared slot: a stronger claim REPLACES a weaker one
+  // (showNotice's replaceChildren) and a weaker one is declined — discard over
+  // hold over storm. The discard states a certain loss; it is also what a hold
+  // turns into when foreign bytes land during the readonly window. The hold
+  // names specific edits at risk, where the storm only says some may be. Both
+  // weaker kinds are latched at their source — the storm for the session, the
+  // hold for its readonly episode — so one that was replaced or declined is not
+  // drawn again within that span: "the storm notice disappeared" (or the hold
+  // notice did) is expected behaviour, not a bug to chase.
+  //
+  // The hold text promises a RETRY, not durability: after a re-grant the replay
+  // reaches the host, but the view was reseeded at the flip and a keystroke
+  // typed from it can still overwrite those bytes (edit-sync's drain comment,
+  // ACCEPTED RESIDUAL). It is conditional, so it is not auto-cleared when write
+  // returns — it does not become false.
   //
   // No auto-fade: a real byte loss that disappears on a timer is back to being
   // no signal at all.
   const NOTICE_TEXT = {
     discard:
       "Quoll discarded pending edits while syncing this document. Review your recent changes and reapply anything missing; Undo cannot restore discarded edits.",
+    hold: "This document became read-only before Quoll could save your latest edits. They are lost if this editor closes; Quoll will retry if the document becomes writable again. Review your recent changes.",
     storm:
       "Quoll has repeatedly re-synced this document. Review your recent changes; some may not have been saved.",
   } as const;
@@ -204,7 +218,7 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   // copy of the check. A second copy at a call site isn't merely redundant:
   // it can shadow the real one and make it permanently unreachable, which is
   // exactly what happened here before this comment was corrected.
-  const NOTICE_PRIORITY: Record<NoticeKind, number> = { discard: 2, storm: 1 };
+  const NOTICE_PRIORITY: Record<NoticeKind, number> = { discard: 3, hold: 2, storm: 1 };
   let noticeKind: NoticeKind | null = null;
   let stormNoticeShown = false;
   function showNotice(kind: NoticeKind): void {
@@ -212,14 +226,16 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
       return; // aggregate: the slot already says exactly this
     }
     // Choke point for NOTICE_PRIORITY: every writer (showDiscardNotice,
-    // showStormNotice's deferred render, and any future notice producer) calls
+    // showHoldNotice, showStormNotice's deferred render, and any future notice
+    // producer) calls
     // through here, so this is the one place the ranking has to be checked for
     // it to actually govern who may claim the slot — re-deriving the check at
     // each call site would let a future call site forget it (and, as happened
     // once, shadow this one — see the NOTICE_PRIORITY comment above). Today
-    // this declines showNotice("storm") whenever a discard already holds the
-    // slot (discard outranks storm) — the exact case shell.test.ts pins as
-    // "never inserts the storm notice … when a discard coincides".
+    // this declines a storm whenever a discard or a hold already holds the
+    // slot, and a hold whenever a discard does — shell.test.ts pins the
+    // storm-under-discard case as "never inserts the storm notice … when a
+    // discard coincides".
     // showDiscardNotice itself is never declined here: discard is already the
     // max priority in the current kind set, so no noticeKind can outrank it —
     // this guard exists so the next kind added above discard is protected by
@@ -247,6 +263,9 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   function showDiscardNotice(): void {
     showNotice("discard");
   }
+  function showHoldNotice(): void {
+    showNotice("hold");
+  }
   function showStormNotice(): void {
     if (stormNoticeShown) {
       return;
@@ -265,7 +284,7 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
       }
       try {
         // showNotice's own priority choke point is what may decline this call
-        // (a stronger claim, e.g. "discard", already holds the slot) — that
+        // (a stronger claim, "discard" or "hold", already holds the slot) — that
         // check is NOT re-derived here.
         showNotice("storm");
       } catch (err) {
@@ -381,6 +400,7 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
     dispatch,
     onResyncStorm: showStormNotice,
     onLocalEditDiscarded: showDiscardNotice,
+    onReadonlyHold: showHoldNotice,
   });
 
   const unsubscribe = subscribeToHost((message) => {
