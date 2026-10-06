@@ -606,20 +606,18 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
     // Latched BEFORE the call: that is what answers a notifier that
     // synchronously re-enters `flush`.
     readonlyHoldAnnounced = true;
-    // Read before the call too — a re-entrant notifier can change `buffered`.
-    // Length only: buffered document bytes must never reach the console.
-    const trace = { heldLength: buffered.content.length, liveLength: liveDoc.length };
     // Traced BEFORE the call and regardless of its answer: one record per
     // episode, at the first flush that sees the hold. A notice can wait behind
     // a stronger one for the whole episode, and an editor closed in that window
     // would otherwise leave nothing saying edits were being held. Never written
     // after the call — a notifier that re-enters a re-grant has already re-armed
     // it for the next episode.
+    // Length only: buffered document bytes must never reach the console.
     if (!readonlyHoldTraced) {
       readonlyHoldTraced = true;
       console.warn(
         "[quoll] holding un-posted edits under readonly (replays if write is re-granted)",
-        trace
+        { heldLength: buffered.content.length, liveLength: liveDoc.length }
       );
     }
     // The catch answers a notifier that throws: `flush` is called from bare DOM
