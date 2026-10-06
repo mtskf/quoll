@@ -229,9 +229,10 @@ export type EditSync = {
    *  editInFlight while the reducer left state.editInFlight untouched —
    *  the parse-failure path is retired as of C8) and missed
    *  same-docVersion acks. The
-   *  split: onHostSnapshot records metadata only; the reducer's
-   *  `state.editInFlight` is the SINGLE source of truth, passed into
-   *  onReducerCommit, which is the only thing that clears edit-sync's
+   *  split: onHostSnapshot records metadata (and re-homes the in-flight
+   *  Edit's BYTES by demotion, above) but never touches the in-flight FLAG;
+   *  the reducer's `state.editInFlight` is the SINGLE source of truth, passed
+   *  into onReducerCommit, which is the only thing that clears edit-sync's
    *  flag + drains. So edit-sync never derives in-flight from a Document
    *  arrival. */
   onHostSnapshot: (
@@ -522,9 +523,15 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
   // until a same-generation foreign advance arrives. The named fields, not
   // argument positions, are what keep the call sites readable and typo-proof;
   // the DIRECTION is held by behaviour, not by the naming.
-  // Measured: swapping `from`/`to` at either call site reds tests across
-  // cm-edit-sync.test.ts, editor.test.ts and shell.test.ts. Those tests are what
-  // hold the direction — do not delete them in a tidy-up.
+  // Measured, one call site at a time, against cm-edit-sync.test.ts,
+  // editor.test.ts and shell.test.ts: swapping `from`/`to` in
+  // `shouldDropBufferedForEpoch` or in `viewHoldsUnackedEdit` reds tests by the
+  // dozen; each of the two calls in `onHostSnapshot` is held by exactly ONE
+  // test — the `lastPost` reset by "a foreign epoch advance: the same (content,
+  // base) typed on the new lineage is posted", the demotion only by a console
+  // trace assertion ("reports both lineage pairs and both lengths … when the
+  // in-flight Edit is lost"). Those tests are what hold the direction — do not
+  // delete them in a tidy-up.
   //
   // Every lineage decision in this module reads it, and they MUST agree — that
   // is the point of sharing one predicate rather than hand-written copies:
@@ -569,8 +576,9 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
   // definition, so the two sides cannot drift apart about what "carries these
   // bytes" means. In this module it is asked here (the loss judgement), in
   // `viewHoldsUnackedEdit` (does the view show the held bytes?), in the demotion
-  // (does the Document carry the in-flight bytes?) and before `showHeld` (is the
-  // view already there?) — never to decide WHAT bytes to post, and never by the
+  // (does the Document carry the in-flight bytes?), before `showHeld` (is the
+  // view already there?) and in `noteReadonlyHold` (does the host already carry
+  // the held bytes?) — never to decide WHAT bytes to post, and never by the
   // post dedupe, which compares exact strings: the host canonicalises a Document
   // to `document.eol` while this side posts whatever its `quollDocumentEol`
   // facet holds. The facet takes the wire
@@ -643,10 +651,13 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
   // `canWrite=false` doc genuinely non-editable, so a docChanged under readonly
   // can only be programmatic, and retaining it would let a later write-granting
   // ack replay content that was never legitimately editable. `buffered`, when
-  // non-null after the seed, is the opposite — every site that fills it requires
-  // `canWrite`, so it holds bytes typed while writable that the host has not
-  // ACKED. Not necessarily un-applied: flush's retain arm keeps bytes it just
-  // force-posted, which the host may well carry — `noteReadonlyHold` checks.
+  // non-null after the seed, is the opposite — every site that CAPTURES into it
+  // requires `canWrite`, and the one site that fills it without that check (the
+  // demotion in `onHostSnapshot`) moves an `inFlight` Edit, which was itself
+  // posted behind a `canWrite` check — so it holds bytes typed while writable
+  // that the host has not ACKED. Not necessarily un-applied: flush's retain arm
+  // keeps bytes it just force-posted, which the host may well carry —
+  // `noteReadonlyHold` checks.
   //
   // ASSUMPTION, held outside this module: a debounce timer that is live while
   // readonly was SCHEDULED under readonly. `canWrite` changes only in
