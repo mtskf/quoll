@@ -581,7 +581,8 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
     // later). Under readonly the live doc IS the host's content — a
     // `canWrite: false` Document never folds — which makes it the authoritative
     // comparison, the same reading `lostToSupersession` relies on.
-    if (sameTextIgnoringEol(buffered.content, opts.getDoc())) {
+    const liveDoc = opts.getDoc();
+    if (sameTextIgnoringEol(buffered.content, liveDoc)) {
       return;
     }
     readonlyHoldAnnounced = true; // latched BEFORE the call: no retry either way
@@ -590,7 +591,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
       "[quoll] holding un-posted edits under readonly (replays if write is re-granted)",
       {
         heldLength: buffered.content.length,
-        liveLength: opts.getDoc().length,
+        liveLength: liveDoc.length,
       }
     );
     // Latching first is also what answers a notifier that synchronously
