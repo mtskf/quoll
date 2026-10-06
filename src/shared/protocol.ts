@@ -276,9 +276,8 @@ export function isDocumentEol(value: unknown): value is DocumentEol {
  *  because the host emits a Document only while its write lock is free, and
  *  with the lock free no received Edit is still waiting (it was judged on
  *  arrival, or held under the lock and resolved by the settlement or recovery
- *  that released it).
- *  Like `docVersion` it is ordered only within one `epochGeneration`. The
- *  webview does not consume it yet. */
+ *  that released it). Like `docVersion` it is ordered only within one
+ *  `epochGeneration`. The webview does not consume it yet. */
 export type DocumentMessage = Envelope & {
   type: "document";
   content: string;
@@ -718,9 +717,9 @@ function isUnboundedContent(value: unknown): value is string {
 }
 
 /** One component (epoch OR generation) of the Document's identity pair, and
- *  `settledEditId`: a
- *  non-negative safe integer. `externalEpoch` starts at 0 and only advances;
- *  `epochGeneration` is a counter-salted timestamp (always positive). Both are
+ *  `settledEditId`: a non-negative safe integer. `externalEpoch` starts at 0
+ *  and only advances; `epochGeneration` is a counter-salted timestamp (always
+ *  positive); `settledEditId` is 0 until the first Edit arrives. All are
  *  bounded by the safe-integer ceiling for the same reason `docVersion` is —
  *  values beyond 2^53 stop incrementing/comparing reliably. */
 function isEpochComponent(value: unknown): value is number {
