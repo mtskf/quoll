@@ -8,7 +8,8 @@ and the webview (`src/webview/`).
 - **No imports.** No `vscode`, no `react`, no DOM, no Node built-ins. Either-side
   imports break the other side's build.
 - **Versioned envelope.** Every wire message carries `protocol: PROTOCOL_VERSION`
-  (currently 2 — the bump that made `DocumentMessage.eol` required). Peers
+  (currently 3 — version 2 made `DocumentMessage.eol` required, version 3 the
+  Edit id pair `EditMessage.editId` / `DocumentMessage.settledEditId`). Peers
   detect a mismatch at the boundary before parsing the payload.
 - **docVersion authority.** The host owns `docVersion` (derived from VS Code's
   native `TextDocument.version`). Host→webview `Document` messages carry
@@ -17,6 +18,9 @@ and the webview (`src/webview/`).
   `baseDocVersion === lastAppliedDocVersion` (exact equality); older or newer
   bases are rejected and the webview is resynced via the next `Document`
   snapshot.
+- **Edit id.** Every `Edit` carries a webview-minted, strictly increasing
+  `editId`; every `Document` carries `settledEditId`, the highest `editId` the
+  host has received (0 before the first). The webview does not read it yet.
 
 ## Why hand-rolled validators
 

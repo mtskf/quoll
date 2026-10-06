@@ -102,6 +102,7 @@ function buildDocument(
     eol: "\n",
     externalEpoch: 0,
     epochGeneration: 1,
+    settledEditId: 0,
     ...overrides,
   };
 }
@@ -126,7 +127,7 @@ function viewText(): string {
   return mountedView().state.doc.toString();
 }
 
-type PostedEdit = { type?: string; content: string; baseDocVersion: number };
+type PostedEdit = { type?: string; content: string; baseDocVersion: number; editId: number };
 
 // Every Edit posted to the host so far, in post order.
 function editMessages(): PostedEdit[] {
@@ -1021,6 +1022,7 @@ describe("shell — own-lineage Documents never rewind un-acked bytes", () => {
               canWrite,
               externalEpoch: e.externalEpoch,
               epochGeneration: e.epochGeneration,
+              settledEditId: e.settledEditId,
             })
           );
         } else if (e.type === "applyEdit") {
@@ -1055,6 +1057,7 @@ describe("shell — own-lineage Documents never rewind un-acked bytes", () => {
         run({
           type: "edit",
           baseDocVersion: e.baseDocVersion,
+          editId: e.editId,
           content: e.content,
           documentVersion: doc.version,
           canWrite,
@@ -1990,6 +1993,24 @@ describe("shell — teardown flush (close-without-save data loss)", () => {
       expect(sequence.filter((s) => s === "post:edit").length).toBe(0);
       window.dispatchEvent(new Event("pagehide"));
       expect(sequence.filter((s) => s === "post:edit").length).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("shell — Edit ids on the wire", () => {
+  it("each posted Edit carries the next editId (1, 2, …)", async () => {
+    vi.useFakeTimers();
+    try {
+      await mount();
+      deliver(buildDocument({ docVersion: 1, canWrite: true, themeKind: "light" }));
+      const view = mountedView();
+      view.dispatch({ changes: { from: 0, insert: "a" } });
+      window.dispatchEvent(new Event("pagehide")); // teardown flush: post #1
+      view.dispatch({ changes: { from: 0, insert: "b" } });
+      window.dispatchEvent(new Event("pagehide")); // buffered behind #1, force-posted: post #2
+      expect(editMessages().map((m) => m.editId)).toEqual([1, 2]);
     } finally {
       vi.useRealTimers();
     }

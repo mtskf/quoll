@@ -44,6 +44,7 @@ export type DocumentMessageShape = EnvelopeShape & {
   // Both required — mirrors the source (see src/shared/protocol.ts).
   externalEpoch: number;
   epochGeneration: number;
+  settledEditId: number;
 };
 
 export type ReadyMessageShape = EnvelopeShape & {
@@ -54,6 +55,7 @@ export type EditMessageShape = EnvelopeShape & {
   type: "edit";
   content: string;
   baseDocVersion: number;
+  editId: number;
 };
 
 export type OpenExternalMessageShape = EnvelopeShape & {

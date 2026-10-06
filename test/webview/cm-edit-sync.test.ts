@@ -204,6 +204,37 @@ describe("cm edit-sync", () => {
     expect(s.posted).toEqual([{ content: "x", baseDocVersion: 2 }]);
   });
 
+  it("mints a strictly increasing editId per post attempt — debounced, forced, failed, retried", () => {
+    let doc = "a";
+    const posts: Array<{ content: string; editId: number; ok: boolean }> = [];
+    let fail = false;
+    const sync = createEditSync({
+      getDoc: () => doc,
+      post: (content, _base, editId) => {
+        posts.push({ content, editId, ok: !fail });
+        return !fail;
+      },
+      scheduleFlush: (run) => run(),
+    });
+    sync.onHostSnapshot(1, true, 0, 1, "a");
+    sync.onReducerCommit(false);
+    doc = "ab";
+    sync.onLocalChange(); // #1 debounced post, now in flight
+    doc = "abc";
+    sync.onLocalChange(); // in flight → buffered, no post
+    fail = true;
+    sync.flush(); // #2 force-post of the buffer — fails, buffer kept
+    sync.onReducerCommit(false); // #3 the drain's replay — fails, buffer kept
+    fail = false;
+    sync.onReducerCommit(false); // #4 the retry — succeeds
+    expect(posts).toEqual([
+      { content: "ab", editId: 1, ok: true },
+      { content: "abc", editId: 2, ok: false },
+      { content: "abc", editId: 3, ok: false },
+      { content: "abc", editId: 4, ok: true },
+    ]);
+  });
+
   it("does not drain a pre-seed buffer", () => {
     // replayIfNeeded's !seeded guard mirrors trySend. A buffer present
     // before the first onHostSnapshot must NOT post with the placeholder

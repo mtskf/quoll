@@ -138,6 +138,7 @@ describe("preview server — the seed carries the current protocol and a wire eo
     expect(body).toContain("eol: DOC_EOL,");
     expect(body).toContain("externalEpoch: 0,");
     expect(body).toContain("epochGeneration: 1,");
+    expect(body).toContain("settledEditId: 0,");
     // Absent eol: read off the doc's bytes (LF here).
     expect(body).toContain('var DOC_EOL = "\\n";');
   });

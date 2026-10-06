@@ -43,6 +43,7 @@ describe("buildDocumentMessageFromDocument", () => {
       canWrite: true,
       externalEpoch: 2,
       epochGeneration: 99,
+      settledEditId: 0,
     });
     expect(msg.content).toBe("a\r\nb\r\nc");
     expect(msg.eol).toBe("\r\n");
@@ -57,6 +58,7 @@ describe("buildDocumentMessageFromDocument", () => {
       "epochGeneration",
       "externalEpoch",
       "protocol",
+      "settledEditId",
       "themeKind",
       "type",
     ]);
@@ -100,6 +102,7 @@ describe("documentEolOf / buildDocumentMessageFromDocument eol", () => {
     canWrite: true,
     externalEpoch: 0,
     epochGeneration: 1,
+    settledEditId: 0,
   };
 
   it("maps EndOfLine to the wire separator", () => {
@@ -125,6 +128,7 @@ describe("buildRejectedDraftFromDocument", () => {
     canWrite: false,
     externalEpoch: 3,
     epochGeneration: 7,
+    settledEditId: 0,
   };
 
   it("stamps a CRLF document's eol, including a draft with no line break", () => {

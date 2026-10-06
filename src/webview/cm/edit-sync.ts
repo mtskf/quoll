@@ -89,8 +89,9 @@ export type EditSyncOptions = {
   /** Current editor doc as a raw Markdown string. */
   getDoc: () => string;
   /** Post an Edit to the host. Returns false if postMessage threw —
-   *  the buffer is retained so the next ack can retry. */
-  post: (content: string, baseDocVersion: number) => boolean;
+   *  the buffer is retained so the next ack can retry. `editId` is this
+   *  module's own mint (see `nextEditId`). */
+  post: (content: string, baseDocVersion: number, editId: number) => boolean;
   /** Save-policy gate (serialize-error clear? — `canPostEdit` in state.ts,
    *  wired through editor.ts). Blocks posting without losing the buffer.
    *  Defaults to always-allowed. */
@@ -416,6 +417,11 @@ export type EditSync = {
 export function createEditSync(opts: EditSyncOptions): EditSync {
   const canPost = opts.canPost ?? (() => true);
   let docVersion = 0;
+  // The id the next posted Edit carries (protocol.ts `EditMessage.editId`):
+  // strictly increasing, consumed by every post ATTEMPT — a failed post keeps
+  // its id, so a retry is a new Edit to the host. Sent only; nothing here reads
+  // the host's echo (`DocumentMessage.settledEditId`) yet.
+  let nextEditId = 1;
   let seeded = false;
   let canWrite = false;
   let editInFlight = false;
@@ -791,7 +797,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
       return;
     }
     editInFlight = true;
-    const ok = opts.post(content, docVersion);
+    const ok = opts.post(content, docVersion, nextEditId++);
     if (ok) {
       buffered = null;
       inFlight = stampHeld(content);
@@ -1035,7 +1041,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
       return;
     }
     editInFlight = true;
-    const ok = opts.post(content, docVersion);
+    const ok = opts.post(content, docVersion, nextEditId++);
     if (ok) {
       buffered = null;
       inFlight = stampHeld(content);
@@ -1212,7 +1218,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
         return;
       }
       const wasInFlight = editInFlight;
-      const ok = opts.post(content, docVersion);
+      const ok = opts.post(content, docVersion, nextEditId++);
       if (ok) {
         editInFlight = true; // maintain single-flight even on an alive hide→show
         inFlight = stampHeld(content);

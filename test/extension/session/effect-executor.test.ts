@@ -34,7 +34,7 @@ function makeDeps(over: Partial<EffectExecutorDeps<FakeEdit>> = {}): EffectExecu
     showError: vi.fn(),
     canWrite: () => true,
     readLineageSince: () => null,
-    buildSeedDocument: (v, externalEpoch, epochGeneration) => ({
+    buildSeedDocument: (v, externalEpoch, epochGeneration, settledEditId) => ({
       protocol: PROTOCOL_VERSION,
       type: "document",
       eol: "\n",
@@ -44,8 +44,9 @@ function makeDeps(over: Partial<EffectExecutorDeps<FakeEdit>> = {}): EffectExecu
       themeKind: "light",
       externalEpoch,
       epochGeneration,
+      settledEditId,
     }),
-    buildRejectedDraft: (content, v, externalEpoch, epochGeneration) => ({
+    buildRejectedDraft: (content, v, externalEpoch, epochGeneration, settledEditId) => ({
       protocol: PROTOCOL_VERSION,
       type: "document",
       eol: "\n",
@@ -55,6 +56,7 @@ function makeDeps(over: Partial<EffectExecutorDeps<FakeEdit>> = {}): EffectExecu
       themeKind: "light",
       externalEpoch,
       epochGeneration,
+      settledEditId,
     }),
     buildTheme: (themeKind) => ({ protocol: PROTOCOL_VERSION, type: "theme", themeKind }),
     buildEditRejected: (error) => ({ protocol: PROTOCOL_VERSION, type: "edit-rejected", error }),
@@ -1211,9 +1213,17 @@ describe("effect-executor runEffects other cases", () => {
         }) as HostToWebview
     );
     const { runEffects } = createEffectExecutor(makeDeps({ send, buildSeedDocument }));
-    runEffects([{ type: "postDocument", docVersion: 5, externalEpoch: 2, epochGeneration: 88 }]);
+    runEffects([
+      {
+        type: "postDocument",
+        docVersion: 5,
+        externalEpoch: 2,
+        epochGeneration: 88,
+        settledEditId: 0,
+      },
+    ]);
     // The builder receives the core-managed identity pair from the effect.
-    expect(buildSeedDocument).toHaveBeenCalledWith(5, 2, 88);
+    expect(buildSeedDocument).toHaveBeenCalledWith(5, 2, 88, 0);
     expect(send).toHaveBeenCalled();
   });
 
@@ -1236,6 +1246,7 @@ describe("effect-executor runEffects other cases", () => {
         docVersion: 2,
         externalEpoch: 0,
         epochGeneration: 1,
+        settledEditId: 0,
         error: rejErr,
         id: 9,
       },
@@ -1286,7 +1297,13 @@ describe("effect-executor runEffects other cases", () => {
       expect(() =>
         runEffects([
           { type: "showError", message: "Failed to save: boom" },
-          { type: "postDocument", docVersion: 3, externalEpoch: 0, epochGeneration: 1 },
+          {
+            type: "postDocument",
+            docVersion: 3,
+            externalEpoch: 0,
+            epochGeneration: 1,
+            settledEditId: 0,
+          },
         ])
       ).not.toThrow();
 
@@ -1333,7 +1350,13 @@ describe("effect-executor runEffects other cases", () => {
       expect(() =>
         runEffects([
           { type: "showError", message: "Failed to save: boom" },
-          { type: "postDocument", docVersion: 3, externalEpoch: 0, epochGeneration: 1 },
+          {
+            type: "postDocument",
+            docVersion: 3,
+            externalEpoch: 0,
+            epochGeneration: 1,
+            settledEditId: 0,
+          },
         ])
       ).not.toThrow();
 
@@ -1533,11 +1556,28 @@ describe("effect-executor runEffects other cases", () => {
         themeKind,
         externalEpoch: 0,
         epochGeneration: 1,
+        settledEditId: 0,
       }) as HostToWebview;
     const { runEffects } = createEffectExecutor(makeDeps({ send, buildSeedDocument }));
-    runEffects([{ type: "postDocument", docVersion: 1, externalEpoch: 0, epochGeneration: 1 }]);
+    runEffects([
+      {
+        type: "postDocument",
+        docVersion: 1,
+        externalEpoch: 0,
+        epochGeneration: 1,
+        settledEditId: 0,
+      },
+    ]);
     themeKind = "dark"; // theme changes AFTER the factory was built
-    runEffects([{ type: "postDocument", docVersion: 2, externalEpoch: 0, epochGeneration: 1 }]);
+    runEffects([
+      {
+        type: "postDocument",
+        docVersion: 2,
+        externalEpoch: 0,
+        epochGeneration: 1,
+        settledEditId: 0,
+      },
+    ]);
     expect(seen).toEqual(["light", "dark"]);
   });
 });
@@ -1556,7 +1596,15 @@ describe("effect-executor showResyncFailure (withheld settlement ack)", () => {
       expect(showError).toHaveBeenCalledTimes(1);
       // The OTHER trigger is latched by the SAME flag: a failing reseed build in
       // the same incident must not toast a second time.
-      runEffects([{ type: "postDocument", docVersion: 1, externalEpoch: 0, epochGeneration: 7 }]);
+      runEffects([
+        {
+          type: "postDocument",
+          docVersion: 1,
+          externalEpoch: 0,
+          epochGeneration: 7,
+          settledEditId: 0,
+        },
+      ]);
       expect(showError).toHaveBeenCalledTimes(1);
     } finally {
       errorSpy.mockRestore();
@@ -1602,7 +1650,15 @@ describe("effect-executor showResyncFailure (withheld settlement ack)", () => {
         makeDeps({ showError, buildSeedDocument, send: vi.fn(async () => true) })
       );
       expect(() =>
-        runEffects([{ type: "postDocument", docVersion: 1, externalEpoch: 0, epochGeneration: 1 }])
+        runEffects([
+          {
+            type: "postDocument",
+            docVersion: 1,
+            externalEpoch: 0,
+            epochGeneration: 1,
+            settledEditId: 0,
+          },
+        ])
       ).not.toThrow();
       // THE assertion: the user-visible signal was attempted despite the console
       // failing. ⚠️ This observes the CONTAINMENT, not the statement order — with

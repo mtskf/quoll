@@ -88,6 +88,7 @@ describe("in-editor find & replace", () => {
       type: "edit",
       content: "bar bar",
       baseDocVersion: 1,
+      editId: 1,
     });
   });
 

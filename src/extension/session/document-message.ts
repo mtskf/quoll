@@ -46,6 +46,8 @@ export type BuildDocumentMessageInput = {
   // `DocumentMessage` doc block in protocol.ts).
   externalEpoch: number;
   epochGeneration: number;
+  // Highest Edit id the host has received — see `DocumentMessage`.
+  settledEditId: number;
 };
 
 /** Construct the final-shape Document message. No `reason` field — the
@@ -65,6 +67,7 @@ export function buildDocumentMessage(input: BuildDocumentMessageInput): Document
     eol: input.eol,
     externalEpoch: input.externalEpoch,
     epochGeneration: input.epochGeneration,
+    settledEditId: input.settledEditId,
   };
 }
 

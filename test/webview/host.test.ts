@@ -130,6 +130,7 @@ describe("subscribeToHost — boundary validation + diagnostics", () => {
     eol: "\n",
     externalEpoch: 0,
     epochGeneration: 1,
+    settledEditId: 0,
   });
 
   let subscribeToHost: HostModule["subscribeToHost"];

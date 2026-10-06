@@ -486,24 +486,26 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       showError,
       canWrite: canWriteNow,
       readLineageSince: () => liveLineageSince(() => canonicalDocumentText(document)),
-      buildSeedDocument: (docVersion, externalEpoch, epochGeneration) => {
+      buildSeedDocument: (docVersion, externalEpoch, epochGeneration, settledEditId) => {
         const message = buildDocumentMessageFromDocument(document, {
           docVersion,
           themeKind: themeKindFromColorTheme(window.activeColorTheme.kind),
           canWrite: canWriteNow(),
           externalEpoch,
           epochGeneration,
+          settledEditId,
         });
         lineage.noteHandedText(() => message.content, docVersion, document.version);
         return message;
       },
-      buildRejectedDraft: (content, docVersion, externalEpoch, epochGeneration) => {
+      buildRejectedDraft: (content, docVersion, externalEpoch, epochGeneration, settledEditId) => {
         const message = buildRejectedDraftFromDocument(document, content, {
           docVersion,
           themeKind: themeKindFromColorTheme(window.activeColorTheme.kind),
           canWrite: canWriteNow(),
           externalEpoch,
           epochGeneration,
+          settledEditId,
         });
         // The HOST text under this label, not the draft: the draft is the
         // webview's own bytes, and its next Edit is built on this label.
@@ -890,6 +892,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
             dispatch({
               type: "edit",
               baseDocVersion: raw.baseDocVersion,
+              editId: raw.editId,
               content: raw.content,
               documentVersion: document.version,
               canWrite: canWriteNow(),
