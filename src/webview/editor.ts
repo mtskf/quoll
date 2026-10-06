@@ -139,6 +139,12 @@ export type EditorOptions = {
    *  The full rule lives on `EditSyncOptions.onLocalEditDiscarded` (cm/edit-sync.ts)
    *  — do not restate it here; this is a pass-through. */
   onLocalEditDiscarded?: () => void;
+  /** Fired when edit-sync is holding un-posted edits under a readonly document
+   *  (shown at most once per readonly episode). The shell wires it to a
+   *  user-visible notice and returns whether that notice was shown — `false`
+   *  asks for a retry. Pass-through — the rule lives on
+   *  `EditSyncOptions.onReadonlyHold` (cm/edit-sync.ts). */
+  onReadonlyHold?: () => boolean;
 };
 
 /** The part of a host `DocumentMessage` the editor consumes. An object, not
@@ -344,6 +350,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     post: (content, baseDocVersion) => postEditMessage(opts.dispatch, content, baseDocVersion),
     onResyncStorm: opts.onResyncStorm,
     onLocalEditDiscarded: opts.onLocalEditDiscarded,
+    onReadonlyHold: opts.onReadonlyHold,
   });
 
   const imagePaste = createImagePasteDrop({
@@ -843,7 +850,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         richHtmlPaste({ canWrite: () => opts.getState().canWrite }),
         // Paste/drop image ingestion: capture image files, post image-write, and
         // insert the relative link at a position-mapped anchor on the host's
-        // reply. canWrite mirrors edit-sync's readonly hard-drop; the host is the
+        // reply. canWrite mirrors edit-sync's readonly drop; the host is the
         // authoritative gate (sniff + size cap + read-only).
         imagePaste.extension,
         EditorView.lineWrapping,
@@ -948,8 +955,10 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       // the revert round-trip would fork off the stale base and be lost). The
       // buffered edit replays forward on the reducer commit below, so fold this
       // ack into version bookkeeping only — skip the visible content replace.
-      // Gated on canWrite so the readonly hard-drop path (cancelPendingFlush
-      // nulled the buffer) is untouched. The live buffer is always a descendant
+      // Gated on canWrite: a readonly Document always reseeds to the host's
+      // bytes. A buffer held from before the flip survives in edit-sync and
+      // replays on a re-grant (the view it leaves behind is the residual
+      // edit-sync's drain comment tracks). The live buffer is always a descendant
       // of what we posted, so an echo match means the acked content is a strict
       // ancestor of the buffer — never a genuine external divergence (whose
       // content never matches our posted bytes), which still reseeds.

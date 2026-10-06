@@ -729,6 +729,224 @@ describe("shell — S3b epoch-bounded acceptance ordering", () => {
   });
 });
 
+// Edits typed while the document was writable, and never applied by the host,
+// survive a readonly flip in edit-sync's replay buffer — but they are off screen
+// (a `canWrite: false` Document reseeds) and gone if the editor closes. The
+// teardown-precursor flush is where the user is told, once per readonly episode.
+describe("shell — readonly hold notice", () => {
+  const holdNotices = (): NodeListOf<Element> | undefined =>
+    container?.querySelectorAll(".quoll-resync-notice.quoll-notice-hold");
+  const postedEdits = (): Array<{ type?: string; content?: string }> =>
+    postMessage.mock.calls
+      .map(([m]) => m as { type?: string; content?: string })
+      .filter((m) => m.type === "edit");
+  // Writable seed "s"; post "sx" (in flight); buffer "sxy"; then the host goes
+  // readonly on the SAME lineage with content "s" — the view is reseeded to it.
+  const holdThenReadonly = (): void => {
+    deliver(buildDocument({ docVersion: 1, content: "s" }));
+    bufferThenReadonly({ docVersion: 2, content: "s" });
+    expect(mountedView().state.sliceDoc()).toBe("s");
+  };
+  // The hold half on its own, for a document that is already seeded: post one
+  // keystroke (in flight), buffer a second, then deliver `readonlyDoc` with
+  // write withdrawn. The caller keeps it on the lineage the buffer was typed on.
+  const bufferThenReadonly = (
+    readonlyDoc: Partial<Extract<HostToWebview, { type: "document" }>>
+  ): void => {
+    const view = mountedView();
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "x" } });
+    vi.advanceTimersByTime(300); // posts — in flight
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "y" } });
+    vi.advanceTimersByTime(300); // buffers
+    deliver(buildDocument({ ...readonlyDoc, canWrite: false }));
+  };
+  const dismissNotice = (): void => {
+    (container?.querySelector(".quoll-resync-notice-dismiss") as HTMLButtonElement).click();
+  };
+
+  it("shows ONE hold notice on blur, latched for the episode, and replays on re-grant", async () => {
+    await mount();
+    vi.useFakeTimers();
+    try {
+      holdThenReadonly();
+      expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(0); // the flip is silent
+      window.dispatchEvent(new Event("blur"));
+      expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(1);
+      const first = holdNotices()?.[0] as HTMLElement;
+      expect(first).toBeDefined();
+      expect(first.textContent).toContain("became read-only");
+      // The wording promises a RETRY, never durability.
+      expect(first.textContent).toContain("will retry");
+      window.dispatchEvent(new Event("blur"));
+      expect(holdNotices()?.length).toBe(1);
+      expect(holdNotices()?.[0]).toBe(first); // not re-created
+      // Dismissed stays dismissed: a hold is a state, and blur fires constantly.
+      (first.querySelector(".quoll-resync-notice-dismiss") as HTMLButtonElement).click();
+      window.dispatchEvent(new Event("blur"));
+      expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(0);
+      // Nothing was posted under readonly; the re-grant replays the held bytes.
+      expect(postedEdits().map((m) => m.content)).toEqual(["sx"]);
+      deliver(buildDocument({ docVersion: 2, content: "s", canWrite: true }));
+      expect(postedEdits().map((m) => m.content)).toEqual(["sx", "sxy"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a second episode's hold aggregated into the notice still on screen spends the latch", async () => {
+    await mount();
+    vi.useFakeTimers();
+    try {
+      holdThenReadonly();
+      window.dispatchEvent(new Event("blur"));
+      const first = holdNotices()?.[0] as HTMLElement;
+      expect(first).toBeDefined();
+      // Episode 1 ends: re-grant replays, the host acks. The notice is NOT dismissed.
+      deliver(buildDocument({ docVersion: 2, content: "s", canWrite: true }));
+      expect(postedEdits().map((m) => m.content)).toEqual(["sx", "sxy"]);
+      deliver(buildDocument({ docVersion: 3, content: "sxy", canWrite: true }));
+      expect(holdNotices()?.[0]).toBe(first);
+      // Episode 2: a fresh hold, announced into the slot that already says it.
+      // (Typed bytes must differ from the readonly content, or the hold is
+      // silent by the "host already carries these bytes" rule.)
+      const view = mountedView();
+      view.dispatch({ changes: { from: view.state.doc.length, insert: "p" } });
+      vi.advanceTimersByTime(300); // posts — in flight
+      view.dispatch({ changes: { from: view.state.doc.length, insert: "q" } });
+      vi.advanceTimersByTime(300); // buffers
+      deliver(buildDocument({ docVersion: 4, content: "sxy", canWrite: false }));
+      window.dispatchEvent(new Event("blur"));
+      expect(holdNotices()?.length).toBe(1);
+      expect(holdNotices()?.[0]).toBe(first); // aggregated, not re-created
+      // Aggregated counts as shown: dismissed stays dismissed.
+      dismissNotice();
+      window.dispatchEvent(new Event("blur"));
+      expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a discard REPLACES a hold notice already on screen", async () => {
+    await mount();
+    vi.useFakeTimers();
+    try {
+      holdThenReadonly();
+      window.dispatchEvent(new Event("blur"));
+      expect(holdNotices()?.length).toBe(1);
+      // Foreign bytes land while still readonly: the held buffer's lineage lost.
+      deliver(
+        buildDocument({ docVersion: 3, content: "external", canWrite: false, externalEpoch: 1 })
+      );
+      const shown = container?.querySelectorAll(".quoll-resync-notice");
+      expect(shown?.length).toBe(1);
+      expect(shown?.[0].classList.contains("quoll-notice-discard")).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a hold declined behind a discard is shown once the discard is dismissed", async () => {
+    // The discard on screen is about an EARLIER loss; it says nothing about the
+    // edits now held. Declining the hold must not use up its one announcement.
+    await mount();
+    vi.useFakeTimers();
+    try {
+      deliver(buildDocument({ docVersion: 1, content: "s" }));
+      const view = mountedView();
+      view.dispatch({ changes: { from: view.state.doc.length, insert: "x" } });
+      vi.advanceTimersByTime(300); // posts — in flight
+      view.dispatch({ changes: { from: view.state.doc.length, insert: "y" } });
+      vi.advanceTimersByTime(300); // buffers
+      deliver(buildDocument({ docVersion: 2, content: "external", externalEpoch: 1 }));
+      const discard = container?.querySelector(".quoll-resync-notice") as HTMLElement;
+      expect(discard.classList.contains("quoll-notice-discard")).toBe(true);
+      // New edits on the new lineage, then readonly — a hold, behind that notice.
+      bufferThenReadonly({ docVersion: 3, content: "external", externalEpoch: 1 });
+      window.dispatchEvent(new Event("blur"));
+      window.dispatchEvent(new Event("blur"));
+      expect(holdNotices()?.length).toBe(0);
+      expect(container?.querySelector(".quoll-resync-notice")).toBe(discard); // untouched
+      dismissNotice();
+      expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(0); // no push on dismiss
+      window.dispatchEvent(new Event("blur"));
+      expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(1);
+      expect(holdNotices()?.length).toBe(1);
+      // Shown now, so the episode's latch is spent: dismissed stays dismissed.
+      dismissNotice();
+      window.dispatchEvent(new Event("blur"));
+      expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a hold REPLACES a storm notice already on screen", async () => {
+    await mount();
+    vi.useFakeTimers();
+    try {
+      deliver(buildDocument({ docVersion: 1, content: "s", epochGeneration: 1 }));
+      deliver(buildDocument({ docVersion: 1, content: "s", epochGeneration: 2 }));
+      deliver(buildDocument({ docVersion: 1, content: "s", epochGeneration: 3 }));
+      deliver(buildDocument({ docVersion: 1, content: "s", epochGeneration: 4 }));
+      await Promise.resolve(); // the storm renders one microtask late
+      const storm = container?.querySelector(".quoll-resync-notice") as HTMLElement;
+      expect(storm.classList.contains("quoll-notice-storm")).toBe(true);
+      bufferThenReadonly({ docVersion: 2, content: "s", epochGeneration: 4 });
+      window.dispatchEvent(new Event("blur"));
+      // The hold names specific edits at risk; the storm only says some may be.
+      expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(1);
+      expect(holdNotices()?.length).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a storm does NOT replace a hold notice already on screen", async () => {
+    await mount();
+    vi.useFakeTimers();
+    try {
+      deliver(buildDocument({ docVersion: 1, content: "s", epochGeneration: 1 }));
+      deliver(buildDocument({ docVersion: 1, content: "s", epochGeneration: 2 }));
+      deliver(buildDocument({ docVersion: 1, content: "s", epochGeneration: 3 }));
+      bufferThenReadonly({ docVersion: 2, content: "s", epochGeneration: 3 });
+      window.dispatchEvent(new Event("blur"));
+      const hold = holdNotices()?.[0] as HTMLElement;
+      expect(hold).toBeDefined();
+      // Settle the hold first — re-grant replays it, the host acks — so the
+      // transition below supersedes nothing: with bytes still held it would
+      // raise a DISCARD, and the slot would change for a different reason.
+      deliver(buildDocument({ docVersion: 2, content: "s", epochGeneration: 3 }));
+      expect(postedEdits().map((m) => m.content)).toEqual(["sx", "sxy"]);
+      deliver(buildDocument({ docVersion: 3, content: "sxy", epochGeneration: 3 }));
+      // The transition that crosses the storm threshold.
+      deliver(buildDocument({ docVersion: 3, content: "sxy", epochGeneration: 4 }));
+      await Promise.resolve(); // the storm's deferred render runs — and is declined
+      expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(1);
+      expect(container?.querySelector(".quoll-resync-notice")).toBe(hold);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows NO notice for a programmatic change under a readonly document", async () => {
+    await mount();
+    vi.useFakeTimers();
+    try {
+      deliver(buildDocument({ docVersion: 1, content: "s", canWrite: false }));
+      const view = mountedView();
+      view.dispatch({ changes: { from: view.state.doc.length, insert: "x" } });
+      window.dispatchEvent(new Event("blur"));
+      vi.advanceTimersByTime(300);
+      window.dispatchEvent(new Event("blur"));
+      expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(0);
+      expect(postedEdits()).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("shell — theme toggles <html> classList", () => {
   it("dark theme → html has dark-theme class", async () => {
     await mount();

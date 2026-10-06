@@ -126,6 +126,36 @@ export type EditSyncOptions = {
    *  see the call site for why the two halves are independent.
    *  Defaults to a no-op. */
   onLocalEditDiscarded?: () => void;
+  /** Fired from `flush` — and ONLY from `flush` — when the document is readonly
+   *  and this module is HOLDING un-posted edits from before the flip that the
+   *  host's document does not carry. What it claims, and no more: the edits are
+   *  held, they replay if write is re-granted, and they are gone if the editor
+   *  closes first (the buffer lives in this iframe). It does NOT claim they are
+   *  lost, and nothing here makes them durable.
+   *  SHOWN at most once per readonly episode — latched here, unlike
+   *  `onLocalEditDiscarded`: a discard is a fresh event each time, whereas a hold
+   *  is a STATE and `flush` runs on every blur, so an unlatched hold would
+   *  re-raise a dismissed notice on each focus change. The latch re-arms when a
+   *  snapshot grants write.
+   *  Returns whether the notice reached the user. `false` — the caller declined
+   *  to show it (the shell's slot holds a stronger claim) — does NOT spend the
+   *  latch, so the next `flush` asks again for as long as the hold is still
+   *  true; otherwise an episode could end with the hold never shown. Only an
+   *  explicit `false` retries: a throw counts as shown, because a notifier that
+   *  failed part-way may have drawn the notice, and retrying a persistently
+   *  throwing one would log on every blur.
+   *  The console trace of the hold does not follow this answer: it is written
+   *  once per readonly episode, before the call, so a hold whose notice is
+   *  declined until the editor closes still leaves a record.
+   *  Why `flush` and not the drain at flip time: a transient readonly that
+   *  re-grants at once would flash a notice for edits that are about to replay.
+   *  `flush` runs when the user leaves the editor, which is when held edits
+   *  become at risk.
+   *  A change made WHILE readonly never fires this — it is dropped with a
+   *  console trace only (see `warnReadonlyDrop`).
+   *  Wrapped in a local try/catch: a failed notice must not escape into the
+   *  teardown listeners that call `flush`. Unset counts as shown. */
+  onReadonlyHold?: () => boolean;
 };
 
 export type EditSync = {
@@ -196,8 +226,9 @@ export type EditSync = {
    *  only suppress the listener, not an already-scheduled flush.)
    *  Captures the latest doc into the buffer BEFORE clearing the timer,
    *  so an in-debounce-window keystroke is not lost — UNLESS the doc is
-   *  currently readonly, in which case the captured keystroke is a HARD
-   *  DROP (see `warnReadonlyDrop`), mirroring `trySend`. */
+   *  currently readonly, in which case that in-window change is dropped
+   *  uncaptured (see `warnReadonlyDrop`), mirroring `trySend`. A buffer
+   *  already held from before the readonly flip is left untouched. */
   cancelPendingFlush: () => void;
   /** Drop any held pre-ack buffer. Distinct from `cancelPendingFlush`
    *  (which captures the latest doc into the buffer before clearing the
@@ -238,10 +269,17 @@ export type EditSync = {
    *      post-settlement replay, so that would silently clobber the external
    *      change.
    *
-   *  Still a HARD DROP under readonly, a buffer-keeping hold pre-seed / while
-   *  the serialize-error gate is closed, and a buffer-keeping hold when the post
-   *  itself fails. NOT a mid-session call — for a reseed always use
-   *  `cancelPendingFlush` (capture-preserving), never `flush`. */
+   *  Posts NOTHING under readonly: a change still inside the debounce window is
+   *  dropped (see `warnReadonlyDrop`), while a buffer held from before the flip
+   *  is KEPT for a re-grant to replay and announced through `onReadonlyHold`
+   *  until that notice has been shown once. Before the first snapshot `canWrite`
+   *  is still false, so the same arm runs: an in-window change is dropped with
+   *  the same console trace, but NO notice fires, and a pre-seed capture
+   *  (cancelPendingFlush) is left for the seed's drain to judge.
+   *  Two other cases keep the buffer WITHOUT posting and without any notice: the
+   *  serialize-error gate is closed, or the post itself fails.
+   *  NOT a mid-session call — for a reseed always use `cancelPendingFlush`
+   *  (capture-preserving), never `flush`. */
   flush: () => void;
   /** Mid-session flush barrier (context-handoff): clear the debounce timer and,
    *  if a keystroke was typed inside the window, post it NOW — but RESPECT
@@ -502,26 +540,36 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
     }
   };
 
-  // Trace for the three readonly HARD DROP sites (trySend / cancelPendingFlush
-  // / flush). Those are the only paths in this module that DISCARD content
-  // rather than declining to replay it, so each one leaves a record — symmetric
-  // with the stale-buffer drop in replayIfNeeded. Each site is reached only
-  // when something is genuinely pending (trySend and cancelPendingFlush run off
-  // a real doc change; flush returns early when `content === null`), so the
-  // warn is unconditional: gating it on `buffered !== null` would stay silent
-  // for the COMMON case — a keystroke still inside the debounce window, with
-  // the buffer already nulled by the previous post — which is exactly the drop
-  // worth seeing.
+  // Trace for the three readonly drop sites (trySend / cancelPendingFlush /
+  // flush). Each DISCARDS the live change — the docChanged that reached it —
+  // rather than declining to replay it, so each leaves a record, symmetric with
+  // the stale-buffer drop in replayIfNeeded. None of them touches `buffered`.
   //
-  // Reports BOTH `liveLength` and `bufferedLength` — never picks one via `??`.
-  // On the common path (no reseed in between) the live doc already contains
-  // everything the buffer held, so the buffer alone under-reports the loss.
-  // But a buffer that survived a host reseed (replayIfNeeded's `!canWrite`
-  // guard returns without nulling it) holds bytes the host has never seen,
-  // while the live doc at that point is just what the host already has —
-  // so the live doc alone under-reports too. Neither value is authoritative
-  // in every reachable state, so both are read straight from closure state
-  // and reported side by side; callers get no `??` to pick the wrong one.
+  // Why the live change may go and the buffer may not: the Compartment makes a
+  // `canWrite=false` doc genuinely non-editable, so a docChanged under readonly
+  // can only be programmatic, and retaining it would let a later write-granting
+  // ack replay content that was never legitimately editable. `buffered`, when
+  // non-null after the seed, is the opposite — every site that fills it requires
+  // `canWrite`, so it holds bytes typed while writable that the host has not
+  // ACKED. Not necessarily un-applied: flush's retain arm keeps bytes it just
+  // force-posted, which the host may well carry — `noteReadonlyHold` checks.
+  //
+  // ASSUMPTION, held outside this module: a debounce timer that is live while
+  // readonly was SCHEDULED under readonly. `canWrite` changes only in
+  // onHostSnapshot, and its one production caller (editor.ts applyDocument)
+  // calls cancelPendingFlush first, which always clears the timer — so a
+  // writable-era keystroke is captured into the buffer before the flip and
+  // never rides a timer across it. Reordering applyDocument would break that.
+  //
+  // trySend and cancelPendingFlush run off a real doc change and flush warns
+  // only when it found a live timer, so the warn is unconditional at each site:
+  // gating it on `buffered !== null` would stay silent for the common case, a
+  // change still inside the debounce window with nothing buffered.
+  //
+  // Reports BOTH lengths — never one picked via `??`. `liveLength` is the doc
+  // carrying the dropped change; `bufferedLength` is the RETAINED buffer (null
+  // when none is held), which says whether writable-era bytes are still waiting
+  // behind this drop. Neither stands in for the other.
   // Length only: buffered document bytes must never reach the console.
   const warnReadonlyDrop = (site: "trySend" | "cancelPendingFlush" | "flush"): void => {
     console.warn("[quoll] dropping local change under readonly (hard drop)", {
@@ -529,6 +577,64 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
       liveLength: opts.getDoc().length,
       bufferedLength: buffered?.content.length ?? null,
     });
+  };
+
+  // The user-visible half of the readonly hold, called from `flush` only (the
+  // rationale for that, and for the latch, is on `EditSyncOptions.onReadonlyHold`).
+  // Under readonly no capture site runs, so the buffer cannot be replaced: one
+  // shown notice per readonly episode is one per held buffer.
+  // Two latches, both per episode: the notice's can be handed back by a
+  // declining notifier, the console trace's cannot — the trace records that a
+  // hold EXISTS, whether or not the user has been told yet.
+  let readonlyHoldAnnounced = false;
+  let readonlyHoldTraced = false;
+  const noteReadonlyHold = (): void => {
+    // `seeded`: `canWrite` starts false, but "readonly" means nothing until the
+    // host has said so — a pre-seed capture is not a held writable-era edit.
+    if (!seeded || buffered === null || readonlyHoldAnnounced) {
+      return;
+    }
+    // The host already carries these bytes → nothing is at risk, so say nothing
+    // and do NOT spend the latch (the view can still be rewound past them
+    // later). Under readonly the live doc IS the host's content — a
+    // `canWrite: false` Document never folds — which makes it the authoritative
+    // comparison, the same reading `lostToSupersession` relies on.
+    const liveDoc = opts.getDoc();
+    if (sameTextIgnoringEol(buffered.content, liveDoc)) {
+      return;
+    }
+    // Latched BEFORE the call: that is what answers a notifier that
+    // synchronously re-enters `flush`.
+    readonlyHoldAnnounced = true;
+    // Traced BEFORE the call and regardless of its answer: one record per
+    // episode, at the first flush that sees the hold. A notice can wait behind
+    // a stronger one for the whole episode, and an editor closed in that window
+    // would otherwise leave nothing saying edits were being held. Never written
+    // after the call — a notifier that re-enters a re-grant has already re-armed
+    // it for the next episode.
+    // Length only: buffered document bytes must never reach the console.
+    if (!readonlyHoldTraced) {
+      readonlyHoldTraced = true;
+      console.warn(
+        "[quoll] holding un-posted edits under readonly (replays if write is re-granted)",
+        { heldLength: buffered.content.length, liveLength: liveDoc.length }
+      );
+    }
+    // The catch answers a notifier that throws: `flush` is called from bare DOM
+    // listeners (shell.ts), so an escaping throw would surface as an
+    // unattributed uncaught error. A throw leaves `declined` false — the latch
+    // stays spent (see `EditSyncOptions.onReadonlyHold`).
+    let declined = false;
+    try {
+      declined = opts.onReadonlyHold?.() === false;
+    } catch (err) {
+      console.error("[quoll] onReadonlyHold threw", err);
+    }
+    if (declined) {
+      // Not shown: give the next flush another try. This only ever writes
+      // `false`, so it cannot undo a re-grant the notifier re-entered into.
+      readonlyHoldAnnounced = false;
+    }
   };
 
   const clearTimer = (): void => {
@@ -551,17 +657,13 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
   };
 
   const trySend = (): void => {
-    // Readonly is a HARD DROP, not a buffered hold. The Compartment
-    // makes a `canWrite=false` doc genuinely non-editable, so a
-    // docChanged under readonly can only come from a programmatic
-    // command this layer is the last defense against; retaining it
-    // would let a later write-granting ack (onReducerCommit) replay
-    // content that was never legitimately editable. cancelPendingFlush
-    // below mirrors this contract (the `seeded && !canWrite` branch
-    // nulls the buffer for the same reason).
+    // Readonly DROPS this change rather than buffering it: it can only be
+    // programmatic, and this layer is the last defense against replaying it
+    // once write returns (see `warnReadonlyDrop`). `buffered` is deliberately
+    // not touched — whatever it holds was typed while writable.
+    // cancelPendingFlush's `seeded && !canWrite` branch mirrors this.
     if (!canWrite) {
       warnReadonlyDrop("trySend");
-      buffered = null;
       return;
     }
     if (!seeded || !canPost()) {
@@ -785,6 +887,11 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
         });
         noteIdentityTransition();
       }
+      if (nextCanWrite) {
+        // Write is back: the readonly episode is over.
+        readonlyHoldAnnounced = false;
+        readonlyHoldTraced = false;
+      }
       docVersion = nextVersion;
       canWrite = nextCanWrite;
       seeded = true;
@@ -824,7 +931,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
     // 300 ms window has NOT yet reached `buffered`; if a host Document
     // arrives and applyDocument calls cancelPendingFlush() then reseeds,
     // that keystroke would be lost under the host snapshot. Snapshotting
-    // getDoc() here (subject to the same readonly/gate rules as trySend)
+    // getDoc() here (subject to the same readonly rule as trySend)
     // preserves it for replay on the next onReducerCommit (the
     // docVersion change drains it). We do NOT post here (that is the
     // reseed path — posting would echo); we only stash.
@@ -840,8 +947,9 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
       // case.
       if (timer !== null) {
         if (seeded && !canWrite) {
+          // The in-window change is dropped by NOT capturing it; a buffer held
+          // from before the readonly flip stays for a re-grant to replay.
           warnReadonlyDrop("cancelPendingFlush");
-          buffered = null; // readonly hard drop
         } else {
           buffered = stampHeld(opts.getDoc());
         }
@@ -857,22 +965,29 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
       // flight (bypassing trySend's single-flight buffer arm). Post-success
       // buffer handling is CONDITIONAL on prior in-flight state — see the flush
       // JSDoc for the full rationale (settlement→ack stale recovery vs the
-      // external-edit clobber the accept path would cause). Same gates as
-      // trySend: readonly is a HARD DROP; pre-seed / serialize-error gate keeps
-      // the buffer; a failed post keeps the buffer for the next ack.
+      // external-edit clobber the accept path would cause). The serialize-error
+      // gate keeps the buffer; a failed post keeps the buffer for the next ack.
       const hadTimer = timer !== null;
       clearTimer();
+      // Readonly is decided BEFORE `content` is chosen, because the two things
+      // that could be pending get opposite treatment: the in-window change is
+      // dropped (mirrors trySend), a held buffer is kept and announced. Reading
+      // `content` first would hand the buffer to the drop.
+      if (!canWrite) {
+        if (hadTimer) {
+          warnReadonlyDrop("flush");
+        }
+        noteReadonlyHold();
+        return;
+      }
       const content = hadTimer ? opts.getDoc() : (buffered?.content ?? null);
       if (content === null) {
         return; // nothing pending — genuine no-op
       }
-      if (!canWrite) {
-        warnReadonlyDrop("flush");
-        buffered = null; // readonly hard drop (mirrors trySend)
-        return;
-      }
       if (!seeded || !canPost()) {
-        buffered = stampHeld(content); // pre-seed / gate closed: keep for a later drain
+        // Gate closed: keep for a later drain. (`!seeded` is defensive — pre-seed
+        // never passes the `!canWrite` return above.)
+        buffered = stampHeld(content);
         return;
       }
       const wasInFlight = editInFlight;

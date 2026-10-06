@@ -9,6 +9,7 @@ function setup(opts?: {
   now?: () => number;
   onResyncStorm?: () => void;
   onLocalEditDiscarded?: () => void;
+  onReadonlyHold?: () => boolean;
 }) {
   let doc = "hello";
   const posted: Posted[] = [];
@@ -31,6 +32,7 @@ function setup(opts?: {
     now: opts?.now,
     onResyncStorm: opts?.onResyncStorm,
     onLocalEditDiscarded: opts?.onLocalEditDiscarded,
+    onReadonlyHold: opts?.onReadonlyHold,
   });
   return {
     sync,
@@ -852,7 +854,7 @@ describe("cm edit-sync — flush (teardown)", () => {
     }
   });
 
-  it("flush under readonly hard-drops the buffer (no post)", () => {
+  it("flush under readonly drops the in-window change (no post)", () => {
     vi.useFakeTimers();
     try {
       let doc = "seed";
@@ -1589,12 +1591,12 @@ describe("cm edit-sync — readonly hard drops are traced", () => {
   });
 
   it("reports liveLength and bufferedLength as DISTINCT values when a buffer survives a readonly reseed", () => {
-    // Reachability (per the module's warnReadonlyDrop comment): a buffer
-    // stashed under single-flight survives a readonly Document because
-    // replayIfNeeded's `!canWrite` guard returns WITHOUT nulling it — so by
-    // the time a further readonly keystroke hits trySend's hard-drop branch,
-    // the held buffer and the live doc disagree. Picking either one via `??`
-    // would under-report the loss; this pins that both are reported, and
+    // A buffer stashed under single-flight survives a readonly Document because
+    // replayIfNeeded's `!canWrite` guard returns WITHOUT nulling it — so by the
+    // time a further readonly change hits trySend's drop branch, the RETAINED
+    // buffer and the dropped live doc disagree. The two lengths mean different
+    // things (what was dropped vs what is still held for a re-grant), so picking
+    // one via `??` would hide the other; this pins that both are reported, and
     // that they are genuinely different numbers (not a coincidental match).
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
@@ -1618,6 +1620,495 @@ describe("cm edit-sync — readonly hard drops are traced", () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+// Bytes typed while the document was WRITABLE and never applied by the host are
+// the one thing a readonly flip must not destroy: they sit in the replay buffer,
+// the drain holds them under `!canWrite`, and a re-grant replays them. The three
+// readonly arms (trySend / cancelPendingFlush / flush) drop only the LIVE change
+// — a docChanged under readonly is programmatic — and leave that buffer alone.
+// `flush` additionally tells the user that edits are being held — asking the
+// notifier on each call until it reports the notice shown, then staying quiet
+// for the rest of the readonly episode.
+//
+// THE STUB HAS NO VIEW. Production's `canWrite: false` Document reseeds the view
+// to the HOST's content, so after the flip the held bytes are no longer on
+// screen; `setup()`'s getDoc() keeps returning the last typed value instead.
+// `readonlyAck` models the reseed — without it the already-carried skip would
+// (correctly) stay silent and a notifying test would assert the wrong thing.
+describe("cm edit-sync — a writable-era buffer survives readonly", () => {
+  const readonlyAck = (s: ReturnType<typeof setup>, v: number, hostContent: string) => {
+    s.sync.onHostSnapshot(v, false, 0, 1);
+    s.sync.onReducerCommit(false);
+    s.setDoc(hostContent); // the readonly reseed
+  };
+  const regrant = (s: ReturnType<typeof setup>, v: number) => {
+    s.sync.onHostSnapshot(v, true, 0, 1);
+    s.sync.onReducerCommit(false);
+  };
+  // Post "a" (in flight), then buffer "ab" under single-flight — both writable.
+  const holdAb = (s: ReturnType<typeof setup>) => {
+    s.sync.onHostSnapshot(1, true, 0, 1);
+    s.type("a");
+    s.type("ab");
+    expect(s.posted).toEqual([{ content: "a", baseDocVersion: 1 }]);
+  };
+  // The real debounce path (no scheduleFlush override): the only way to hold a
+  // LIVE timer, which the cancelPendingFlush and flush-with-timer arms need.
+  const timerSetup = (opts?: { onReadonlyHold?: () => boolean }) => {
+    let doc = "";
+    const posted: Posted[] = [];
+    const sync = createEditSync({
+      getDoc: () => doc,
+      post: (content, baseDocVersion) => {
+        posted.push({ content, baseDocVersion });
+        return true;
+      },
+      onReadonlyHold: opts?.onReadonlyHold,
+    });
+    return {
+      sync,
+      posted,
+      setDoc: (next: string) => {
+        doc = next;
+      },
+      // A local change left INSIDE the debounce window (timer live).
+      change: (next: string) => {
+        doc = next;
+        sync.onLocalChange();
+      },
+    };
+  };
+  // Post "a" (in flight) and buffer "ab", then flip readonly — the timer is idle.
+  const timerHoldAbThenReadonly = (t: ReturnType<typeof timerSetup>) => {
+    t.sync.onHostSnapshot(1, true, 0, 1);
+    t.change("a");
+    vi.advanceTimersByTime(300); // posts "a" — in flight
+    t.change("ab");
+    vi.advanceTimersByTime(300); // buffers "ab"
+    expect(t.posted).toEqual([{ content: "a", baseDocVersion: 1 }]);
+    t.sync.onHostSnapshot(2, false, 0, 1);
+    t.sync.onReducerCommit(false);
+  };
+
+  it("flush under readonly keeps the buffer, and a re-grant replays it", () => {
+    const s = setup();
+    holdAb(s);
+    readonlyAck(s, 2, "a");
+    s.sync.flush(); // blur / hide while readonly
+    expect(s.posted.length).toBe(1); // nothing posted under readonly
+    regrant(s, 2);
+    expect(s.posted[1]).toEqual({ content: "ab", baseDocVersion: 2 });
+    expect(s.posted.length).toBe(2);
+  });
+
+  it("notifies exactly once per readonly episode", () => {
+    const onReadonlyHold = vi.fn();
+    const s = setup({ onReadonlyHold });
+    holdAb(s);
+    readonlyAck(s, 2, "a");
+    expect(onReadonlyHold).not.toHaveBeenCalled(); // the flip itself says nothing
+    s.sync.flush();
+    expect(onReadonlyHold).toHaveBeenCalledTimes(1);
+    s.sync.flush(); // every later blur finds the same held buffer
+    s.sync.flush();
+    expect(onReadonlyHold).toHaveBeenCalledTimes(1);
+    // Write returns: the buffer replays, its ack lands, and the episode is over.
+    regrant(s, 2);
+    expect(s.posted[1]).toEqual({ content: "ab", baseDocVersion: 2 });
+    s.setDoc("ab");
+    regrant(s, 3);
+    // A SECOND episode with a fresh held buffer announces again.
+    s.type("abc"); // posts — in flight
+    s.type("abcd"); // buffered
+    readonlyAck(s, 4, "abc");
+    s.sync.flush();
+    expect(onReadonlyHold).toHaveBeenCalledTimes(2);
+  });
+
+  it("a readonly repost inside the episode does not re-arm the announcement", () => {
+    const onReadonlyHold = vi.fn();
+    const s = setup({ onReadonlyHold });
+    holdAb(s);
+    readonlyAck(s, 2, "a");
+    s.sync.flush();
+    expect(onReadonlyHold).toHaveBeenCalledTimes(1);
+    // The host reposts while STILL readonly (hidden-webview resync / no-op
+    // repost): only a snapshot that grants write ends the episode.
+    readonlyAck(s, 2, "a");
+    s.sync.flush();
+    readonlyAck(s, 3, "a");
+    s.sync.flush();
+    expect(onReadonlyHold).toHaveBeenCalledTimes(1);
+    // ...and the buffer is still held for the re-grant.
+    regrant(s, 3);
+    expect(s.posted[1]).toEqual({ content: "ab", baseDocVersion: 3 });
+  });
+
+  it("a DECLINED hold is retried on each flush until it is shown, and traced once on the first", () => {
+    // `false` = the notice was not shown (the shell's slot held a stronger
+    // claim). Spending the latch on it would end the episode with the hold
+    // never drawn.
+    const onReadonlyHold = vi
+      .fn<() => boolean>()
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(false)
+      .mockReturnValue(true);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const holdTraces = () =>
+      warn.mock.calls.filter((c) => String(c[0]).includes("holding un-posted edits"));
+    try {
+      const s = setup({ onReadonlyHold });
+      holdAb(s);
+      readonlyAck(s, 2, "a");
+      s.sync.flush();
+      expect(onReadonlyHold).toHaveBeenCalledTimes(1);
+      // The trace records the hold itself, so a decline does not withhold it.
+      expect(holdTraces()).toEqual([
+        [expect.stringContaining("[quoll]"), { heldLength: 2, liveLength: 1 }],
+      ]);
+      s.sync.flush();
+      expect(onReadonlyHold).toHaveBeenCalledTimes(2);
+      expect(holdTraces().length).toBe(1); // not one per blur spent waiting
+      s.sync.flush(); // shown this time
+      expect(onReadonlyHold).toHaveBeenCalledTimes(3);
+      expect(holdTraces().length).toBe(1); // being shown adds no second line
+      s.sync.flush();
+      s.sync.flush();
+      expect(onReadonlyHold).toHaveBeenCalledTimes(3); // latched once shown
+      expect(holdTraces().length).toBe(1);
+      expect(s.posted.length).toBe(1);
+      regrant(s, 2);
+      expect(s.posted[1]).toEqual({ content: "ab", baseDocVersion: 2 });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("traces the hold with lengths only — never the held bytes", () => {
+    const SECRET = "SECRET-BYTES";
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const s = setup();
+      s.sync.onHostSnapshot(1, true, 0, 1);
+      s.type("a");
+      s.type(SECRET); // buffered
+      readonlyAck(s, 2, "a");
+      s.sync.flush();
+      s.sync.flush();
+      const holds = warn.mock.calls.filter((c) => String(c[0]).includes("holding un-posted edits"));
+      expect(holds).toEqual([
+        [expect.stringContaining("[quoll]"), { heldLength: SECRET.length, liveLength: 1 }],
+      ]);
+      expect(JSON.stringify(warn.mock.calls)).not.toContain(SECRET);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("a programmatic change under readonly is dropped silently (sync scheduler)", () => {
+    // NEGATIVE PIN: no writable-era buffer exists, so there is nothing to hold.
+    const onReadonlyHold = vi.fn();
+    const s = setup({ onReadonlyHold });
+    s.sync.onHostSnapshot(1, false, 0, 1); // readonly seed
+    s.type("x"); // trySend's readonly arm
+    s.sync.flush();
+    expect(onReadonlyHold).not.toHaveBeenCalled();
+    expect(s.posted).toEqual([]);
+    regrant(s, 2);
+    expect(s.posted).toEqual([]);
+  });
+
+  it("a programmatic change under readonly is dropped silently (live debounce timer)", () => {
+    // NEGATIVE PIN: flush meets a live timer and no buffer.
+    vi.useFakeTimers();
+    try {
+      const onReadonlyHold = vi.fn();
+      const t = timerSetup({ onReadonlyHold });
+      t.sync.onHostSnapshot(1, false, 0, 1); // readonly seed
+      t.change("x");
+      t.sync.flush();
+      expect(onReadonlyHold).not.toHaveBeenCalled();
+      expect(t.posted).toEqual([]);
+      t.sync.onHostSnapshot(2, true, 0, 1);
+      t.sync.onReducerCommit(false);
+      expect(t.posted).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("trySend's readonly arm drops the live change and keeps the buffer", () => {
+    const onReadonlyHold = vi.fn();
+    const s = setup({ onReadonlyHold });
+    s.sync.onHostSnapshot(1, true, 0, 1);
+    s.type("aa"); // posts — in flight
+    s.type("aaa"); // buffered while writable
+    s.sync.onHostSnapshot(2, false, 0, 1);
+    s.sync.onReducerCommit(false);
+    s.type("aaaaa"); // programmatic change under readonly → dropped
+    expect(s.posted.length).toBe(1);
+    regrant(s, 2);
+    // The writable-era bytes replay — NOT the readonly-era live doc.
+    expect(s.posted[1]).toEqual({ content: "aaa", baseDocVersion: 2 });
+    expect(s.posted.length).toBe(2);
+    expect(onReadonlyHold).not.toHaveBeenCalled(); // only flush announces
+  });
+
+  it("cancelPendingFlush's readonly arm drops the live change and keeps the buffer", () => {
+    vi.useFakeTimers();
+    try {
+      const onReadonlyHold = vi.fn();
+      const t = timerSetup({ onReadonlyHold });
+      timerHoldAbThenReadonly(t);
+      t.change("ZZZ"); // programmatic change under readonly — timer live
+      t.sync.cancelPendingFlush(); // a host Document interrupts the window
+      t.sync.onHostSnapshot(2, true, 0, 1);
+      t.sync.onReducerCommit(false);
+      expect(t.posted).toEqual([
+        { content: "a", baseDocVersion: 1 },
+        { content: "ab", baseDocVersion: 2 },
+      ]);
+      vi.advanceTimersByTime(300); // the cancelled timer must not fire later
+      expect(t.posted.some((p) => p.content === "ZZZ")).toBe(false);
+      expect(onReadonlyHold).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("flush with a live readonly timer AND a held buffer drops one and holds the other", () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const onReadonlyHold = vi.fn();
+      const t = timerSetup({ onReadonlyHold });
+      timerHoldAbThenReadonly(t);
+      t.change("ZZZ"); // programmatic change under readonly — timer live
+      t.sync.flush();
+      const drops = warn.mock.calls.filter((c) => String(c[0]).includes("dropping local change"));
+      expect(drops).toEqual([
+        [
+          expect.stringContaining("under readonly"),
+          { site: "flush", liveLength: 3, bufferedLength: 2 },
+        ],
+      ]);
+      expect(onReadonlyHold).toHaveBeenCalledTimes(1);
+      t.sync.onHostSnapshot(2, true, 0, 1);
+      t.sync.onReducerCommit(false);
+      expect(t.posted).toEqual([
+        { content: "a", baseDocVersion: 1 },
+        { content: "ab", baseDocVersion: 2 },
+      ]);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("a foreign epoch advance during the hold still discards the buffer, with its own notice", () => {
+    const onReadonlyHold = vi.fn();
+    const onLocalEditDiscarded = vi.fn();
+    const s = setup({ onReadonlyHold, onLocalEditDiscarded });
+    holdAb(s);
+    readonlyAck(s, 2, "a");
+    s.sync.flush();
+    expect(onReadonlyHold).toHaveBeenCalledTimes(1);
+    expect(onLocalEditDiscarded).not.toHaveBeenCalled();
+    // Foreign bytes land while still readonly: same generation, epoch 0→1.
+    s.setDoc("external");
+    s.sync.onHostSnapshot(3, false, 1, 1);
+    s.sync.onReducerCommit(false);
+    expect(onLocalEditDiscarded).toHaveBeenCalledTimes(1);
+    s.sync.onHostSnapshot(3, true, 1, 1);
+    s.sync.onReducerCommit(false);
+    expect(s.posted.length).toBe(1); // nothing left to replay
+  });
+
+  it("discardBuffer under readonly leaves nothing to hold or announce", () => {
+    // NEGATIVE PIN: the reject-retry discard is unchanged by the hold.
+    const onReadonlyHold = vi.fn();
+    const s = setup({ onReadonlyHold });
+    holdAb(s);
+    readonlyAck(s, 2, "a");
+    s.sync.discardBuffer();
+    s.sync.flush();
+    expect(onReadonlyHold).not.toHaveBeenCalled();
+    regrant(s, 2);
+    expect(s.posted.length).toBe(1);
+  });
+
+  it("a THROWING hold notifier neither escapes flush nor costs the buffer", () => {
+    const onReadonlyHold = vi.fn((): boolean => {
+      throw new Error("notice failed");
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const s = setup({ onReadonlyHold });
+      holdAb(s);
+      readonlyAck(s, 2, "a");
+      expect(() => s.sync.flush()).not.toThrow();
+      expect(onReadonlyHold).toHaveBeenCalledTimes(1);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("onReadonlyHold threw"),
+        expect.any(Error)
+      );
+      // A throw is not a decline: the notice may have been drawn part-way, so
+      // later flushes do not call (and do not log) again.
+      s.sync.flush();
+      s.sync.flush();
+      expect(onReadonlyHold).toHaveBeenCalledTimes(1);
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      regrant(s, 2);
+      expect(s.posted[1]).toEqual({ content: "ab", baseDocVersion: 2 });
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("stays silent before the first snapshot", () => {
+    // NEGATIVE PIN: "readonly" means nothing until the host has said so once.
+    vi.useFakeTimers();
+    try {
+      const onReadonlyHold = vi.fn();
+      const t = timerSetup({ onReadonlyHold });
+      t.change("typed pre-seed");
+      t.sync.cancelPendingFlush(); // pre-seed capture
+      // Diverge the live doc from the capture so the already-carried skip
+      // cannot be what keeps this silent — only the pre-seed guard can.
+      t.setDoc("");
+      t.sync.flush();
+      expect(onReadonlyHold).not.toHaveBeenCalled();
+      expect(t.posted).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stays silent while the host already carries the held bytes, without spending the latch", () => {
+    vi.useFakeTimers();
+    try {
+      const onReadonlyHold = vi.fn();
+      const t = timerSetup({ onReadonlyHold });
+      t.sync.onHostSnapshot(1, true, 0, 1);
+      t.change("a");
+      vi.advanceTimersByTime(300); // posts "a" — in flight
+      t.change("ab");
+      t.sync.flush(); // force-posts "ab" AND retains it (an Edit was in flight)
+      expect(t.posted.length).toBe(2);
+      // The host applied "ab" and went readonly: the live doc IS the held bytes.
+      t.sync.onHostSnapshot(2, false, 0, 1);
+      t.sync.onReducerCommit(false);
+      t.sync.flush();
+      expect(onReadonlyHold).not.toHaveBeenCalled(); // nothing is at risk
+      // The view is then rewound past the held bytes: now they ARE at risk, and
+      // the silent pass above must not have consumed the one announcement.
+      t.setDoc("a");
+      t.sync.flush();
+      expect(onReadonlyHold).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a RE-ENTRANT hold notifier fires exactly once and posts nothing", () => {
+    let target: ReturnType<typeof setup> | null = null;
+    let calls = 0;
+    const s = setup({
+      onReadonlyHold: () => {
+        calls++;
+        target?.sync.flush(); // re-enter the announcing site mid-notice
+        target?.sync.onReducerCommit(false); // and the drain
+        return true;
+      },
+    });
+    target = s;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const holdTraces = () =>
+      warn.mock.calls.filter((c) => String(c[0]).includes("holding un-posted edits"));
+    try {
+      holdAb(s);
+      readonlyAck(s, 2, "a");
+      s.sync.flush();
+      expect(calls).toBe(1);
+      expect(holdTraces().length).toBe(1);
+      expect(s.posted.length).toBe(1);
+      regrant(s, 2);
+      expect(s.posted[1]).toEqual({ content: "ab", baseDocVersion: 2 });
+      // A second episode is traced again: the re-grant re-armed the trace.
+      s.setDoc("ab");
+      regrant(s, 3);
+      s.type("abc"); // posts — in flight
+      s.type("abcd"); // buffered
+      readonlyAck(s, 4, "abc");
+      s.sync.flush();
+      expect(calls).toBe(2);
+      expect(holdTraces().length).toBe(2);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("a notifier that RE-ENTERS A RE-GRANT leaves the next episode traced", () => {
+    // The re-grant inside the call ends the episode and re-arms the trace;
+    // nothing after the call may set it again.
+    let target: ReturnType<typeof setup> | null = null;
+    let regrantInside = true;
+    const s = setup({
+      onReadonlyHold: () => {
+        if (regrantInside && target !== null) {
+          regrantInside = false;
+          regrant(target, 2);
+        }
+        return true;
+      },
+    });
+    target = s;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const holdTraces = () =>
+      warn.mock.calls.filter((c) => String(c[0]).includes("holding un-posted edits"));
+    try {
+      holdAb(s);
+      readonlyAck(s, 2, "a");
+      s.sync.flush();
+      expect(holdTraces().length).toBe(1);
+      expect(s.posted[1]).toEqual({ content: "ab", baseDocVersion: 2 }); // replayed inside
+      // The next episode starts with NO further write-granting snapshot — the
+      // one inside the call is the only thing that can have re-armed the trace.
+      s.type("abc"); // buffered behind the replay still in flight
+      readonlyAck(s, 3, "ab");
+      s.sync.flush();
+      expect(holdTraces().length).toBe(2);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("a RE-ENTRANT notifier that DECLINES fires once per flush and posts nothing", () => {
+    // The latch is released only AFTER the notifier returns, so the nested
+    // flush still finds it set; the decline then re-opens it for the next one.
+    let target: ReturnType<typeof setup> | null = null;
+    let calls = 0;
+    const s = setup({
+      onReadonlyHold: () => {
+        calls++;
+        target?.sync.flush();
+        target?.sync.onReducerCommit(false);
+        return false;
+      },
+    });
+    target = s;
+    holdAb(s);
+    readonlyAck(s, 2, "a");
+    s.sync.flush();
+    expect(calls).toBe(1);
+    expect(s.posted.length).toBe(1);
+    s.sync.flush(); // the retry — again exactly one call
+    expect(calls).toBe(2);
+    expect(s.posted.length).toBe(1);
+    regrant(s, 2);
+    expect(s.posted[1]).toEqual({ content: "ab", baseDocVersion: 2 });
   });
 });
 
