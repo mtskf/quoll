@@ -75,6 +75,7 @@ describe("pending-edit-dispose-drain", function () {
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 1,
       content: "first",
       baseDocVersion: seed.message.docVersion,
     });
@@ -93,6 +94,7 @@ describe("pending-edit-dispose-drain", function () {
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 2,
       content: drained,
       baseDocVersion: seed.message.docVersion,
     });

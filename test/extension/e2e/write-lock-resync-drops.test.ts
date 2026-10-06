@@ -45,6 +45,7 @@ describe("write-lock-resync-drops", function () {
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 1,
       content: "locked edit content",
       baseDocVersion: seed.message.docVersion,
     });
@@ -98,6 +99,7 @@ describe("write-lock-resync-drops", function () {
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 2,
       content: "locked edit content",
       baseDocVersion: seed.message.docVersion,
     });

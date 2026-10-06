@@ -128,6 +128,7 @@ function harness(options: HarnessOptions = {}) {
     content: string;
   }[] = [];
   let errorAttempts = 0;
+  let nextEditId = 1;
   let settleFailure: SettleFailureMode = false;
   // The executor's SYNCHRONOUS prefix. Since `settle()` became total this is the
   // one remaining way to make `executeDocumentWrite` REJECT, and so the only way
@@ -172,7 +173,7 @@ function harness(options: HarnessOptions = {}) {
     // the settlement's reseed throws mid-`runEffects`, and whether the user still
     // hears about the failed save then depends entirely on `settlementEffects`
     // putting the toast BEFORE the reseed.
-    buildSeedDocument: (docVersion, externalEpoch, epochGeneration) => {
+    buildSeedDocument: (docVersion, externalEpoch, epochGeneration, settledEditId) => {
       seedBuilds.push(`v${docVersion}`);
       if (settleFailure === true) {
         throw new Error("boom-seed");
@@ -188,9 +189,10 @@ function harness(options: HarnessOptions = {}) {
         themeKind: "light",
         externalEpoch,
         epochGeneration,
+        settledEditId,
       } as HostToWebview;
     },
-    buildRejectedDraft: (content, docVersion, externalEpoch, epochGeneration) =>
+    buildRejectedDraft: (content, docVersion, externalEpoch, epochGeneration, settledEditId) =>
       ({
         protocol: PROTOCOL_VERSION,
         type: "document",
@@ -201,6 +203,7 @@ function harness(options: HarnessOptions = {}) {
         themeKind: "light",
         externalEpoch,
         epochGeneration,
+        settledEditId,
       }) as HostToWebview,
     buildTheme: (themeKind) =>
       ({ protocol: PROTOCOL_VERSION, type: "theme", themeKind }) as HostToWebview,
@@ -315,6 +318,7 @@ function harness(options: HarnessOptions = {}) {
       dispatchEvent({
         type: "edit",
         baseDocVersion: live.lastAppliedDocVersion,
+        editId: nextEditId++,
         content,
         documentVersion: doc.version,
         canWrite: true,

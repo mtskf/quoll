@@ -58,6 +58,7 @@ describe("minimal-range-apply", function () {
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 1,
       content: next,
       baseDocVersion: seed.message.docVersion,
     });

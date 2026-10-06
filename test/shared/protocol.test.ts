@@ -35,6 +35,7 @@ const validDocument = () =>
     eol: "\n",
     externalEpoch: 0,
     epochGeneration: 1,
+    settledEditId: 0,
   }) as const;
 
 const validTheme = () =>
@@ -56,6 +57,7 @@ const validEdit = () =>
     type: "edit",
     content: "edited",
     baseDocVersion: 1,
+    editId: 1,
   }) as const;
 
 // String of exactly `len` UTF-16 code units (matches the validator's
@@ -157,6 +159,14 @@ describe("envelope rejections (both directions)", () => {
 // ---------- isHostToWebview / document ----------
 
 describe("isHostToWebview — document", () => {
+  it("document requires a non-negative safe-integer settledEditId", () => {
+    expect(isHostToWebview({ ...validDocument(), settledEditId: 0 })).toBe(true);
+    expect(isHostToWebview({ ...validDocument(), settledEditId: 7 })).toBe(true);
+    for (const settledEditId of [undefined, -1, 1.5, "0"]) {
+      expect(isHostToWebview({ ...validDocument(), settledEditId })).toBe(false);
+    }
+  });
+
   it("accepts a fully valid document", () => {
     expect(isHostToWebview(validDocument())).toBe(true);
   });
@@ -418,6 +428,20 @@ describe("isWebviewToHost — ready", () => {
 // ---------- isWebviewToHost / edit ----------
 
 describe("isWebviewToHost — edit", () => {
+  it("edit requires a positive safe-integer editId", () => {
+    const ok = {
+      protocol: PROTOCOL_VERSION,
+      type: "edit",
+      content: "x",
+      baseDocVersion: 1,
+      editId: 1,
+    };
+    expect(isWebviewToHost(ok)).toBe(true);
+    for (const editId of [undefined, 0, -1, 1.5, "1", Number.MAX_SAFE_INTEGER + 1]) {
+      expect(isWebviewToHost({ ...ok, editId })).toBe(false);
+    }
+  });
+
   it("accepts a fully valid edit", () => {
     expect(isWebviewToHost(validEdit())).toBe(true);
   });

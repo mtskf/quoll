@@ -169,6 +169,7 @@ describe("external-edit-propagates", function () {
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 1,
       content: "# webview edit\n\nbody\n",
       baseDocVersion: baseVersion,
     });

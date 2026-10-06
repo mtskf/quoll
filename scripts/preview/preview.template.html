@@ -99,9 +99,10 @@
                   themeKind: THEME_KIND,
                   canWrite: true,
                   eol: DOC_EOL,
-                  // The identity pair is required; any fixed pair works for a single-session preview.
+                  // The identity pair is required; any fixed pair works for a single-session preview (and no Edit has been received).
                   externalEpoch: 0,
                   epochGeneration: 1,
+                  settledEditId: 0,
                 },
                 "*"
               );

@@ -106,13 +106,15 @@ export interface EffectExecutorDeps<TEdit> {
   buildSeedDocument: (
     docVersion: number,
     externalEpoch: number,
-    epochGeneration: number
+    epochGeneration: number,
+    settledEditId: number
   ) => HostToWebview;
   buildRejectedDraft: (
     content: string,
     docVersion: number,
     externalEpoch: number,
-    epochGeneration: number
+    epochGeneration: number,
+    settledEditId: number
   ) => HostToWebview;
   buildTheme: (themeKind: ThemeKind) => HostToWebview;
   buildEditRejected: (error: MarkdownError) => HostToWebview;
@@ -820,7 +822,8 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
             documentMessage = deps.buildSeedDocument(
               effect.docVersion,
               effect.externalEpoch,
-              effect.epochGeneration
+              effect.epochGeneration,
+              effect.settledEditId
             );
           } catch (err) {
             // CORRELATED FAILURE, contained HERE rather than at the settlement's
@@ -921,7 +924,8 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
               effect.content,
               effect.docVersion,
               effect.externalEpoch,
-              effect.epochGeneration
+              effect.epochGeneration,
+              effect.settledEditId
             )
           );
           // The replay banner is FAILURE-AWARE: route it through

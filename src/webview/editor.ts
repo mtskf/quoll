@@ -226,7 +226,12 @@ export type EditorHandle = {
  *  Returns `true` if the host accepted the message (postMessage did not
  *  throw), `false` otherwise — edit-sync consumes the boolean to decide
  *  whether to retain the buffer. */
-function postEditMessage(dispatch: Dispatch, content: string, baseDocVersion: number): boolean {
+function postEditMessage(
+  dispatch: Dispatch,
+  content: string,
+  baseDocVersion: number,
+  editId: number
+): boolean {
   if (content.length > MAX_CONTENT_LENGTH) {
     // The host boundary validator (isBoundedContent, shared/protocol.ts) drops
     // an over-limit `edit` with only a console.warn — no `edit-rejected`, no
@@ -257,6 +262,7 @@ function postEditMessage(dispatch: Dispatch, content: string, baseDocVersion: nu
     type: "edit",
     content,
     baseDocVersion,
+    editId,
   };
   const postStart = QUOLL_PERF ? perfNow() : 0;
   const ok = safePostMessage(getHost(), message, "edit", (err) => {
@@ -354,7 +360,8 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   const sync = createEditSync({
     getDoc: serializeForHost,
     canPost: () => canPostEdit(opts.getState()),
-    post: (content, baseDocVersion) => postEditMessage(opts.dispatch, content, baseDocVersion),
+    post: (content, baseDocVersion, editId) =>
+      postEditMessage(opts.dispatch, content, baseDocVersion, editId),
     onResyncStorm: opts.onResyncStorm,
     onLocalEditDiscarded: opts.onLocalEditDiscarded,
     onReadonlyHold: opts.onReadonlyHold,

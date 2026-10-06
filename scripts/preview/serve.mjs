@@ -31,7 +31,7 @@ const templatePath = resolve(__dirname, "preview.template.html");
 // here and test/build/preview-server-theme.test.ts pins the two equal: a stale
 // value makes the shell's boundary validator drop the seed WHOLE and the preview
 // renders an empty editor with nothing but a console line to say why.
-export const PREVIEW_PROTOCOL_VERSION = 2;
+export const PREVIEW_PROTOCOL_VERSION = 3;
 
 // The document EOL vocabulary a config may name, mapped to the wire separator
 // (`DocumentMessage.eol`). `lf` / `crlf` rather than escape sequences so a config

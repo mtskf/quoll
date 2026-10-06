@@ -900,6 +900,7 @@ describe("createHostSessionStep", () => {
     dispatch({
       type: "edit",
       baseDocVersion: state.lastAppliedDocVersion,
+      editId: 2,
       content: "next",
       documentVersion: state.lastAppliedDocVersion,
       canWrite: true,

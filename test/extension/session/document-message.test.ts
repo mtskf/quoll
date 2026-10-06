@@ -18,6 +18,7 @@ describe("buildDocumentMessage", () => {
       canWrite: false,
       externalEpoch: 3,
       epochGeneration: 777,
+      settledEditId: 0,
     });
     expect(msg).toEqual({
       protocol: PROTOCOL_VERSION,
@@ -29,6 +30,7 @@ describe("buildDocumentMessage", () => {
       eol: "\n",
       externalEpoch: 3,
       epochGeneration: 777,
+      settledEditId: 0,
     });
   });
 
@@ -42,6 +44,7 @@ describe("buildDocumentMessage", () => {
         canWrite: true,
         externalEpoch: 0,
         epochGeneration: 1,
+        settledEditId: 0,
       }).themeKind
     ).toBe("hc-dark");
     expect(
@@ -53,6 +56,7 @@ describe("buildDocumentMessage", () => {
         canWrite: true,
         externalEpoch: 0,
         epochGeneration: 1,
+        settledEditId: 0,
       }).themeKind
     ).toBe("hc-light");
   });
@@ -66,6 +70,7 @@ describe("buildDocumentMessage", () => {
       canWrite: true,
       externalEpoch: 0,
       epochGeneration: 1,
+      settledEditId: 0,
     });
     expect(Object.keys(msg).sort()).toEqual([
       "canWrite",
@@ -75,6 +80,7 @@ describe("buildDocumentMessage", () => {
       "epochGeneration",
       "externalEpoch",
       "protocol",
+      "settledEditId",
       "themeKind",
       "type",
     ]);
@@ -88,6 +94,7 @@ describe("buildDocumentMessage", () => {
       canWrite: true,
       externalEpoch: 0,
       epochGeneration: 1,
+      settledEditId: 0,
     };
     expect(buildDocumentMessage({ ...base, eol: "\r\n" }).eol).toBe("\r\n");
     expect(buildDocumentMessage({ ...base, eol: "\n" }).eol).toBe("\n");
@@ -106,6 +113,7 @@ describe("buildDocumentMessage", () => {
         canWrite: true,
         externalEpoch: 0,
         epochGeneration: 1,
+        settledEditId: 0,
       });
       expect(isHostToWebview(msg)).toBe(true);
     }
@@ -120,9 +128,26 @@ describe("buildDocumentMessage", () => {
       canWrite: true,
       externalEpoch: 9,
       epochGeneration: 12345,
+      settledEditId: 0,
     });
     expect(msg.externalEpoch).toBe(9);
     expect(msg.epochGeneration).toBe(12345);
+  });
+
+  it("carries settledEditId through unchanged", () => {
+    // Non-zero on purpose: 0 is also what a builder that dropped the field and
+    // hard-coded the "no Edit yet" value would emit.
+    const msg = buildDocumentMessage({
+      content: "x",
+      eol: "\n",
+      docVersion: 1,
+      themeKind: "light",
+      canWrite: true,
+      externalEpoch: 0,
+      epochGeneration: 1,
+      settledEditId: 7,
+    });
+    expect(msg.settledEditId).toBe(7);
   });
 
   it("preserves canWrite=false for readonly documents", () => {
@@ -134,6 +159,7 @@ describe("buildDocumentMessage", () => {
       canWrite: false,
       externalEpoch: 0,
       epochGeneration: 1,
+      settledEditId: 0,
     });
     expect(msg.canWrite).toBe(false);
   });

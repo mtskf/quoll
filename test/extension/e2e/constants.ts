@@ -8,4 +8,4 @@
 // (test/shared/protocol-version.test.ts) that asserts the two stay
 // in sync is the minimal-coupling solution.
 
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;

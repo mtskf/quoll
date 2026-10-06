@@ -22,7 +22,8 @@
  *
  * Why a separate `protocol` envelope field:
  *   `protocol: PROTOCOL_VERSION` is the negotiation point for any incompatible
- *   change (a new REQUIRED field is one — version 2 added `DocumentMessage.eol`).
+ *   change (a new REQUIRED field is one — version 2 added `DocumentMessage.eol`,
+ *   version 3 the Edit id pair `EditMessage.editId` / `DocumentMessage.settledEditId`).
  *   Peers detect a mismatch at the boundary before parsing the payload.
  *
  * Rules for this module:
@@ -37,7 +38,7 @@
  *     rule above, since BOTH sides of the bridge consume this module.
  */
 
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 /** Hard cap on inbound webview→host content payload length, measured in UTF-16
  *  code units (i.e. `String.prototype.length`). 4 * 1024 * 1024 code units is
@@ -265,7 +266,24 @@ export function isDocumentEol(value: unknown): value is DocumentEol {
  *  timestamp) that identifies WHICH host session's epoch counter it is, so a
  *  webview surviving a host restart can tell an epoch regression across
  *  generations from a real advance. Identity, not ordering — never compared for
- *  magnitude. */
+ *  magnitude.
+ *
+ *  `settledEditId` is the highest `EditMessage.editId` this host session has
+ *  received (0 before the first Edit) — REQUIRED, hence `PROTOCOL_VERSION` 3.
+ *  For the webview session that minted those ids it reads as "the host is done
+ *  with every Edit up to this id" — DONE, not saved: the Edit was applied,
+ *  refused, or dropped (a stashed Edit replaced by a newer one is dropped
+ *  without a verdict of its own). That holds because the host emits a Document
+ *  only while its write lock is free, and with the lock free no received Edit
+ *  is still waiting (it was judged on arrival, or held under the lock and
+ *  resolved by the settlement or recovery that released it).
+ *
+ *  It is NOT comparable across a whole `epochGeneration`: ids are minted per
+ *  webview session (a reloaded webview restarts at 1) while the host's mark
+ *  never goes down within its session, so after a reload the mark can exceed
+ *  ids the new webview has not sent yet. A consumer must mint above the last
+ *  `settledEditId` it has seen before it compares. The webview does neither
+ *  yet: it does not read this field, and it does not resume minting above it. */
 export type DocumentMessage = Envelope & {
   type: "document";
   content: string;
@@ -275,6 +293,7 @@ export type DocumentMessage = Envelope & {
   eol: DocumentEol;
   externalEpoch: number;
   epochGeneration: number;
+  settledEditId: number;
 };
 
 /** Theme change only — no content, no version. Pushed on
@@ -433,11 +452,20 @@ export type ReadyMessage = Envelope & {
  *
  *  `content` is bounded by MAX_CONTENT_LENGTH at the validator boundary —
  *  this is the directional cap that protects the host from oversized
- *  webview-originated payloads. */
+ *  webview-originated payloads.
+ *
+ *  `editId` identifies this Edit to the host. Minted by the webview, strictly
+ *  increasing within one webview session, never reused (gaps are fine — a post
+ *  that failed to send still consumed its id). The host echoes the highest id
+ *  it has received on every Document (`DocumentMessage.settledEditId`), which
+ *  is what lets the webview tell whether a Document was produced before or
+ *  after the host judged a given Edit — within one webview session only; see
+ *  `DocumentMessage.settledEditId` for the reload caveat. */
 export type EditMessage = Envelope & {
   type: "edit";
   content: string;
   baseDocVersion: number;
+  editId: number;
 };
 
 /** Webview→host request to open an external URL. The webview's click
@@ -695,13 +723,20 @@ function isUnboundedContent(value: unknown): value is string {
   return typeof value === "string";
 }
 
-/** One component (epoch OR generation) of the Document's identity pair: a
- *  non-negative safe integer. `externalEpoch` starts at 0 and only advances;
- *  `epochGeneration` is a counter-salted timestamp (always positive). Both are
+/** One component (epoch OR generation) of the Document's identity pair, and
+ *  `settledEditId`: a non-negative safe integer. `externalEpoch` starts at 0
+ *  and only advances; `epochGeneration` is a counter-salted timestamp (always
+ *  positive); `settledEditId` is 0 until the first Edit arrives. All are
  *  bounded by the safe-integer ceiling for the same reason `docVersion` is —
  *  values beyond 2^53 stop incrementing/comparing reliably. */
 function isEpochComponent(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+/** A webview-minted Edit id: a positive safe integer (ids start at 1; 0 is the
+ *  host's "no Edit received yet" value on `DocumentMessage.settledEditId`). */
+function isEditId(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
 }
 
 function isBoundedContent(value: unknown): value is string {
@@ -724,7 +759,8 @@ export function isHostToWebview(value: unknown): value is HostToWebview {
         typeof v.canWrite === "boolean" &&
         isDocumentEol(v.eol) &&
         isEpochComponent(v.externalEpoch) &&
-        isEpochComponent(v.epochGeneration)
+        isEpochComponent(v.epochGeneration) &&
+        isEpochComponent(v.settledEditId)
       );
     case "theme":
       return isThemeKind(v.themeKind);
@@ -811,7 +847,9 @@ export function isWebviewToHost(value: unknown): value is WebviewToHost {
     case "ready":
       return true;
     case "edit":
-      return isBoundedContent(v.content) && isValidDocVersion(v.baseDocVersion);
+      return (
+        isBoundedContent(v.content) && isValidDocVersion(v.baseDocVersion) && isEditId(v.editId)
+      );
     case "open-external":
       return typeof v.href === "string" && v.href.length <= MAX_HREF_LENGTH;
     case "open-link":
