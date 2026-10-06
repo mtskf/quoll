@@ -2,6 +2,17 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.85 — 2026-10-06
+
+### Fixed
+
+- Pasting text together with an image (for example a captioned picture copied from a web page) no longer loses the text. The caption used to disappear, and if the image could not be pasted nothing was inserted at all.
+- Sending the document to Claude Code or Codex no longer reports success while an edit Quoll could not save is still pending. The handoff now stops with a message instead of passing along an out-of-date version of the file.
+
+### Changed
+
+- When a paste carries both text and an image, Quoll now keeps both: the text is inserted first and the image follows it.
+
 ## 0.1.84 — 2026-10-02
 
 ### Fixed
