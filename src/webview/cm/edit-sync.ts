@@ -16,8 +16,9 @@
 // Driven by the shell's synchronous post-commit dispatch (editor.ts +
 // shell.ts):
 //   - onLocalChange from the CM updateListener (debounced post).
-//   - onHostSnapshot from applyDocument (RECORD-ONLY metadata — never
-//     touches editInFlight).
+//   - onHostSnapshot from applyDocument (records the snapshot's metadata and
+//     demotes an in-flight Edit the Document does not carry into the replay
+//     buffer — never touches editInFlight, never drains).
 //   - onReducerCommit from the shell's dispatch wrapper after every
 //     state-changing transition. It is the SOLE drain driver — the
 //     reducer's committed editInFlight is passed in (single source of
@@ -49,10 +50,17 @@ const IDENTITY_FLAP_THRESHOLD = 3;
  *  LOSS judgement (`lostToSupersession`) is applied to exactly ONE of them, the
  *  NEWEST held content (see the drain: OR-ing per-holder verdicts only adds false
  *  positives):
- *    - `buffered` — captured pre-ack, waiting to be replayed; dropped by
- *      `shouldDropBufferedForEpoch`.
- *    - `inFlight` — already posted; cleared by its ack in `onReducerCommit`,
- *      which hands the settled value to the drain as evidence.
+ *    - `buffered` — waiting to be (re)posted; dropped by
+ *      `shouldDropBufferedForEpoch`. Either captured pre-ack, or DEMOTED from
+ *      `inFlight` by `onHostSnapshot` when a Document on the same lineage
+ *      arrived without those bytes — posted, but not known to have landed.
+ *    - `inFlight` — already posted; cleared by the next accepted Document's
+ *      commit in `onReducerCommit`, which hands the settled value to the drain
+ *      as evidence. That Document is not necessarily THIS Edit's ack — a
+ *      Document carries no correlation to an Edit — which is why the demotion
+ *      above exists: without it the bytes would have no carrier once cleared.
+ *  Together with the debounce timer these are the only carriers of bytes the
+ *  view shows ahead of the host.
  *  `replayIfNeeded` compares a stamp against the currently recorded pair and
  *  DROPS the buffer on a foreign epoch advance or any identity transition — the
  *  webview then mirrors the host's external-wins policy instead of clobbering it
@@ -126,6 +134,27 @@ export type EditSyncOptions = {
    *  see the call site for why the two halves are independent.
    *  Defaults to a no-op. */
   onLocalEditDiscarded?: () => void;
+  /** Make the VIEW show `content`. Called from the drain, always with
+   *  `buffered.content`, when the document is writable and the view does not
+   *  show the newest held bytes — a readonly Document rewound it and write has
+   *  since been re-granted, or an in-flight Edit was demoted under a Document
+   *  that reseeded. Without it the replay would reach the host while the screen
+   *  stayed behind, and the next keystroke — typed from the stale view — would
+   *  post a document missing those bytes.
+   *  The implementation must apply it as a host reseed, not as a user edit
+   *  (non-history, and not read back through `onLocalChange`).
+   *  MUST NEVER RUN INSIDE A CODEMIRROR UPDATE: it dispatches on the view. The
+   *  only drain reachable from the update listener is the one driven by
+   *  `local-edit-attempt`, and that dispatch is preceded by `discardBuffer()`,
+   *  so the drain finds no buffer and never gets here.
+   *  NOT called while a debounce timer is live: the view then holds a keystroke
+   *  this module has not captured yet, and a drain that is not a Document's (a
+   *  theme change, `edit-rejected`, a gate clear — none of them cancels the
+   *  timer first) would overwrite it.
+   *  A throw is caught at the call site and logged, and that drain posts
+   *  nothing; the buffer is kept for the next one.
+   *  Unset → the view is left as it is and the replay proceeds. */
+  showHeld?: (content: string) => void;
   /** Fired from `flush` — and ONLY from `flush` — when the document is readonly
    *  and this module is HOLDING un-posted edits from before the flip that the
    *  host's document does not carry. What it claims, and no more: the edits are
@@ -161,15 +190,30 @@ export type EditSyncOptions = {
 export type EditSync = {
   /** Editor content changed locally (CM updateListener docChanged). */
   onLocalChange: () => void;
-  /** A host Document arrived — RECORD-ONLY metadata. Sets the version +
-   *  canWrite edit-sync echoes on the next Edit. Does NOT touch
-   *  editInFlight and does NOT drain (that is onReducerCommit's job).
+  /** A host Document arrived. Records its metadata — the version + canWrite
+   *  edit-sync echoes on the next Edit, and the identity pair — and DEMOTES an
+   *  un-acked in-flight Edit into the replay buffer when `content` does not
+   *  carry it (below). Does NOT touch editInFlight and does NOT drain (that is
+   *  onReducerCommit's job).
    *  Stale (older docVersion) Documents are ignored ONLY within one host
    *  identity: on an identity transition (and before the first snapshot) the
    *  incoming version/pair is adopted unconditionally, because version ordering
    *  is meaningful only within one generation (S3b). `canWrite` is the
    *  FRESH value threaded from message.canWrite. Called synchronously
    *  from applyDocument.
+   *
+   *  DEMOTION. The reducer treats every accepted Document as the ack of the
+   *  Edit in flight, and `onReducerCommit` then clears the in-flight holder.
+   *  But the host does not answer Edits one-to-one: the Document may be the ack
+   *  of an EARLIER Edit, a stale repost, or a refusal of the one in flight, and
+   *  nothing on the wire tells them apart. So when nothing newer is buffered,
+   *  the Document continues the in-flight Edit's lineage, and `content` is not
+   *  its text (EOL aside), the in-flight Edit BECOMES the buffer — its bytes
+   *  keep a carrier instead of being forgotten by the commit that follows.
+   *  Done HERE rather than in the drain because this is the one entry only a
+   *  Document reaches. The drain also runs for `edit-rejected`, where the host
+   *  has said no to exactly those bytes and they must NOT be re-buffered.
+   *  A stale Document (the early return above) demotes nothing.
    *
    *  RESPONSIBILITY SPLIT: a single Document carries TWO host signals
    *  that an earlier `onDocument` conflated — "here is the current
@@ -188,7 +232,8 @@ export type EditSync = {
     docVersion: number,
     canWrite: boolean,
     externalEpoch: number,
-    epochGeneration: number
+    epochGeneration: number,
+    content: string
   ) => void;
   /** The reducer committed — re-evaluate and drain. This is the SINGLE
    *  post-commit drain entry point. The shell fires it from its dispatch
@@ -259,7 +304,11 @@ export type EditSync = {
    *      authoritative Document reposts over the typed bytes. Retaining lets the
    *      next ack replay them at the fresh docVersion (double delivery is
    *      idempotent via the host `no-op` verdict; `replayIfNeeded` nulls the
-   *      buffer on its own post, so it is exactly ONE replay). On a real close
+   *      buffer on its own post, so it is exactly ONE replay). An ack that does
+   *      NOT advance the version replays nothing — the drain never re-posts the
+   *      (content, base) pair this force-post just used — and the buffer waits
+   *      for the next version. Meanwhile the view shows the retained bytes, so
+   *      the earlier Edit's ack folds instead of rewinding it. On a real close
    *      the retained buffer is simply never replayed (iframe gone).
    *    - Nothing in flight → NULL (like trySend's idle post). The force-post
    *      lands at a matching version and is `accept`ed outright, so the host is
@@ -278,6 +327,9 @@ export type EditSync = {
    *  (cancelPendingFlush) is left for the seed's drain to judge.
    *  Two other cases keep the buffer WITHOUT posting and without any notice: the
    *  serialize-error gate is closed, or the post itself fails.
+   *  NEVER deduped against the last post, unlike the drain: a teardown signal
+   *  is a new trigger, and it is the retry for bytes the drain is holding back
+   *  after a host refusal.
    *  NOT a mid-session call — for a reseed always use `cancelPendingFlush`
    *  (capture-preserving), never `flush`. */
   flush: () => void;
@@ -297,45 +349,49 @@ export type EditSync = {
    *  panel may dispose and the host stash / retained buffer are the last
    *  authorities. No-op when nothing was typed in the debounce window. */
   flushIfIdle: () => void;
-  /** Is this incoming Document the ack of our own in-flight Edit? TWO conditions,
-   *  deliberately answered by ONE call so a caller cannot check half of it:
+  /** Is the VIEW showing the newest bytes this webview still holds un-acked, on
+   *  a lineage that still leads? TWO conditions, deliberately answered by ONE
+   *  call so a caller cannot check half of it:
    *
-   *  1. `content` carries the same TEXT as the Edit currently awaiting its ack,
-   *     line endings aside (`sameTextIgnoringEol` — an ack that crossed an
-   *     EOL-mode switch echoes our bytes in the document's new EOL).
-   *     Single-flight → at most one. False whenever nothing is in flight, so a
-   *     genuine external divergence — whose text never matches our posted
-   *     bytes — still reseeds.
-   *  2. The Document's identity pair CONTINUES the lineage we are carrying —
-   *     same generation with the epoch not advanced. Content equality alone
-   *     does not make a Document ours: another writer can produce
-   *     byte-identical bytes, and the host then reports a foreign epoch advance
-   *     / a new generation. The lineage compared against is the held replay
-   *     buffer's stamp when one is held (it is the content whose survival the
-   *     fold predicts) and the recorded pair otherwise. Pass the incoming pair
-   *     BEFORE `onHostSnapshot` records it (applyDocument's order), so the
-   *     comparison is incoming-vs-previous.
+   *  1. `liveDoc` (the view, serialised) carries the same TEXT as the NEWEST
+   *     holder — the replay buffer when one is held, the in-flight Edit
+   *     otherwise — line endings aside (`sameTextIgnoringEol`: bytes held
+   *     across an EOL-mode switch still carry the old EOL). False when nothing
+   *     is held, and false when the view has moved off the held bytes.
+   *  2. The incoming Document's identity pair CONTINUES that holder's lineage —
+   *     same generation with the epoch not advanced. Pass the incoming pair
+   *     BEFORE `onHostSnapshot` records it (applyDocument's order).
    *
-   *  The reseed path (editor.ts applyDocument) uses this to recognise a host
-   *  Document that merely ECHOES our own in-flight edit back. When the live
-   *  buffer has since advanced past those bytes (the user kept typing during the
-   *  in-flight window), reseeding back to the acked content would visibly rewind
-   *  the newer keystrokes; folding the ack into version bookkeeping instead lets
-   *  the buffered edit replay them forward. Because the live buffer is always a
-   *  descendant of what we posted, an echo match on our own lineage means the
-   *  acked content is a strict ancestor of the buffer, so skipping the visible
-   *  reseed is safe. Condition 2 is what keeps that reasoning true: it holds the
-   *  fold to exactly the Documents whose replay buffer `replayIfNeeded` will
-   *  still replay — on a superseded lineage the buffer is DROPPED, so folding
-   *  would leave the ahead keystrokes visible but unsavable. */
-  acksInFlightEdit: (content: string, externalEpoch: number, epochGeneration: number) => boolean;
+   *  The reseed path (editor.ts applyDocument) uses this to decide whether a
+   *  Document that differs from the view may replace it. The question is
+   *  deliberately about the VIEW, not about whether the Document echoes the
+   *  in-flight Edit: a Document carries no correlation to an Edit, so the ack
+   *  of an earlier Edit, a stale repost and a refusal all arrive as "same
+   *  lineage, not my in-flight bytes". Reseeding on any of them rewinds the
+   *  screen behind bytes that are still held, and the next keystroke — typed
+   *  from the rewound view — forks off them. While the view shows the newest
+   *  held bytes there is nothing on screen that lacks a carrier, so the
+   *  Document folds into version bookkeeping and the holder goes forward on
+   *  the drain.
+   *  Condition 2 is what keeps that true: it holds the fold to exactly the
+   *  Documents whose buffer `replayIfNeeded` will still replay. On a
+   *  superseded lineage the buffer is DROPPED, so folding there would leave
+   *  the ahead keystrokes visible but unsavable.
+   *  What it cannot see: a same-epoch Document carrying content that is not
+   *  ours also folds. See the residuals in `replayIfNeeded`. */
+  viewHoldsUnackedEdit: (
+    liveDoc: string,
+    externalEpoch: number,
+    epochGeneration: number
+  ) => boolean;
   /** The Document identity pair (externalEpoch, epochGeneration) recorded from
    *  the most recent accepted host snapshot — `null` before the first snapshot.
-   *  TWO consumers read it through the shared `supersedesIdentity` rule: the
-   *  replay side (`shouldDropBufferedForEpoch`, which drops a held buffer on a
-   *  foreign epoch advance or an identity transition) and the display side
-   *  (`acksInFlightEdit`, which gates the reseed path's ok-ack fold and falls
-   *  back to this pair when no buffer is held). They must agree — see
+   *  It is the replay side's half of the shared `supersedesIdentity` rule:
+   *  `shouldDropBufferedForEpoch` compares a holder's stamp against it and drops
+   *  a held buffer on a foreign epoch advance or an identity transition. The
+   *  display side (`viewHoldsUnackedEdit`, which gates the reseed path's fold)
+   *  asks the same rule about the same stamp against the INCOMING pair, before
+   *  it is recorded here — so the two agree once it is. See
    *  `supersedesIdentity`. */
   recordedIdentity: () => DocumentIdentity;
   /** Pure predicate (no side effects): would an incoming Document's identity
@@ -369,23 +425,44 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
   // Collapsing one into the other was proposed and rejected in review — any
   // collapse has to pick an ordering, and thereby change what that re-entrant
   // reader observes mid-post (stamping before the post would make
-  // `acksInFlightEdit` answer true for bytes not yet posted). That is a
+  // `viewHoldsUnackedEdit` answer true for bytes not yet posted). That is a
   // behaviour change, not a refactor.
-  // STAMPED, like the buffer: `acksInFlightEdit` reads its content so the reseed
-  // path can recognise an ok-ack, and the drain reads its stamp to ask whether
-  // the host's lineage moved on without carrying those bytes. Cleared by
-  // `onReducerCommit` alongside `editInFlight` — the two stay paired in ONE
-  // function — which hands the settled value to the drain as evidence.
+  // STAMPED, like the buffer: `viewHoldsUnackedEdit` reads its content and stamp
+  // when no buffer is held, `onHostSnapshot` reads both to decide a demotion,
+  // and the drain reads its stamp to ask whether the host's lineage moved on
+  // without carrying those bytes. Cleared by `onReducerCommit` alongside
+  // `editInFlight` — the two stay paired in ONE function — which hands the
+  // settled value to the drain as evidence.
   let inFlight: HeldEdit | null = null;
   let buffered: HeldEdit | null = null;
+  // The (content, baseDocVersion) pair of the last post that SUCCEEDED, so the
+  // drain never re-posts it by itself. Why: a host refusal and a stale repost
+  // are indistinguishable on the wire — both arrive as a Document on our
+  // lineage that does not carry the posted bytes, at an unchanged version — and
+  // both demote those bytes back into the buffer. Replaying them at the same
+  // base would get the same answer, which would demote and replay them again:
+  // a post loop with the host. So an identical pair waits for something to
+  // change — a version advance, a keystroke, a teardown flush.
+  // Written ONLY when `post` returned true (`notePost`, from all three posting
+  // sites): a post that failed never reached the host, so its retry must not be
+  // deduped away. Reset in `onHostSnapshot` when the lineage moves or write is
+  // re-granted — an answer given under the old lineage / capability predicts
+  // nothing about the new one.
+  let lastPost: { readonly content: string; readonly baseDocVersion: number } | null = null;
+  // Call AFTER a successful post and before anything can move `docVersion`:
+  // the base recorded is the one that post carried.
+  const notePost = (content: string): void => {
+    lastPost = { content, baseDocVersion: docVersion };
+  };
   let timer: ReturnType<typeof setTimeout> | null = null;
   // Document identity pair from the most recent accepted host snapshot (S3a
   // recorded it; S3b now acts on it). Both fields are `null` before the first
   // snapshot. Read in replayIfNeeded's drop check, at each buffer capture (via
-  // stampHeld), by isIdentityTransition, and — via recordedIdentity(), as the
-  // no-buffer-held fallback — by acksInFlightEdit's lineage conjunct. So BOTH
-  // the replay side and the display (ok-ack fold) side read it, not the replay
-  // side alone.
+  // stampHeld), by isIdentityTransition, and by onHostSnapshot itself (has the
+  // lineage moved since the last post; does the in-flight Edit still belong to
+  // it). The display side (`viewHoldsUnackedEdit`) does NOT read it: it runs
+  // before the incoming pair is recorded and compares a holder's stamp against
+  // that incoming pair directly.
   // ONE variable holding the PAIR, not two independent wings: with two `let`s a
   // write could land on one and miss the other, leaving the wings disagreeing.
   // Here every write names the whole pair — the initializer below and the
@@ -443,13 +520,18 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
   // cm-edit-sync.test.ts, editor.test.ts and shell.test.ts. Those tests are what
   // hold the direction — do not delete them in a tidy-up.
   //
-  // Two consumers read it, and they MUST agree — that is the point of sharing
-  // one predicate rather than two hand-written copies. `shouldDropBufferedForEpoch`
-  // decides whether a held REPLAY BUFFER survives; `acksInFlightEdit` decides
-  // whether the reseed path may fold a content-echoing Document away as our ack.
+  // Every lineage decision in this module reads it, and they MUST agree — that
+  // is the point of sharing one predicate rather than hand-written copies:
+  //   - `shouldDropBufferedForEpoch` — does a held REPLAY BUFFER survive?
+  //   - `viewHoldsUnackedEdit` — may the reseed path fold a Document away
+  //     instead of replacing a view that shows held bytes?
+  //   - `onHostSnapshot` — may an in-flight Edit be demoted into the buffer, and
+  //     is the last post's verdict still about this lineage?
   // If the display folded where the buffer is dropped, the user's ahead-of-host
   // keystrokes would stay on screen with nothing left to post them — visibly
-  // present, never saved, and resurfacing on the next keystroke.
+  // present, never saved, and resurfacing on the next keystroke. A demotion
+  // across a superseded lineage would only manufacture a buffer for the next
+  // drain to drop.
   const supersedesIdentity = ({
     from,
     to,
@@ -479,22 +561,28 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
   // The content test is EOL-INSENSITIVE, through the same `sameTextIgnoringEol`
   // the host's `contentMatches` asks of this document (src/shared/) — one
   // definition, so the two sides cannot drift apart about what "carries these
-  // bytes" means. In this module it is asked here (the loss judgement) and in
-  // `acksInFlightEdit` (is this Document our ack?), never to decide WHAT bytes
-  // to post: the host canonicalises a Document to `document.eol` while this side
-  // posts whatever its `quollDocumentEol` facet holds. The facet takes the wire
+  // bytes" means. In this module it is asked here (the loss judgement), in
+  // `viewHoldsUnackedEdit` (does the view show the held bytes?), in the demotion
+  // (does the Document carry the in-flight bytes?) and before `showHeld` (is the
+  // view already there?) — never to decide WHAT bytes to post, and never by the
+  // post dedupe, which compares exact strings: the host canonicalises a Document
+  // to `document.eol` while this side posts whatever its `quollDocumentEol`
+  // facet holds. The facet takes the wire
   // `eol`, so the two agree in steady state, but bytes held across an EOL-mode
   // switch still carry
   // the old EOL — an EOL-only difference is skew between the two sides, and
   // reporting it as a lost edit trains the user to ignore a notice that
   // otherwise only fires on real loss.
   // `opts.getDoc()` IS that authoritative content whenever the first condition
-  // holds, which is why this needs no plumbing from editor.ts and no content
-  // parameter on the RECORD-ONLY onHostSnapshot: supersession makes
-  // `acksInFlightEdit` false, so `foldsOkAck` is false, so applyDocument either
-  // reseeded the view to the host's bytes or the live doc already equalled them
-  // (`aheadOfHost === false`). There is no third branch — a `canWrite: false`
-  // Document reseeds too (`needsReseed = aheadOfHost && !foldsOkAck`).
+  // holds, which is why the judgement reads the view instead of keeping a copy
+  // of the Document's content: supersession makes `viewHoldsUnackedEdit` false
+  // (its lineage conjunct is this same rule on this same stamp), so `foldsOkAck`
+  // is false, so applyDocument either reseeded the view to the host's bytes or
+  // the live doc already equalled them (`aheadOfHost === false`). There is no
+  // third branch — a `canWrite: false` Document reseeds too
+  // (`needsReseed = aheadOfHost && !foldsOkAck`) — and `showHeld` cannot have
+  // moved the view since: it runs later in the drain, and only for a buffer
+  // that SURVIVED the drop.
   // What the TRUE verdict does and does not claim: the document is not carrying
   // the user's bytes AS WRITTEN. Whether they were never applied, applied and
   // then overwritten, or applied and then added to is NOT decidable here (a
@@ -582,7 +670,11 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
   // The user-visible half of the readonly hold, called from `flush` only (the
   // rationale for that, and for the latch, is on `EditSyncOptions.onReadonlyHold`).
   // Under readonly no capture site runs, so the buffer cannot be replaced: one
-  // shown notice per readonly episode is one per held buffer.
+  // shown notice per readonly episode is one per held buffer. (A demotion can
+  // FILL an empty buffer under readonly — the readonly Document answering an
+  // in-flight Edit without its bytes — which is the hold this announces.)
+  // What happens to the hold on a re-grant is the drain's business: it brings
+  // the view forward to the held bytes (`showHeld`) and replays them.
   // Two latches, both per episode: the notice's can be handed back by a
   // declining notifier, the console trace's cannot — the trace records that a
   // hold EXISTS, whether or not the user has been told yet.
@@ -595,10 +687,11 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
       return;
     }
     // The host already carries these bytes → nothing is at risk, so say nothing
-    // and do NOT spend the latch (the view can still be rewound past them
-    // later). Under readonly the live doc IS the host's content — a
-    // `canWrite: false` Document never folds — which makes it the authoritative
-    // comparison, the same reading `lostToSupersession` relies on.
+    // and do NOT spend the latch (a later readonly Document can still rewind
+    // the view past them). Under readonly the live doc IS the host's content —
+    // a `canWrite: false` Document never folds, and `showHeld` only runs while
+    // writable — which makes it the authoritative comparison, the same reading
+    // `lostToSupersession` relies on.
     const liveDoc = opts.getDoc();
     if (sameTextIgnoringEol(buffered.content, liveDoc)) {
       return;
@@ -683,6 +776,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
     if (ok) {
       buffered = null;
       inFlight = stampHeld(content);
+      notePost(content);
     } else {
       // postMessage threw: drop the in-flight flag so a later ack/change
       // can retry, and retain the buffered content.
@@ -737,22 +831,46 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
     // user's text still on screen and on disk. If the NEWEST bytes survived,
     // there is nothing to reapply, whatever became of an older snapshot.
     //
-    // ACCEPTED RESIDUAL (exceptions to the ordering, as a CLASS — not one path):
-    // any NON-FOLDED ack that reseeds the view to content which is not our
-    // in-flight bytes, while a newer buffer is RETAINED, leaves the VIEW behind
-    // the bytes in flight; a keystroke typed in that window FORKS rather than
-    // descending, so the newest held bytes can be missing what the in-flight
-    // bytes had. Known triggers: `flush`'s recovery window (the ack no longer
-    // matches the force-posted in-flight content); a `canWrite: false` ack (the
-    // fold is gated on canWrite, this drain's `!canWrite` guard keeps the buffer,
-    // and the re-grant replay's own ack then FOLDS against a view never brought
-    // forward, so the screen never catches up); and a same-lineage repost whose
-    // content differs, where the drain's tail post re-arms editInFlight. Those
-    // IN-FLIGHT BYTES are what the fork loses on disk, notice or no notice (the
-    // forked Edit is the write that overwrites them — the keystroke itself
-    // survives, riding that Edit). Tracked in ONE TODO rather than patched here;
-    // shell.test.ts's "ACCEPTED RESIDUAL: the forked flush window" pins today's
-    // silence for the first trigger.
+    // What keeps the ordering true — three invariants, each held by one
+    // mechanism:
+    //   I1 (no rewind). While writable, on a lineage that still leads, a
+    //      Document never replaces a view that shows the newest held bytes
+    //      (`viewHoldsUnackedEdit`, which gates applyDocument's fold). So a
+    //      keystroke is always typed on top of what is held, never beside it.
+    //   I2 (carrier). Bytes the view shows ahead of the host are in the debounce
+    //      timer, in `buffered`, or in `inFlight` (the demotion in
+    //      `onHostSnapshot` covers the Document that settles an in-flight Edit
+    //      without carrying it; `showHeld` below covers the converse — held
+    //      bytes the view stopped showing). The one exception is a draft the
+    //      host answered with `edit-rejected`: it stays on screen behind the
+    //      serialize-error banner, deliberately without a carrier.
+    //   I3 (no automatic identical retry). This drain never re-posts a
+    //      (content, baseDocVersion) pair it already posted unless the lineage
+    //      moved or write was re-granted in between (`lastPost`). A keystroke or
+    //      a teardown `flush` is a new trigger and is not deduped.
+    //
+    // RESIDUALS — stated, not handled; each needs the protocol to correlate a
+    // Document with the Edit it answers, which the wire does not carry today:
+    //   - Same-epoch content this webview cannot tie to its own held bytes. The
+    //     host has paths that deliver foreign bytes WITHOUT an epoch advance
+    //     (host-session-core's own ACCEPTED RESIDUALs: an unobserved settle, a
+    //     failed settlement transition). ANY such Document is treated as
+    //     own-lineage — including a late arrival of content posted long ago and
+    //     no longer held — so the fold keeps the user's view over it and the
+    //     held bytes are replayed over it, silently. Every OTHER same-epoch
+    //     Document that is not the held bytes (a refusal, a stale or no-op
+    //     repost, the Document behind a rejected draft) IS own-lineage, where
+    //     keeping the user's bytes is the right outcome; the two cannot be told
+    //     apart here.
+    //   - Refusal vs stale repost. After a host refusal with nothing newer
+    //     buffered, the bytes stay on screen, held, and are not re-posted until
+    //     the version advances or the user types / leaves the editor (I3). The
+    //     host shows its own failure message; this side shows nothing.
+    //   - The caret after `showHeld` is clamped like any reseed's, so after a
+    //     readonly rewind + re-grant it can sit before the restored bytes.
+    //   - A throwing `showHeld` leaves the view at the host's bytes with the
+    //     buffer held; a keystroke typed there posts the view and replaces the
+    //     buffer.
     //
     // Doing this here — after applyDocument reseeded and the reducer committed —
     // is what lets the judgement read the settled world instead of predicting it.
@@ -838,31 +956,73 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
         console.error("[quoll] onLocalEditDiscarded threw", err);
       }
     }
-    if (buffered === null || !seeded || editInFlight || !canWrite || !canPost()) {
+    if (buffered === null || !seeded || editInFlight || !canWrite) {
       return;
     }
-    const content = buffered.content;
+    // Writable with a surviving buffer: the view must SHOW those bytes before
+    // they are posted (I2) — a readonly Document may have rewound it, or the
+    // buffer was demoted under a Document that reseeded. Before the `canPost()`
+    // and dedupe guards on purpose: bytes held back from the wire must still be
+    // on screen, or the next keystroke would be typed without them.
+    // `timer === null`: a live timer means the view holds a keystroke not yet
+    // captured, and this drain may not be a Document's (which cancels the timer
+    // first) — overwriting the view would destroy it. The pending flush will
+    // post the view as it stands.
+    if (timer === null && !sameTextIgnoringEol(buffered.content, opts.getDoc())) {
+      try {
+        opts.showHeld?.(buffered.content);
+      } catch (err) {
+        // Not posted: the buffer stays for the next drain. Posting bytes the
+        // screen failed to show would recreate the split this step prevents.
+        // Error only: buffered document bytes must never reach the console.
+        console.error("[quoll] showHeld threw", err);
+        return;
+      }
+      // `showHeld` is caller code that dispatches on the view; it can re-enter
+      // this module (`discardBuffer`, a drain, a snapshot). Re-read the state
+      // the guard above established rather than trusting it.
+      if (buffered === null || editInFlight || !canWrite) {
+        return;
+      }
+    }
+    if (!canPost()) {
+      return;
+    }
+    const held = buffered;
+    const content = held.content;
+    // I3: these exact bytes already went out at this base and the host's answer
+    // did not carry them. Keep the buffer and wait — see `lastPost`.
+    if (
+      lastPost !== null &&
+      lastPost.baseDocVersion === docVersion &&
+      lastPost.content === content
+    ) {
+      return;
+    }
     editInFlight = true;
     const ok = opts.post(content, docVersion);
     if (ok) {
       buffered = null;
       inFlight = stampHeld(content);
+      notePost(content);
     } else {
       editInFlight = false;
       inFlight = null;
+      // The post never left: keep the bytes for the next drain. `lastPost` is
+      // untouched, so that retry is not mistaken for a repeat.
       buffered = stampHeld(content);
     }
   };
 
   return {
     onLocalChange: () => schedule(trySend),
-    // RECORD-ONLY host snapshot metadata. Updates the version + canWrite
+    // Host snapshot metadata, plus the demotion. Updates the version + canWrite
     // edit-sync echoes on its next Edit. It does NOT clear editInFlight
     // and does NOT drain — those belong to onReducerCommit, driven by
     // the reducer's committed `state.editInFlight`. (Earlier drafts
     // cleared editInFlight here and/or replayed; both created the
     // divergences the doc comment on onHostSnapshot above details.)
-    onHostSnapshot: (nextVersion, nextCanWrite, nextEpoch, nextGeneration) => {
+    onHostSnapshot: (nextVersion, nextCanWrite, nextEpoch, nextGeneration, content) => {
       const transition = isIdentityTransition(nextEpoch, nextGeneration);
       // Generation-aware acceptance ordering (S3b): version order is meaningful
       // only WITHIN one host generation. On an identity transition a new host
@@ -892,11 +1052,37 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
         readonlyHoldAnnounced = false;
         readonlyHoldTraced = false;
       }
+      const incoming: DocumentIdentity = { epoch: nextEpoch, generation: nextGeneration };
+      if (supersedesIdentity({ from: recorded, to: incoming })) {
+        // The lineage moved: the answer the last post got says nothing about
+        // how the new lineage would answer the same pair.
+        lastPost = null;
+      }
+      if (nextCanWrite && !canWrite) {
+        // Write re-granted: a post made before the readonly episode may have
+        // been turned away by it, so bytes held across the flip must be free to
+        // go out again at the same base.
+        lastPost = null;
+      }
       docVersion = nextVersion;
       canWrite = nextCanWrite;
       seeded = true;
       // Capture the identity pair alongside the version.
-      recorded = { epoch: nextEpoch, generation: nextGeneration };
+      recorded = incoming;
+      // Demotion — see the onHostSnapshot JSDoc. AFTER the pair is adopted, so
+      // the lineage test is against the Document just accepted. `buffered ===
+      // null`: a held buffer is already the newest carrier (it descends from, or
+      // equals, the in-flight bytes) and must not be replaced by older ones. The
+      // demoted value keeps its ORIGINAL stamp, so a later foreign Document
+      // still drops it.
+      if (
+        buffered === null &&
+        inFlight !== null &&
+        !supersedesIdentity({ from: inFlight, to: recorded }) &&
+        !sameTextIgnoringEol(inFlight.content, content)
+      ) {
+        buffered = inFlight;
+      }
     },
     // The SINGLE post-commit drain. `committedEditInFlight` is the
     // reducer's committed `state.editInFlight` — the single source of
@@ -995,6 +1181,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
       if (ok) {
         editInFlight = true; // maintain single-flight even on an alive hide→show
         inFlight = stampHeld(content);
+        notePost(content);
         // Retain for ack-replay ONLY under in-flight contention (the sole path
         // to the stale settlement→ack window); otherwise the host accepted the
         // post and is the authority, so null it like trySend's idle post (JSDoc).
@@ -1017,23 +1204,23 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
         trySend();
       }
     },
-    // Ground the fold on the very buffer whose survival it predicts: replay
+    // Ground the fold on the very holder whose survival it predicts: replay
     // drops `buffered` iff supersedesIdentity({from: buffered, to: recorded}),
-    // so reading the stamp here makes display and replay agree BY CONSTRUCTION
-    // instead of via the stamp === recorded invariant, which holds only as long
-    // as every accepted Document is followed by a drain. No buffer held → there
-    // is nothing to carry forward, so the recorded pair is the right fallback.
-    acksInFlightEdit: (content, externalEpoch, epochGeneration) =>
-      inFlight !== null &&
-      // EOL-insensitive: an ack that crossed an EOL-mode switch echoes our
-      // bytes in the document's NEW line endings (the host canonicalises) —
-      // still our ack. Lineage continuity below is what keeps a coincidental
-      // foreign match from folding.
-      sameTextIgnoringEol(content, inFlight.content) &&
-      !supersedesIdentity({
-        from: buffered ?? recordedIdentity(),
-        to: { epoch: externalEpoch, generation: epochGeneration },
-      }),
+    // so reading that stamp against the incoming pair makes display and replay
+    // agree BY CONSTRUCTION once the pair is recorded. With no buffer held the
+    // in-flight Edit is the newest holder, and its stamp is the one the demotion
+    // and the drain's loss judgement will read for this same Document.
+    viewHoldsUnackedEdit: (liveDoc, externalEpoch, epochGeneration) => {
+      const newest = buffered ?? inFlight;
+      return (
+        newest !== null &&
+        sameTextIgnoringEol(liveDoc, newest.content) &&
+        !supersedesIdentity({
+          from: newest,
+          to: { epoch: externalEpoch, generation: epochGeneration },
+        })
+      );
+    },
     recordedIdentity,
     isIdentityTransition,
   };

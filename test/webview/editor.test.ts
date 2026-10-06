@@ -349,13 +349,17 @@ describe("editor — ok-ack while ahead does not reseed backwards (d2)", () => {
     vi.advanceTimersByTime(300); // posts "D12", in flight
     expect(view.state.sliceDoc()).toBe("D12");
     // An EXTERNAL edit changed the file to unrelated content at a newer version.
-    // It does not echo our in-flight "D12", so the reseed must still apply.
+    // The host reports a foreign write as an EPOCH ADVANCE, and that — not the
+    // content — is what tells it apart from a Document on our own lineage: the
+    // view holds the in-flight "D12", but that lineage no longer leads, so the
+    // reseed must still apply.
     handle.applyDocument({
       content: "EXTERNAL",
       eol: "\n",
       canWrite: true,
       docVersion: 2,
-      ...PAIR,
+      externalEpoch: PAIR.externalEpoch + 1,
+      epochGeneration: PAIR.epochGeneration,
     });
     expect(view.state.sliceDoc()).toBe("EXTERNAL");
   });
@@ -672,11 +676,13 @@ describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
   });
 
   it("does NOT notify when the host reposts different bytes on the SAME lineage", () => {
-    // The seam-level pin for the supersession conjunct, and the shape the host's
-    // stale / no-op repost arm produces routinely: the lineage is unmoved but the
-    // document is NOT carrying our bytes, so the CONTENT conjunct is already
-    // false and only the lineage test keeps this quiet. Drop that conjunct and
-    // every ordinary repost notifies the user of a loss that did not happen.
+    // The shape the host's stale / no-op repost arm produces routinely: the
+    // lineage is unmoved and the Document does not carry our bytes. The view
+    // holds the in-flight Edit, so the Document FOLDS — the local bytes stay on
+    // screen (demoted into the replay buffer) and nothing is announced.
+    // Not a single-conjunct pin for the loss judgement any more: the view keeps
+    // the bytes, so BOTH of its conjuncts are false here. The readonly variant
+    // below is the one that isolates the lineage conjunct.
     vi.useFakeTimers();
     const onLocalEditDiscarded = vi.fn();
     const { handle, view, commit } = mount({ onLocalEditDiscarded });
@@ -689,9 +695,35 @@ describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
       externalEpoch: 0,
       epochGeneration: 11,
     }); // same pair, different bytes
+    expect(view.state.sliceDoc()).toBe("D12"); // no rewind: the local bytes stay
+    commit(false);
+    expect(onLocalEditDiscarded).not.toHaveBeenCalled();
+    expect(view.state.sliceDoc()).toBe("D12");
+  });
+
+  it("does NOT notify when a READONLY repost on the SAME lineage rewinds the view", () => {
+    // The seam-level pin for the supersession conjunct of the loss judgement. A
+    // readonly Document never folds, so the view really is reseeded and is NOT
+    // carrying our bytes: the CONTENT conjunct is already true and only the
+    // lineage test keeps this quiet. The bytes are not lost either — they are
+    // held for a re-grant.
+    // [revert: drop `shouldDropBufferedForEpoch(held) &&` from
+    // lostToSupersession → this notifies of a loss that did not happen]
+    vi.useFakeTimers();
+    const onLocalEditDiscarded = vi.fn();
+    const { handle, view, commit } = mount({ onLocalEditDiscarded });
+    seedAndPost(handle, view, 0, 11);
+    handle.applyDocument({
+      content: "D1",
+      eol: "\n",
+      canWrite: false,
+      docVersion: 1,
+      externalEpoch: 0,
+      epochGeneration: 11,
+    }); // same pair, write revoked
     // The reseed really happened, so the silence cannot be the content conjunct
     // standing in for the lineage one.
-    expect(view.state.sliceDoc()).toBe("HOST-OTHER");
+    expect(view.state.sliceDoc()).toBe("D1");
     commit(false);
     expect(onLocalEditDiscarded).not.toHaveBeenCalled();
   });
@@ -720,17 +752,18 @@ describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
     expect(onLocalEditDiscarded).not.toHaveBeenCalled();
   });
 
-  it("ACCEPTED RESIDUAL: a readonly ack + re-grant replay leaves the VIEW behind", () => {
-    // The drain's `!canWrite` guard retains the buffer while the reseed already
-    // moved the view back; the replay's own ack then FOLDS, so the view never
-    // catches up. Disk gets the bytes, the screen does not, and no notice fires
-    // (the lineage never moved). MEASURED so the residual is discoverable: when
-    // the fold/rewind defect is fixed the view becomes "sxy" — update this pin,
-    // do not "restore" the staleness. The silence stays either way.
-    // This is the ONLY test in the tree that observes screen/disk divergence,
-    // which is why it exists beside the TODO: this trigger loses nothing on
-    // disk, so a Done-when phrased as "the in-flight bytes are not lost" cannot
-    // catch a regression in it.
+  it("a readonly ack + re-grant brings the view forward and replays", () => {
+    // A readonly Document always reseeds to the host's bytes while the drain's
+    // `!canWrite` guard retains the buffer. When write comes back the drain
+    // first makes the view SHOW the held bytes (`showHeld`), then replays them
+    // — so screen and disk converge, and a keystroke typed next builds on the
+    // held bytes instead of forking off the rewound view.
+    // The view is asserted IMMEDIATELY after the re-grant's commit, before the
+    // replay's own ack: that final Document carries "sxy" and would reseed the
+    // view by itself, so an end-state-only assertion stays green without
+    // showHeld.
+    // [revert: make editor.ts's `showHeld` a no-op → the view is still "s"
+    // after the re-grant commit]
     vi.useFakeTimers();
     const onLocalEditDiscarded = vi.fn();
     const { handle, view, commit } = mount({ onLocalEditDiscarded });
@@ -755,6 +788,7 @@ describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
       epochGeneration: 11,
     }); // write revoked: reseed, buffer held
     commit(false);
+    expect(view.state.sliceDoc()).toBe("s");
     handle.applyDocument({
       content: "s",
       eol: "\n",
@@ -762,8 +796,16 @@ describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
       docVersion: 2,
       externalEpoch: 0,
       epochGeneration: 11,
-    }); // re-granted: the drain posts "sxy"
-    commit(false);
+    }); // re-granted
+    expect(view.state.sliceDoc()).toBe("s"); // not yet: the drain does it
+    commit(false); // the drain shows "sxy", then posts it
+    expect(view.state.sliceDoc()).toBe("sxy");
+    expect(editPosts().map((m) => (m as { content: string }).content)).toEqual(["sx", "sxy"]);
+    expect((editPosts()[1] as { baseDocVersion: number }).baseDocVersion).toBe(2);
+    // The advance is a reseed, not a user edit: it is not read back as a local
+    // change, so nothing further is posted once the debounce would have fired.
+    vi.advanceTimersByTime(300);
+    expect(editPosts()).toHaveLength(2);
     handle.applyDocument({
       content: "sxy",
       eol: "\n",
@@ -771,10 +813,10 @@ describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
       docVersion: 3,
       externalEpoch: 0,
       epochGeneration: 11,
-    }); // our own ack → folds
+    }); // the replay's ack
     commit(false);
-    expect(editPosts().map((m) => (m as { content: string }).content)).toEqual(["sx", "sxy"]);
-    expect(view.state.sliceDoc()).toBe("s"); // the screen is BEHIND the saved bytes
+    expect(editPosts()).toHaveLength(2);
+    expect(view.state.sliceDoc()).toBe("sxy");
     expect(onLocalEditDiscarded).not.toHaveBeenCalled();
   });
 });
@@ -785,7 +827,7 @@ describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
 // ⚠️ The two reads are NOT symmetric, so one test cannot gate both (measured by
 // two independent reviewers):
 //   - `getDoc()` supplies the bytes edit-sync posts. The ok-ack fold is
-//     EOL-insensitive (`sameTextIgnoringEol`, edit-sync.ts acksInFlightEdit), so
+//     EOL-insensitive (`sameTextIgnoringEol`, edit-sync.ts viewHoldsUnackedEdit), so
 //     a wrong-EOL getDoc no longer shows up as a rewind — it shows up on the WIRE:
 //     the posted Edit carries the wrong separator. Hence this test asserts the
 //     posted bytes literally.
@@ -1283,18 +1325,20 @@ describe("editor — caret preserved across accept-and-reseed (q)", () => {
     // Move caret to position 3 (between "hel" and "lo world").
     view.dispatch({ selection: { anchor: 3 } });
     expect(view.state.selection.main.head).toBe(3);
-    // User typed 'X' at the tail while an Edit was already in flight —
-    // the host snapshot does not yet carry the X, so view doc diverges
-    // past the rawText we're about to reseed with.
+    // User typed 'X' at the tail — still inside the debounce window, so the
+    // view doc diverges past the rawText we're about to reseed with.
     view.dispatch({ changes: { from: view.state.doc.length, insert: "X" } });
     expect(view.state.sliceDoc()).toBe("hello worldX");
-    // Host ack arrives without the in-window 'X'. needsReseed = true.
+    // A FOREIGN write (epoch advance) arrives without the in-window 'X'. A
+    // Document on our own lineage would fold over the held keystroke; a
+    // foreign one supersedes it, so needsReseed = true.
     handle.applyDocument({
       content: "hello world",
       eol: "\n",
       canWrite: true,
       docVersion: 2,
-      ...PAIR,
+      externalEpoch: PAIR.externalEpoch + 1,
+      epochGeneration: PAIR.epochGeneration,
     });
     expect(view.state.sliceDoc()).toBe("hello world");
     // The user's caret was at position 3 — well within the new doc
@@ -1314,8 +1358,16 @@ describe("editor — caret preserved across accept-and-reseed (q)", () => {
     });
     expect(view.state.sliceDoc()).toBe("hiab");
     expect(view.state.selection.main.head).toBe(4);
-    // Reseed to the shorter host snapshot — caret was past new end.
-    handle.applyDocument({ content: "hi", eol: "\n", canWrite: true, docVersion: 2, ...PAIR });
+    // Reseed to the shorter host snapshot — caret was past new end. A FOREIGN
+    // write (epoch advance): on our own lineage the held "ab" would fold.
+    handle.applyDocument({
+      content: "hi",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 2,
+      externalEpoch: PAIR.externalEpoch + 1,
+      epochGeneration: PAIR.epochGeneration,
+    });
     expect(view.state.sliceDoc()).toBe("hi");
     // Clamp to new doc length (2). NOT zero, NOT the original 4.
     expect(view.state.selection.main.head).toBe(2);
@@ -2766,5 +2818,55 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
     );
     expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(false);
     warnSpy.mockRestore();
+  });
+
+  it("(r13) held bytes that insert a sibling heading INTO a folded section do not leave it hidden after the view advance", () => {
+    // The view advance (edit-sync's `showHeld`, on a write re-grant) goes
+    // through the SAME reseed helper as a host Document, so the fold
+    // reconciliation runs for it too — the (r7) shape, with the inserted
+    // heading coming from the user's own held bytes instead of the host.
+    // [revert: skip the fold reconcile for the showHeld caller (e.g. gate the
+    // reconcile block on `afterDispatch !== undefined`) → the remapped fold
+    // swallows "# New"]
+    const { handle, view, commit } = mount();
+    const doc = "# One\n\nalpha\nbravo\n\n# Two\n\ncharlie";
+    handle.applyDocument({ content: doc, eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
+    settledView(view, 5000);
+    const line1 = view.state.doc.line(1); // "# One"
+    const canonical = foldable(view.state, line1.from, line1.to);
+    if (!canonical) {
+      throw new Error("heading line should be foldable");
+    }
+    vi.useFakeTimers();
+    // The user types a new section into "# One"'s body.
+    const next = doc.replace("alpha", "alpha\n\n# New\n\ngamma");
+    const insertAt = doc.indexOf("alpha") + "alpha".length;
+    view.dispatch({ changes: { from: insertAt, insert: "\n\n# New\n\ngamma" } });
+    vi.advanceTimersByTime(300); // posts `next` — in flight
+    expect(editPosts()).toHaveLength(1);
+    // Write is revoked: the readonly Document rewinds the view to the host's
+    // bytes (the un-acked Edit is demoted into the buffer and held).
+    handle.applyDocument({ content: doc, eol: "\n", canWrite: false, docVersion: 1, ...PAIR });
+    commit(false);
+    expect(view.state.sliceDoc()).toBe(doc);
+    // While rewound, "# One" is folded at its canonical range — which, in this
+    // text, spans the whole body up to "# Two".
+    view.dispatch({ effects: foldEffect.of(canonical) });
+    expect(foldedCount(view)).toBe(1);
+
+    // Write re-granted: the drain brings the view forward to the held bytes,
+    // inserting "# New" INTO the folded span.
+    handle.applyDocument({ content: doc, eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
+    commit(false);
+    expect(view.state.sliceDoc()).toBe(next);
+    expect(editPosts()).toHaveLength(2);
+
+    // Still collapsed, but clamped back to "# One"'s real section end.
+    expect(foldedCount(view)).toBe(1);
+    const newHeadingPos = next.indexOf("# New");
+    const [range] = foldRanges(view);
+    expect(range.to).toBeLessThanOrEqual(newHeadingPos); // "# New" NOT concealed
+    const freshLine1 = view.state.doc.line(1);
+    expect(foldable(view.state, freshLine1.from, freshLine1.to)).toEqual(range);
   });
 });

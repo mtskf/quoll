@@ -198,11 +198,11 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   // the next flush — the hold is the only signal those specific edits get, and
   // the discard in its way may be about an unrelated, earlier loss.
   //
-  // The hold text promises a RETRY, not durability: after a re-grant the replay
-  // reaches the host, but the view was reseeded at the flip and a keystroke
-  // typed from it can still overwrite those bytes (edit-sync's drain comment,
-  // ACCEPTED RESIDUAL). It is conditional, so it is not auto-cleared when write
-  // returns — it does not become false.
+  // The hold text promises a RETRY, not durability: on a re-grant edit-sync's
+  // drain brings the view forward to the held bytes and replays them, but until
+  // the host has applied that replay they exist only in this iframe. It is
+  // conditional, so it is not auto-cleared when write returns — it does not
+  // become false.
   //
   // No auto-fade: a real byte loss that disappears on a timer is back to being
   // no signal at all.
