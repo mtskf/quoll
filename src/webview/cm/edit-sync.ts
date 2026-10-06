@@ -988,8 +988,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
     if (!canPost()) {
       return;
     }
-    const held = buffered;
-    const content = held.content;
+    const content = buffered.content;
     // I3: these exact bytes already went out at this base and the host's answer
     // did not carry them. Keep the buffer and wait — see `lastPost`.
     if (
