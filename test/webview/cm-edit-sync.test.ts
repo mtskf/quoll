@@ -665,6 +665,30 @@ describe("cm edit-sync — un-acked bytes keep a carrier (demotion + post dedupe
     expect(s.posted.length).toBe(1);
   });
 
+  it("a REFUSED replay is not re-posted at the unchanged base", () => {
+    // The replay is the third posting site, and its answer is remembered like
+    // the other two: each refusal demotes "sxy" back into the buffer, and the
+    // drain must not send the identical (content, base) pair straight back.
+    // [revert: remove `notePost(content)` in replayIfNeeded → ("sxy", 2) is
+    // re-posted once per refusal]
+    const s = postedSx();
+    s.type("sxy"); // buffered behind the in-flight "sx"
+    s.sync.onHostSnapshot(2, true, 0, 1, "sx"); // ack of "sx"
+    s.sync.onReducerCommit(false); // replay ("sxy", 2)
+    expect(s.posted.length).toBe(2);
+    for (let i = 0; i < 3; i++) {
+      s.sync.onHostSnapshot(2, true, 0, 1, "sx"); // the host refuses the replay
+      s.sync.onReducerCommit(false);
+    }
+    expect(s.posted).toEqual([
+      { content: "sx", baseDocVersion: 1 },
+      { content: "sxy", baseDocVersion: 2 },
+    ]);
+    s.sync.onHostSnapshot(3, true, 0, 1, "sx");
+    s.sync.onReducerCommit(false);
+    expect(s.posted.at(-1)).toEqual({ content: "sxy", baseDocVersion: 3 });
+  });
+
   describe("only a post that SUCCEEDED is remembered", () => {
     // `post` RETURNING false is the contract (editor.ts's postEditMessage turns
     // a postMessage throw into it). A post that never left must not make its
@@ -893,8 +917,12 @@ describe("cm edit-sync — showHeld brings the view forward before a replay", ()
       expect(() => h.sync.onReducerCommit(false)).not.toThrow();
       expect(error).toHaveBeenCalledTimes(1);
       expect(error.mock.calls[0][0]).toBe("[quoll] showHeld threw");
-      // Buffered document bytes never reach the console.
-      expect(JSON.stringify(error.mock.calls[0].slice(0, 1))).not.toContain("sxy");
+      // Triageable like the other held-byte logs: how much is held, and what
+      // the user is left looking at.
+      // [revert: drop the lengths object from the console.error → undefined]
+      expect(error.mock.calls[0][2]).toEqual({ heldLength: 3, liveLength: 1 });
+      // Buffered document bytes never reach the console ([1] is the Error).
+      expect(JSON.stringify([error.mock.calls[0][0], error.mock.calls[0][2]])).not.toContain("sxy");
       expect(h.posted.length).toBe(1);
       expect(h.doc).toBe("s");
       fail = false;
@@ -928,6 +956,100 @@ describe("cm edit-sync — showHeld brings the view forward before a replay", ()
     h.sync.discardBuffer();
     h.sync.onReducerCommit(false);
     expect(h.events).toEqual(["post:sx@1"]);
+  });
+
+  describe("is NOT called by the drain a failing post re-enters", () => {
+    // The real wiring: editor.ts's postEditMessage answers a post it cannot
+    // send by dispatching `serialize-error`, whose commit closes the gate and
+    // drives onReducerCommit(false) — a drain — from INSIDE `post`, before
+    // trySend / flush have stamped the bytes being posted. The buffer is then
+    // one keystroke BEHIND the view, so showing it would rewind the view and
+    // the next keystroke would be typed without the bytes that just failed.
+    // The REAL debounce (no `scheduleFlush` stub): flush reads the module's own
+    // timer to decide what is pending.
+    // [revert: run the showHeld block before `if (!canPost()) return` in
+    // replayIfNeeded → showHeld is called with the stale buffer and the view
+    // is rewound to it, in both cases]
+    function reentrantPostFailure() {
+      const h = {
+        doc: "s",
+        posted: [] as Posted[],
+        gateOpen: true,
+        failNextPost: false,
+        showHeld: vi.fn((content: string) => {
+          h.doc = content; // what editor.ts does
+        }),
+        sync: null as unknown as ReturnType<typeof createEditSync>,
+      };
+      h.sync = createEditSync({
+        getDoc: () => h.doc,
+        canPost: () => h.gateOpen,
+        post: (content, baseDocVersion) => {
+          if (h.failNextPost) {
+            h.failNextPost = false;
+            h.gateOpen = false; // reducer: serializeError set, editInFlight false
+            h.sync.onReducerCommit(false);
+            return false;
+          }
+          h.posted.push({ content, baseDocVersion });
+          return true;
+        },
+        showHeld: h.showHeld,
+      });
+      h.sync.onHostSnapshot(1, true, 0, 1, "s");
+      return h;
+    }
+    const type = (h: ReturnType<typeof reentrantPostFailure>, next: string) => {
+      h.doc = next;
+      h.sync.onLocalChange();
+    };
+
+    it("(f) from trySend: the view keeps the keystroke being posted, and the retry carries it", () => {
+      vi.useFakeTimers();
+      try {
+        const h = reentrantPostFailure();
+        type(h, "sa");
+        vi.advanceTimersByTime(300); // posts "sa" at base 1
+        h.sync.onHostSnapshot(1, true, 0, 1, "s"); // not carried: "sa" demoted
+        h.sync.onReducerCommit(false); // held by the dedupe
+        expect(h.posted).toEqual([{ content: "sa", baseDocVersion: 1 }]);
+        h.failNextPost = true;
+        type(h, "sab");
+        vi.advanceTimersByTime(300); // trySend → post fails, re-entering the drain
+        expect(h.showHeld).not.toHaveBeenCalled();
+        expect(h.doc).toBe("sab");
+        expect(h.posted.length).toBe(1);
+        h.gateOpen = true; // the gate clears
+        h.sync.onReducerCommit(false);
+        expect(h.posted.at(-1)).toEqual({ content: "sab", baseDocVersion: 1 });
+        expect(h.showHeld).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("(g) from flush: the view keeps the in-window keystroke, and the retry carries it", () => {
+      vi.useFakeTimers();
+      try {
+        const h = reentrantPostFailure();
+        type(h, "sx");
+        vi.advanceTimersByTime(300); // posts "sx" at base 1
+        type(h, "sxy");
+        vi.advanceTimersByTime(300); // buffered behind the in-flight "sx"
+        type(h, "sxyz"); // still inside the debounce window
+        h.failNextPost = true;
+        h.sync.flush(); // force-post of "sxyz" fails, re-entering the drain
+        expect(h.showHeld).not.toHaveBeenCalled();
+        expect(h.doc).toBe("sxyz");
+        expect(h.posted).toEqual([{ content: "sx", baseDocVersion: 1 }]);
+        h.gateOpen = true; // the gate clears
+        h.sync.onReducerCommit(false);
+        expect(h.posted.at(-1)).toEqual({ content: "sxyz", baseDocVersion: 1 });
+        expect(h.showHeld).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });
 

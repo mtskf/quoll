@@ -151,6 +151,12 @@ export type EditSyncOptions = {
    *  this module has not captured yet, and a drain that is not a Document's (a
    *  theme change, `edit-rejected`, a gate clear — none of them cancels the
    *  timer first) would overwrite it.
+   *  NOT called while the serialize-error gate (`canPost`) is closed. A drain
+   *  that finds it closed is never a Document's — the reducer's `document` arm
+   *  always clears the gate — so the view has not been rewound; it can only be
+   *  AHEAD of the buffer. That is the drain a failing `post` re-enters, before
+   *  the bytes being posted have been stamped, and showing the older buffer
+   *  there would rewind the view behind the keystroke that just failed to send.
    *  A throw is caught at the call site and logged, and that drain posts
    *  nothing; the buffer is kept for the next one.
    *  Unset → the view is left as it is and the replay proceeds. */
@@ -849,8 +855,9 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
     //      moved or write was re-granted in between (`lastPost`). A keystroke or
     //      a teardown `flush` is a new trigger and is not deduped.
     //
-    // RESIDUALS — stated, not handled; each needs the protocol to correlate a
-    // Document with the Edit it answers, which the wire does not carry today:
+    // RESIDUALS — stated, not handled. The first two need the protocol to
+    // correlate a Document with the Edit it answers, which the wire does not
+    // carry today:
     //   - Same-epoch content this webview cannot tie to its own held bytes. The
     //     host has paths that deliver foreign bytes WITHOUT an epoch advance
     //     (host-session-core's own ACCEPTED RESIDUALs: an unobserved settle, a
@@ -866,11 +873,13 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
     //     buffered, the bytes stay on screen, held, and are not re-posted until
     //     the version advances or the user types / leaves the editor (I3). The
     //     host shows its own failure message; this side shows nothing.
+    // The other two are local to this webview — nothing on the wire is missing,
+    // the failure is observable right here — and are simply not handled:
     //   - The caret after `showHeld` is clamped like any reseed's, so after a
     //     readonly rewind + re-grant it can sit before the restored bytes.
     //   - A throwing `showHeld` leaves the view at the host's bytes with the
     //     buffer held; a keystroke typed there posts the view and replaces the
-    //     buffer.
+    //     buffer, with a console error as the only record.
     //
     // Doing this here — after applyDocument reseeded and the reducer committed —
     // is what lets the judgement read the settled world instead of predicting it.
@@ -959,11 +968,23 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
     if (buffered === null || !seeded || editInFlight || !canWrite) {
       return;
     }
+    if (!canPost()) {
+      return;
+    }
     // Writable with a surviving buffer: the view must SHOW those bytes before
     // they are posted (I2) — a readonly Document may have rewound it, or the
-    // buffer was demoted under a Document that reseeded. Before the `canPost()`
-    // and dedupe guards on purpose: bytes held back from the wire must still be
-    // on screen, or the next keystroke would be typed without them.
+    // buffer was demoted under a Document that reseeded.
+    // INSIDE the `canPost()` gate. A drain that finds the gate closed is never
+    // one where a host Document rewound the view: the reducer's `document` arm
+    // always commits `serializeError: null`, so a Document's drain runs with
+    // the gate open. With the gate closed the view can only be AHEAD of the
+    // buffer — the case that matters is the drain a failing `post` re-enters
+    // (`postEditMessage` dispatches `serialize-error` from inside the call),
+    // which runs before trySend / flush have stamped the bytes being posted.
+    // Showing the buffer there would rewind the view behind that keystroke, and
+    // the next one would be typed without it.
+    // BEFORE the dedupe: bytes I3 holds back from the wire must still be on
+    // screen, or the next keystroke would be typed without them.
     // `timer === null`: a live timer means the view holds a keystroke not yet
     // captured, and this drain may not be a Document's (which cancels the timer
     // first) — overwriting the view would destroy it. The pending flush will
@@ -974,8 +995,13 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
       } catch (err) {
         // Not posted: the buffer stays for the next drain. Posting bytes the
         // screen failed to show would recreate the split this step prevents.
-        // Error only: buffered document bytes must never reach the console.
-        console.error("[quoll] showHeld threw", err);
+        // Lengths only: buffered document bytes must never reach the console.
+        // `buffered?.`: the callback may have discarded the buffer before it
+        // threw.
+        console.error("[quoll] showHeld threw", err, {
+          heldLength: buffered?.content.length ?? null,
+          liveLength: opts.getDoc().length,
+        });
         return;
       }
       // `showHeld` is caller code that dispatches on the view; it can re-enter
@@ -984,9 +1010,6 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
       if (buffered === null || editInFlight || !canWrite) {
         return;
       }
-    }
-    if (!canPost()) {
-      return;
     }
     const content = buffered.content;
     // I3: these exact bytes already went out at this base and the host's answer
