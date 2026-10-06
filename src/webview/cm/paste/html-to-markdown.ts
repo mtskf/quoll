@@ -14,10 +14,10 @@
 //    selection) — no paste of any kind happens.
 //  - `emittedMarkdownSyntax === false` — the walk produced escaped text and line
 //    structure only. The conversion is valid Markdown, but the caller prefers the
-//    clipboard's own `text/plain` bytes over this module's escaped rendering — or
-//    lets imagePaste have the event when an image file rides along. Only when
-//    NEITHER exists does it insert this module's output after all, so the escaped
-//    rendering is a live path, not dead code.
+//    clipboard's own `text/plain` bytes over this module's escaped rendering.
+//    With no plain flavour — or with an image file riding along, where imagePaste
+//    keeps the plain flavour from ever landing — it inserts this module's output
+//    after all, so the escaped rendering is a live path, not dead code.
 //    This is the dominant path for clipboards that carry a merely presentational
 //    HTML flavour. See the `HtmlToMarkdownResult` docblock at the bottom.
 //

@@ -833,10 +833,10 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // paths where this handler SWALLOWS a paste (in-code, null conversion): both
         // exempt a clipboard carrying an image file item (hasImageFileItem) — NOT
         // because an image copy lacks a text/html flavour; copying an image out of a
-        // web page carries both. The insert path does NOT exempt it: a fragment that
-        // emits real Markdown syntax is inserted here even when an image rides along,
-        // and imagePaste never runs. Accepted because a "Copy image" clipboard's HTML
-        // is a bare <img>, which converts to nothing → null → the exempted path.
+        // web page carries both. The insert path hands the event on instead: with an
+        // image item riding along it inserts the conversion and returns false
+        // un-prevented, so imagePaste runs next and anchors after the inserted text.
+        // (A "Copy image" clipboard's HTML is a bare <img> → null → the exempted path.)
         // Non-convertible → return false, plain paste runs.
         richHtmlPaste({ canWrite: () => opts.getState().canWrite }),
         // Paste/drop image ingestion: capture image files, post image-write, and
