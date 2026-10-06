@@ -40,6 +40,101 @@ const textTab =
   (t: vscode.Tab): boolean =>
     t.input instanceof vscode.TabInputText && t.input.uri.toString() === uri.toString();
 
+// Spies for the two external commands plus a clipboard sentinel. The test host
+// runs with --disable-extensions (test/extension/launch.ts), so neither id is
+// registered; a registerCommand collision therefore means a broken environment
+// and must FAIL the test, not weaken it.
+async function armHandoffObservers(
+  which: { claude: boolean; codex: boolean } = { claude: true, codex: true }
+): Promise<{
+  calls: { claude: number; codex: number };
+  sentinel: string;
+  dispose(): void;
+}> {
+  const calls = { claude: 0, codex: 0 };
+  const subs: vscode.Disposable[] = [];
+  const dispose = (): void => {
+    for (const sub of subs.splice(0)) {
+      sub.dispose();
+    }
+  };
+  const sentinel = "quoll-e2e-handoff-reject-sentinel";
+  try {
+    // Literal ids: the E2E tsconfig (rootDir ".", include = launch/temp-root/e2e)
+    // cannot import from src/. They mirror CLAUDE_INSERT_AT_MENTIONED_COMMAND and
+    // CODEX_ADD_FILE_COMMAND.
+    if (which.claude) {
+      subs.push(
+        vscode.commands.registerCommand("claude-code.insertAtMentioned", () => {
+          calls.claude += 1;
+        })
+      );
+    }
+    if (which.codex) {
+      subs.push(
+        vscode.commands.registerCommand("chatgpt.addFileToThread", () => {
+          calls.codex += 1;
+        })
+      );
+    }
+    await vscode.env.clipboard.writeText(sentinel);
+  } catch (err) {
+    // A failure part-way (second registration throws / clipboard rejects) would
+    // otherwise LEAK the registrations already made: the caller never receives
+    // the handle, so its finally cannot dispose, and a leaked insert-command spy
+    // breaks the recovery test's "Claude command unregistered" premise.
+    dispose();
+    throw err;
+  }
+  return { calls, sentinel, dispose };
+}
+
+const HANDOFF_REFUSAL = /can't hand off this file/i;
+
+// Lock-free rejection setup: open a temp doc, wait for the seed, post an Edit
+// that fails the write-gate, wait for edit-rejected.
+async function openAndReject(name: string) {
+  const harness = await getHarness();
+  const uri = tempMd(name);
+  await vscode.commands.executeCommand("vscode.openWith", uri, VIEW_TYPE);
+  const seed = await harness.waitForEvent(isDocumentEvent, 8000);
+  const panel = harness.activePanel;
+  assert.ok(panel);
+  harness.clearEvents();
+  panel.simulateInbound({
+    protocol: PROTOCOL_VERSION,
+    type: "edit",
+    content: "[bad](javascript:alert(1))",
+    baseDocVersion: seed.message.docVersion,
+  });
+  await harness.waitForEvent(isEditRejectedEvent, 5000);
+  return { harness, uri, panel, seed };
+}
+
+const claudeHandoffMessage = {
+  protocol: PROTOCOL_VERSION,
+  type: "context-handoff",
+  hasSelection: true,
+  startLine: 1,
+  endLine: 3,
+} as const;
+const codexHandoffMessage = { protocol: PROTOCOL_VERSION, type: "codex-context-handoff" } as const;
+
+async function assertRefused(
+  uri: vscode.Uri,
+  obs: Awaited<ReturnType<typeof armHandoffObservers>>
+): Promise<void> {
+  await tick(800); // give any erroneous path time to run
+  assert.strictEqual(obs.calls.claude, 0, "Claude insert command must not run");
+  assert.strictEqual(obs.calls.codex, 0, "Codex add-file command must not run");
+  assert.strictEqual(
+    await vscode.env.clipboard.readText(),
+    obs.sentinel,
+    "clipboard must be untouched"
+  );
+  assert.ok(!allTabs().some(textTab(uri)), "no temp text tab may remain");
+}
+
 describe("host-rejects-edit-preserves-webview", function () {
   this.timeout(20000);
 
@@ -720,5 +815,143 @@ describe("host-rejects-edit-preserves-webview", function () {
       resync !== undefined,
       "visible-edge did not post a Document after the flag cleared — false positive suppression"
     );
+  });
+
+  it("context-handoff while a rejection is pending is refused", async () => {
+    const { harness, uri, panel } = await openAndReject("handoff-refused-claude.md");
+    const obs = await armHandoffObservers();
+    try {
+      panel.simulateInbound(claudeHandoffMessage);
+      await harness.waitForError((m) => HANDOFF_REFUSAL.test(m), 5000);
+      await assertRefused(uri, obs);
+    } finally {
+      obs.dispose();
+    }
+  });
+
+  it("codex-context-handoff while a rejection is pending is refused", async () => {
+    const { harness, uri, panel } = await openAndReject("handoff-refused-codex.md");
+    const obs = await armHandoffObservers();
+    try {
+      panel.simulateInbound(codexHandoffMessage);
+      await harness.waitForError((m) => HANDOFF_REFUSAL.test(m), 5000);
+      // Tripwire for "nothing else happened": the Codex handler has no clipboard
+      // path, so this sentinel check cannot catch a Codex-specific regression by
+      // itself — the command spy and the notice carry the real pin.
+      await assertRefused(uri, obs);
+    } finally {
+      obs.dispose();
+    }
+  });
+
+  for (const arm of [
+    { name: "context-handoff", file: "handoff-drain-claude.md", message: claudeHandoffMessage },
+    {
+      name: "codex-context-handoff",
+      file: "handoff-drain-codex.md",
+      message: codexHandoffMessage,
+    },
+  ] as const) {
+    it(`deferred ${arm.name} is refused when a stash drained by the releasing settlement is rejected`, async () => {
+      // Same lock-holding choreography as the deferred switch-to-text test: the
+      // handoff arrives while the write lock is held, the settlement that
+      // releases the barrier drains a rejected stash, and the DRAIN-time entry
+      // check of the handler must refuse.
+      const harness = await getHarness();
+      const uri = tempMd(arm.file);
+      await vscode.commands.executeCommand("vscode.openWith", uri, VIEW_TYPE);
+      const seed = await harness.waitForEvent(isDocumentEvent, 8000);
+
+      const panel = harness.activePanel;
+      assert.ok(panel);
+      const doc = panel.document;
+      harness.clearEvents();
+
+      const seedV = seed.message.docVersion;
+      const gate = deferred<boolean>();
+      const obs = await armHandoffObservers();
+      try {
+        let calls = 0;
+        harness.applyEditOverride = (edit) => {
+          calls += 1;
+          if (calls === 1) {
+            return vscode.workspace.applyEdit(edit).then((ok) => gate.promise.then(() => ok));
+          }
+          return vscode.workspace.applyEdit(edit);
+        };
+
+        panel.simulateInbound({
+          protocol: PROTOCOL_VERSION,
+          type: "edit",
+          content: "first",
+          baseDocVersion: seedV,
+        });
+        assert.strictEqual(calls, 1, "edit A must acquire the write lock (applyEdit called)");
+
+        const applied1Deadline = Date.now() + 3000;
+        while (doc.getText() !== "first" && Date.now() < applied1Deadline) {
+          await tick(20);
+        }
+        assert.strictEqual(doc.getText(), "first", "edit A must land while in flight");
+
+        // Edit B (invalid) arrives WHILE the lock is held -> stashed.
+        panel.simulateInbound({
+          protocol: PROTOCOL_VERSION,
+          type: "edit",
+          content: "[bad](javascript:alert(1))",
+          baseDocVersion: seedV,
+        });
+
+        // The handoff arrives WHILE the lock is held -> deferred behind the barrier.
+        panel.simulateInbound(arm.message);
+        await tick(300);
+        assert.strictEqual(obs.calls.claude, 0, "deferred: Claude command not yet run");
+        assert.strictEqual(obs.calls.codex, 0, "deferred: Codex command not yet run");
+
+        gate.resolve(true);
+        await harness.waitForEvent(isEditRejectedEvent, 5000);
+        await harness.waitForError((m) => HANDOFF_REFUSAL.test(m), 5000);
+        await assertRefused(uri, obs);
+      } finally {
+        gate.resolve(true);
+        obs.dispose();
+      }
+    });
+  }
+
+  it("both handoffs resume once a follow-up accepted Edit clears the rejection", async () => {
+    const { harness, panel, seed } = await openAndReject("handoff-recover.md");
+    const seedV = seed.message.docVersion;
+    panel.simulateInbound({
+      protocol: PROTOCOL_VERSION,
+      type: "edit",
+      content: "# fixed\n",
+      baseDocVersion: seedV,
+    });
+    await harness.waitForEvent((e) => isDocumentEvent(e) && e.message.docVersion > seedV, 8000);
+
+    // Claude command left UNREGISTERED so the Claude arm takes the fallback tier,
+    // whose terminal observable is the clipboard.
+    const obs = await armHandoffObservers({ claude: false, codex: true });
+    try {
+      panel.simulateInbound({ ...claudeHandoffMessage, hasSelection: false });
+      let clip = obs.sentinel;
+      const claudeDeadline = Date.now() + 8000;
+      while (clip === obs.sentinel && Date.now() < claudeDeadline) {
+        await tick(100);
+        clip = await vscode.env.clipboard.readText();
+      }
+      assert.ok(clip.startsWith("@"), `clipboard should hold an @-reference, got ${clip}`);
+      assert.ok(clip.endsWith("handoff-recover.md"), `reference should name the file, got ${clip}`);
+
+      panel.simulateInbound(codexHandoffMessage);
+      const codexDeadline = Date.now() + 5000;
+      while (obs.calls.codex < 1 && Date.now() < codexDeadline) {
+        await tick(100);
+      }
+      assert.strictEqual(obs.calls.codex, 1, "Codex add-file command must run once recovered");
+    } finally {
+      obs.dispose();
+    }
   });
 });
