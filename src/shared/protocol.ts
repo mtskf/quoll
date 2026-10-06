@@ -270,14 +270,20 @@ export function isDocumentEol(value: unknown): value is DocumentEol {
  *
  *  `settledEditId` is the highest `EditMessage.editId` this host session has
  *  received (0 before the first Edit) — REQUIRED, hence `PROTOCOL_VERSION` 3.
- *  It reads as "the host is done with every Edit up to this id" — DONE, not
- *  saved: the Edit was applied, refused, or dropped (a stashed Edit replaced
- *  by a newer one is dropped without a verdict of its own). That holds
- *  because the host emits a Document only while its write lock is free, and
- *  with the lock free no received Edit is still waiting (it was judged on
- *  arrival, or held under the lock and resolved by the settlement or recovery
- *  that released it). Like `docVersion` it is ordered only within one
- *  `epochGeneration`. The webview does not consume it yet. */
+ *  For the webview session that minted those ids it reads as "the host is done
+ *  with every Edit up to this id" — DONE, not saved: the Edit was applied,
+ *  refused, or dropped (a stashed Edit replaced by a newer one is dropped
+ *  without a verdict of its own). That holds because the host emits a Document
+ *  only while its write lock is free, and with the lock free no received Edit
+ *  is still waiting (it was judged on arrival, or held under the lock and
+ *  resolved by the settlement or recovery that released it).
+ *
+ *  It is NOT comparable across a whole `epochGeneration`: ids are minted per
+ *  webview session (a reloaded webview restarts at 1) while the host's mark
+ *  never goes down within its session, so after a reload the mark can exceed
+ *  ids the new webview has not sent yet. A consumer must mint above the last
+ *  `settledEditId` it has seen before it compares. The webview does neither
+ *  yet: it does not read this field, and it does not resume minting above it. */
 export type DocumentMessage = Envelope & {
   type: "document";
   content: string;
@@ -453,7 +459,8 @@ export type ReadyMessage = Envelope & {
  *  that failed to send still consumed its id). The host echoes the highest id
  *  it has received on every Document (`DocumentMessage.settledEditId`), which
  *  is what lets the webview tell whether a Document was produced before or
- *  after the host judged a given Edit. */
+ *  after the host judged a given Edit — within one webview session only; see
+ *  `DocumentMessage.settledEditId` for the reload caveat. */
 export type EditMessage = Envelope & {
   type: "edit";
   content: string;
