@@ -651,11 +651,13 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
   // `canWrite=false` doc genuinely non-editable, so a docChanged under readonly
   // can only be programmatic, and retaining it would let a later write-granting
   // ack replay content that was never legitimately editable. `buffered`, when
-  // non-null after the seed, is the opposite — every site that CAPTURES into it
-  // requires `canWrite`, and the one site that fills it without that check (the
-  // demotion in `onHostSnapshot`) moves an `inFlight` Edit, which was itself
-  // posted behind a `canWrite` check — so it holds bytes typed while writable
-  // that the host has not ACKED. Not necessarily un-applied: flush's retain arm
+  // non-null after the seed, is the opposite. trySend and flush capture into it
+  // only behind a `canWrite` check; exactly two sites fill it without one: the
+  // demotion in `onHostSnapshot`, which moves an `inFlight` Edit that was itself
+  // posted behind a `canWrite` check, and the pre-seed `cancelPendingFlush`
+  // capture (`!seeded` leaves `canWrite` false), which survives the seed and is
+  // judged by the seed's drain (see the flush JSDoc). Either way it holds bytes
+  // the host has not ACKED. Not necessarily un-applied: flush's retain arm
   // keeps bytes it just force-posted, which the host may well carry —
   // `noteReadonlyHold` checks.
   //
