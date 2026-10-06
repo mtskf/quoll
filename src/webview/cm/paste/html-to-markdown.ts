@@ -41,9 +41,10 @@
 //    hand would come back as `\- \[ \]` — which is why the caller defers on
 //    `emittedMarkdownSyntax === false`. On an ordinary clipboard, one carrying a
 //    safe plain fallback, that defer inserts the clipboard's own bytes verbatim,
-//    exactly as typing them would. It is NOT unconditional: when nothing downstream
-//    can absorb the defer (an HTML-only clipboard) the caller inserts this escaped
-//    rendering after all, because the alternative is a paste that does nothing.
+//    exactly as typing them would. It is NOT unconditional: the caller inserts this
+//    escaped rendering after all whenever the plain flavour cannot land — there is
+//    none (an HTML-only clipboard), or an image file item rides along and
+//    imagePaste consumes the event before CM's plain paste can run.
 //  - Whether a container is visually EMPTY is decided by ONE rule —
 //    `blankAfterInvisible` (full-strip of the `\p{DI} ∪ \p{Cf}` format+ignorable class +
 //    whitespace), measured over

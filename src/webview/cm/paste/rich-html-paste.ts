@@ -1,7 +1,8 @@
 // CodeMirror paste handler: when the clipboard carries a `text/html` fragment
 // that converts to Markdown AND that conversion actually emitted Markdown syntax,
 // insert the Markdown instead of the raw HTML/plain text. A fragment can convert
-// perfectly and still not be inserted — see the third defer below.
+// perfectly and still not be inserted — see the no-syntax defer in the handler
+// (and its image-item exception, which inserts it after all).
 //
 // Follows html-table-paste.ts — Prec.high, defer (return false WITHOUT
 // preventDefault so the handlers after this one still run), preventDefault only

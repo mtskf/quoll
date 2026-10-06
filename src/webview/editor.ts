@@ -837,7 +837,9 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // image item riding along it inserts the conversion and returns false
         // un-prevented, so imagePaste runs next and anchors after the inserted text.
         // (A "Copy image" clipboard's HTML is a bare <img> → null → the exempted path.)
-        // Non-convertible → return false, plain paste runs.
+        // Non-convertible → normally return false so imagePaste / plain paste run;
+        // swallowed only when nothing downstream could insert and a selection is at
+        // stake (canDeferWithoutDataLoss in rich-html-paste.ts).
         richHtmlPaste({ canWrite: () => opts.getState().canWrite }),
         // Paste/drop image ingestion: capture image files, post image-write, and
         // insert the relative link at a position-mapped anchor on the host's
