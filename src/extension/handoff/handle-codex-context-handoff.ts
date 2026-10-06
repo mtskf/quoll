@@ -19,6 +19,7 @@
 // the manual smoke + this comment as the canary.
 
 import { makeHandoffGuards } from "./handoff-guards.js";
+import { type RejectionGateDeps, refusedForRejection } from "./rejection-gate.js";
 
 const { tryBool, tryShow } = makeHandoffGuards("codex-context-handoff");
 
@@ -42,11 +43,17 @@ export type HandleCodexContextHandoffDeps<U> = {
   showInfo: (message: string) => Thenable<unknown>;
   /** window.showWarningMessage bound — save-failure / command-missing abort. */
   showWarn: (message: string) => Thenable<unknown>;
-};
+} & RejectionGateDeps;
 
 export async function handleCodexContextHandoff<U>(
   deps: HandleCodexContextHandoffDeps<U>
 ): Promise<void> {
+  // Refuse while a write-gate rejection is pending: the draft is webview-only,
+  // so the file Codex would read is not what the user sees.
+  if (refusedForRejection(deps)) {
+    return;
+  }
+
   // Save first so Codex reads the file on disk, not stale bytes. A FAILED save
   // (false / throw) means the disk is still stale — abort with a warning that
   // names the FAILURE (not "just save it": the automatic save just failed, so
@@ -58,6 +65,11 @@ export async function handleCodexContextHandoff<U>(
     const saved = await tryBool(deps.save, "document.save()");
     if (!saved) {
       await tryShow(deps.showWarn, "Quoll: couldn't save this file, so it wasn't added to Codex.");
+      return;
+    }
+    // Re-check after the await: a rejection that landed during save() must not
+    // reach addFileToThread.
+    if (refusedForRejection(deps)) {
       return;
     }
   }

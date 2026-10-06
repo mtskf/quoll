@@ -15,7 +15,9 @@
 // vscode-free logic stays pinned by the handle-context-handoff /
 // handle-codex-context-handoff / reveal-for-mention-cleanup unit suites + the
 // context-handoff-reveal-cleanup / handoff-edit-applied-barrier /
-// reveal-for-mention-platform e2e, which this only re-wires.
+// reveal-for-mention-platform e2e, which this only re-wires. It also READS the
+// session's pending-rejection flag (via the injected predicate, read-only) and
+// both arms refuse while it is set.
 
 import type { Tab, TextDocument } from "vscode";
 import {
@@ -30,6 +32,7 @@ import {
   workspace,
 } from "vscode";
 import type { EditSettledBarrier } from "../session/edit-settled-barrier.js";
+import { REJECTION_BLOCKS_HANDOFF_MESSAGE } from "../surface/rejection-registry.js";
 import { handleCodexContextHandoff } from "./handle-codex-context-handoff.js";
 import { type HandoffRevealSelection, handleContextHandoff } from "./handle-context-handoff.js";
 import {
@@ -55,6 +58,14 @@ export interface ContextHandoffWiringDeps {
    *  before showTextDocument, so the caret-handoff tracker does not collapse the
    *  line-range selection this reveal sets. */
   readonly armRevealCaretSuppression: () => void;
+  /** True while this panel's host session holds a pending write-gate rejection.
+   *  Both arms refuse then: the rejected draft is webview-only, so the document
+   *  the handoff would reference is not what the user sees. Read by the pure
+   *  handlers at entry AND after each await (see their refusedForRejection). */
+  readonly isRejectionPending: () => boolean;
+  /** The panel's showError (total; harness-observable). Used for the refusal
+   *  notice only — the handlers' other surfaces stay on `window.*` unchanged. */
+  readonly showError: (message: string) => void;
 }
 
 export interface ContextHandoffWiring {
@@ -70,6 +81,11 @@ export interface ContextHandoffWiring {
 
 export function createContextHandoffWiring(deps: ContextHandoffWiringDeps): ContextHandoffWiring {
   const { document, viewType, editSettledBarrier } = deps;
+
+  // One refusal surface for both arms. Routed through the panel's showError
+  // (not window.showErrorMessage) so it is recorded by the test harness and
+  // reads at the same severity as the switch-to-text refusal.
+  const showRejectionBlocked = (): void => deps.showError(REJECTION_BLOCKS_HANDOFF_MESSAGE);
 
   // NOTE: `codexHandoffInFlight` is a LOCAL of this factory function (one per
   // createContextHandoffWiring call = one per panel), NOT a module top-level
@@ -287,6 +303,8 @@ export function createContextHandoffWiring(deps: ContextHandoffWiringDeps): Cont
             // Tier-0 activeTextEditor choreography — hoisted closures above.
             revealForMention,
             isDocumentActiveTextEditor,
+            isRejectionPending: deps.isRejectionPending,
+            showRejectionBlocked,
           }
         );
       });
@@ -326,6 +344,8 @@ export function createContextHandoffWiring(deps: ContextHandoffWiringDeps): Cont
             executeCommand: (id, arg) => commands.executeCommand(id, arg),
             showInfo: (message) => window.showInformationMessage(message),
             showWarn: (message) => window.showWarningMessage(message),
+            isRejectionPending: deps.isRejectionPending,
+            showRejectionBlocked,
           }).finally(() => {
             codexHandoffInFlight = false;
           });
