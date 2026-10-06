@@ -269,8 +269,11 @@ export function clampHandoffSelection(
  *    "blocked"   — a write-gate rejection is pending after the reveal; no
  *                  command was sent. The caller returns (the notice is already
  *                  surfaced by refusedForRejection here). Deliberately a
- *                  return value, NOT a throw: the catch below turns every
- *                  throw into "fallback", which would write the stale reference.
+ *                  return value, NOT a throw: the catch below would turn a
+ *                  throw into "fallback", and the fallback tier re-checks
+ *                  before its clipboard write — a second refusal notice (and,
+ *                  if the rejection cleared during the cleanup await, a
+ *                  clipboard write).
  *  Between the reveal and the command, the activeTextEditor guard verifies the
  *  reveal actually took — the command silently no-ops on a wrong/absent
  *  activeTextEditor, so a failed guard resolves "fallback" rather than firing

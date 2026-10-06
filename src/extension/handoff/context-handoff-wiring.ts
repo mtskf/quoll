@@ -60,8 +60,8 @@ export interface ContextHandoffWiringDeps {
   readonly armRevealCaretSuppression: () => void;
   /** True while this panel's host session holds a pending write-gate rejection.
    *  Both arms refuse then: the rejected draft is webview-only, so the document
-   *  the handoff would reference is not what the user sees. Read by the pure
-   *  handlers at entry AND after each await (see their refusedForRejection). */
+   *  the handoff would reference is not what the user sees. When the handlers
+   *  read it is documented in handoff/rejection-gate.ts. */
   readonly isRejectionPending: () => boolean;
   /** The panel's showError (total; harness-observable). Used for the refusal
    *  notice only — the handlers' other surfaces stay on `window.*` unchanged. */
