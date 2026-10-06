@@ -100,6 +100,7 @@ describe("text-tab-close-preserves-edits", function () {
     harness.activePanel?.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 1,
       content: probe,
       baseDocVersion: latest.message.docVersion,
     });

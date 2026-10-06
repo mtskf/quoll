@@ -74,6 +74,7 @@ describe("replay-banner-delivery-failure-recovers (Codex N6 failure-aware replay
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 1,
       content: draft,
       baseDocVersion: seedV,
     });

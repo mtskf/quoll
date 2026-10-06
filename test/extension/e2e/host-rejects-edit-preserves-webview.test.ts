@@ -104,6 +104,7 @@ async function openAndReject(name: string) {
   panel.simulateInbound({
     protocol: PROTOCOL_VERSION,
     type: "edit",
+    editId: 1,
     content: "[bad](javascript:alert(1))",
     baseDocVersion: seed.message.docVersion,
   });
@@ -161,6 +162,7 @@ describe("host-rejects-edit-preserves-webview", function () {
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 2,
       content: `${seededContent}\n`,
       baseDocVersion: seed.message.docVersion,
     });
@@ -203,6 +205,7 @@ describe("host-rejects-edit-preserves-webview", function () {
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 3,
       content: `${seededContent}\n`,
       baseDocVersion: seedV,
     });
@@ -212,6 +215,7 @@ describe("host-rejects-edit-preserves-webview", function () {
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 4,
       content: fixed,
       baseDocVersion: seedV,
     });
@@ -259,6 +263,7 @@ describe("host-rejects-edit-preserves-webview", function () {
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 5,
       content: draft,
       baseDocVersion: seedV,
     });
@@ -335,6 +340,7 @@ describe("host-rejects-edit-preserves-webview", function () {
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 6,
       content: draft,
       baseDocVersion: seedV,
     });
@@ -383,6 +389,7 @@ describe("host-rejects-edit-preserves-webview", function () {
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 7,
       content: `${seededContent}\n`,
       baseDocVersion: seed.message.docVersion,
     });
@@ -437,6 +444,7 @@ describe("host-rejects-edit-preserves-webview", function () {
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 8,
       content: `${seededContent}\n`,
       baseDocVersion: seed.message.docVersion,
     });
@@ -501,6 +509,7 @@ describe("host-rejects-edit-preserves-webview", function () {
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 9,
       content: "first",
       baseDocVersion: seedV,
     });
@@ -518,6 +527,7 @@ describe("host-rejects-edit-preserves-webview", function () {
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 10,
       content: "[bad](javascript:alert(1))",
       baseDocVersion: seedV,
     });
@@ -580,6 +590,7 @@ describe("host-rejects-edit-preserves-webview", function () {
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 11,
       content: `${seededContent}\n[bad](javascript:alert(1))\n`,
       baseDocVersion: seedV,
     });
@@ -644,6 +655,7 @@ describe("host-rejects-edit-preserves-webview", function () {
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 12,
       content: `${seededContent}\n[bad](javascript:alert(1))\n`,
       baseDocVersion: seedV,
     });
@@ -688,6 +700,7 @@ describe("host-rejects-edit-preserves-webview", function () {
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 13,
       content: `${seededContent}\n[bad](javascript:alert(1))\n`,
       baseDocVersion: seedV,
     });
@@ -697,6 +710,7 @@ describe("host-rejects-edit-preserves-webview", function () {
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 14,
       content: `${seededContent}\nsafe line\n`,
       baseDocVersion: seedV,
     });
@@ -739,6 +753,7 @@ describe("host-rejects-edit-preserves-webview", function () {
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 15,
       content: `${seededContent}\n`,
       baseDocVersion: seedV,
     });
@@ -790,6 +805,7 @@ describe("host-rejects-edit-preserves-webview", function () {
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 16,
       content: `${seededContent}\n`,
       baseDocVersion: seedV,
     });
@@ -800,6 +816,7 @@ describe("host-rejects-edit-preserves-webview", function () {
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 17,
       content: fixed,
       baseDocVersion: seedV,
     });
@@ -883,6 +900,7 @@ describe("host-rejects-edit-preserves-webview", function () {
         panel.simulateInbound({
           protocol: PROTOCOL_VERSION,
           type: "edit",
+          editId: 18,
           content: "first",
           baseDocVersion: seedV,
         });
@@ -898,6 +916,7 @@ describe("host-rejects-edit-preserves-webview", function () {
         panel.simulateInbound({
           protocol: PROTOCOL_VERSION,
           type: "edit",
+          editId: 19,
           content: "[bad](javascript:alert(1))",
           baseDocVersion: seedV,
         });
@@ -925,6 +944,7 @@ describe("host-rejects-edit-preserves-webview", function () {
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 20,
       content: "# fixed\n",
       baseDocVersion: seedV,
     });

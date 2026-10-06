@@ -113,6 +113,7 @@ describe("crlf-roundtrip", function () {
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 1,
       content: editedCrlf,
       baseDocVersion: seed.message.docVersion,
     });
@@ -197,6 +198,7 @@ describe("crlf-roundtrip", function () {
       panel?.simulateInbound({
         protocol: PROTOCOL_VERSION,
         type: "edit",
+        editId: 2,
         content,
         baseDocVersion: base,
       });
@@ -261,6 +263,7 @@ describe("crlf-roundtrip", function () {
     harness.activePanel?.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 3,
       content: "a\nbc",
       baseDocVersion: settled.message.docVersion,
     });
@@ -412,6 +415,7 @@ describe("crlf-roundtrip", function () {
       panel.simulateInbound({
         protocol: PROTOCOL_VERSION,
         type: "edit",
+        editId: 4,
         content: "a\nb\n\n[bad](javascript:alert(1))\n",
         baseDocVersion: seed.message.docVersion,
       });
@@ -485,6 +489,7 @@ describe("crlf-roundtrip", function () {
       panel.simulateInbound({
         protocol: PROTOCOL_VERSION,
         type: "edit",
+        editId: 5,
         content: "AB",
         baseDocVersion: seed.message.docVersion,
       });
@@ -495,6 +500,7 @@ describe("crlf-roundtrip", function () {
       panel.simulateInbound({
         protocol: PROTOCOL_VERSION,
         type: "edit",
+        editId: 6,
         content: "ABC",
         baseDocVersion: seed.message.docVersion,
       });
