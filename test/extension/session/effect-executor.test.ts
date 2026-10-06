@@ -1219,11 +1219,12 @@ describe("effect-executor runEffects other cases", () => {
         docVersion: 5,
         externalEpoch: 2,
         epochGeneration: 88,
-        settledEditId: 0,
+        settledEditId: 7,
       },
     ]);
-    // The builder receives the core-managed identity pair from the effect.
-    expect(buildSeedDocument).toHaveBeenCalledWith(5, 2, 88, 0);
+    // The builder receives the core-managed identity pair and the settled Edit
+    // id from the effect (non-zero, so a call site that dropped it shows).
+    expect(buildSeedDocument).toHaveBeenCalledWith(5, 2, 88, 7);
     expect(send).toHaveBeenCalled();
   });
 
@@ -1233,9 +1234,11 @@ describe("effect-executor runEffects other cases", () => {
       calls.push(m.type);
       return true;
     });
+    const buildRejectedDraft = vi.fn(makeDeps().buildRejectedDraft);
     const { runEffects } = createEffectExecutor(
       makeDeps({
         send,
+        buildRejectedDraft,
         getState: () => ({ lastAppliedDocVersion: 0 }) as unknown as HostSessionState,
       })
     );
@@ -1244,13 +1247,15 @@ describe("effect-executor runEffects other cases", () => {
         type: "postRejectedDraft",
         content: "c",
         docVersion: 2,
-        externalEpoch: 0,
-        epochGeneration: 1,
-        settledEditId: 0,
+        externalEpoch: 3,
+        epochGeneration: 4,
+        settledEditId: 7,
         error: rejErr,
         id: 9,
       },
     ]);
+    // Pairwise-distinct values, so a dropped or swapped argument shows.
+    expect(buildRejectedDraft).toHaveBeenCalledWith("c", 2, 3, 4, 7);
     await Promise.resolve();
     await Promise.resolve();
     // document first, edit-rejected second (order is load-bearing)

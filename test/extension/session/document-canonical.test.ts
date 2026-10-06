@@ -43,13 +43,14 @@ describe("buildDocumentMessageFromDocument", () => {
       canWrite: true,
       externalEpoch: 2,
       epochGeneration: 99,
-      settledEditId: 0,
+      settledEditId: 7,
     });
     expect(msg.content).toBe("a\r\nb\r\nc");
     expect(msg.eol).toBe("\r\n");
     expect(msg.docVersion).toBe(3);
     expect(msg.externalEpoch).toBe(2);
     expect(msg.epochGeneration).toBe(99);
+    expect(msg.settledEditId).toBe(7);
     expect(Object.keys(msg).sort()).toEqual([
       "canWrite",
       "content",
@@ -128,7 +129,7 @@ describe("buildRejectedDraftFromDocument", () => {
     canWrite: false,
     externalEpoch: 3,
     epochGeneration: 7,
-    settledEditId: 0,
+    settledEditId: 11,
   };
 
   it("stamps a CRLF document's eol, including a draft with no line break", () => {
@@ -157,6 +158,7 @@ describe("buildRejectedDraftFromDocument", () => {
     expect(msg.canWrite).toBe(false);
     expect(msg.externalEpoch).toBe(3);
     expect(msg.epochGeneration).toBe(7);
+    expect(msg.settledEditId).toBe(11);
     expect(Object.keys(msg).sort()).toEqual(
       Object.keys(buildDocumentMessageFromDocument(fakeDoc(EndOfLine.CRLF, "a"), metadata)).sort()
     );

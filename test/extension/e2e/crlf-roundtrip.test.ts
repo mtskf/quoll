@@ -113,7 +113,9 @@ describe("crlf-roundtrip", function () {
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
-      editId: 1,
+      // Not 1: the settledEditId assertion below must not be satisfiable by a
+      // host that stamps a fixed or first-Edit id.
+      editId: 7,
       content: editedCrlf,
       baseDocVersion: seed.message.docVersion,
     });
@@ -123,6 +125,13 @@ describe("crlf-roundtrip", function () {
     // `isDocumentAfter(seed.docVersion)` narrows the predicate so the
     // resolved event's `message.content` is typed as string (not unknown).
     const afterEdit = await harness.waitForEvent(isDocumentAfter(seed.message.docVersion), 5000);
+    // The Edit's id reaches the wire: panel inbound → reducer → effect →
+    // builder. Only this layer runs the panel's own wiring.
+    assert.strictEqual(
+      afterEdit.message.settledEditId,
+      7,
+      "the post-apply Document must carry the applied Edit's id as settledEditId"
+    );
     // In-memory contract: the host-re-emitted Document carries \r\n.
     // Document.content === canonicalDocumentText(document) in postDocument
     // (=== getText() for this uniform-CRLF doc), so this also pins the

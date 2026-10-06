@@ -134,6 +134,22 @@ describe("buildDocumentMessage", () => {
     expect(msg.epochGeneration).toBe(12345);
   });
 
+  it("carries settledEditId through unchanged", () => {
+    // Non-zero on purpose: 0 is also what a builder that dropped the field and
+    // hard-coded the "no Edit yet" value would emit.
+    const msg = buildDocumentMessage({
+      content: "x",
+      eol: "\n",
+      docVersion: 1,
+      themeKind: "light",
+      canWrite: true,
+      externalEpoch: 0,
+      epochGeneration: 1,
+      settledEditId: 7,
+    });
+    expect(msg.settledEditId).toBe(7);
+  });
+
   it("preserves canWrite=false for readonly documents", () => {
     const msg = buildDocumentMessage({
       content: "",
