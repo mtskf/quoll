@@ -2,6 +2,11 @@
 import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import {
+  createHostSessionCore,
+  type HostSessionEvent,
+  type HostSessionState,
+} from "../../src/extension/session/host-session-core.js";
 import { type HostToWebview, PROTOCOL_VERSION } from "../../src/shared/protocol.js";
 import { EDITOR_PREF_CSS_VARS, editorPrefToCssValue } from "../../src/webview/cm/editor-prefs.js";
 import { addPendingAnchor } from "../../src/webview/cm/image/image-paste.js";
@@ -114,6 +119,41 @@ function mountedView(): EditorView {
     throw new Error("EditorView not found via findFromDOM");
   }
   return view;
+}
+
+// The whole text the mounted view shows.
+function viewText(): string {
+  return mountedView().state.doc.toString();
+}
+
+type PostedEdit = { type?: string; content: string; baseDocVersion: number };
+
+// Every Edit posted to the host so far, in post order.
+function editMessages(): PostedEdit[] {
+  return postMessage.mock.calls.map(([m]) => m as PostedEdit).filter((m) => m.type === "edit");
+}
+
+// The same trail as [content, baseDocVersion] pairs.
+function editPairs(): Array<[string, number]> {
+  return editMessages().map((m) => [m.content, m.baseDocVersion]);
+}
+
+// A keystroke at the end of the document / a Backspace there.
+function typeAtEnd(text: string): void {
+  const view = mountedView();
+  view.dispatch({ changes: { from: view.state.doc.length, insert: text } });
+}
+
+function deleteAtEnd(): void {
+  const view = mountedView();
+  view.dispatch({ changes: { from: view.state.doc.length - 1, to: view.state.doc.length } });
+}
+
+function noticeCount(selector = ".quoll-resync-notice"): number {
+  if (container === null) {
+    throw new Error("container is gone — the notice count would be vacuous");
+  }
+  return container.querySelectorAll(selector).length;
 }
 
 describe("shell — Ready handshake ordering", () => {
@@ -478,16 +518,18 @@ describe("shell — S3b epoch-bounded acceptance ordering", () => {
   });
 
   it("shows NO notice when the host reposts different bytes on the SAME lineage", async () => {
-    // The shape the host's stale / no-op / readonly repost arm produces routinely
-    // — and the one negative case that rests on the SUPERSESSION conjunct alone,
-    // because the content conjunct is already false (the document is NOT carrying
-    // our bytes). The sibling silences above all come from content equality, so
-    // dropping the lineage test would leave them green while every ordinary
-    // repost announced "Quoll discarded pending edits" to the user.
+    // The shape the host's stale / no-op repost arm produces routinely.
     // `resyncLiveVersion` (host-session-core) bumps `externalEpoch` only on a
     // genuine foreign advance, so a repost carries the SAME epoch and generation:
     // the lineage never moved, and the claim this notice makes ("something else
     // won, your bytes are not in the document") is not in evidence.
+    // The view holds the in-flight Edit, so the Document FOLDS: the local bytes
+    // stay on screen (and keep a carrier) and nothing is announced.
+    // No longer a single-conjunct pin for the loss judgement — the view keeps
+    // the bytes, so both of its conjuncts are false. The case that rests on the
+    // SUPERSESSION conjunct alone is the readonly repost, which always reseeds:
+    // the "the flip is silent" assertion of "shows ONE hold notice on blur…" in
+    // the readonly-hold describe.
     await mount();
     vi.useFakeTimers();
     try {
@@ -502,40 +544,21 @@ describe("shell — S3b epoch-bounded acceptance ordering", () => {
       );
       await Promise.resolve();
       expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(0);
-      // The reseed really happened, so the silence is NOT the content conjunct
-      // quietly standing in for the lineage one.
-      expect(readDoc()).toBe("s-host");
+      expect(readDoc()).toBe("sx"); // no rewind: the view keeps the local bytes
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("ACCEPTED RESIDUAL: the forked flush window loses a keystroke with no notice", async () => {
-    // Pins behaviour this notice cannot fix, so the gap is discoverable instead
-    // of surprising. `flush()` force-posts while an Edit is in flight and keeps
-    // the buffer; the earlier Edit's own ack then no longer matches the in-flight
-    // content, so it is NOT folded and the view is reseeded BACK to it while the
-    // drain replays forward. A keystroke typed in that window branches off the
-    // reseeded view instead of descending from the bytes in flight — and that
-    // forked Edit is what overwrites them, on disk, notice or no notice.
-    // The underlying defect (a non-folded ack reseeds the view while the replay
-    // posts forward) is tracked as its own TODO entry.
-    //
-    // A NOTICE FIRING HERE IS NOT THE IMPROVEMENT MARKER. The final ack below
-    // moves no lineage, so a notice would announce a discard while the newest
-    // held bytes are in flight to the host — the false alarm the same-lineage
-    // tests in this file and in cm-edit-sync.test.ts exist to forbid. The
-    // improvement marker is the REWIND going away: when the fold/rewind defect
-    // is fixed, the "z" descends from "sxy" and `readDoc()` becomes "sxyz".
-    // At that point update the posts / doc assertions — the SILENCE stays.
-    //
-    // (An earlier version of this pin ended on a foreign `v3 "sxz" e1` Document
-    // instead. That state is improbable though reachable — an external writer
-    // landing exactly the forked bytes produces it — but its silence came from
-    // the CONTENT-equality rule, which the sibling test "shows NO notice when
-    // the foreign write lands exactly the user's newest bytes" already pins.
-    // The continuation below is the host's own, and its silence is the
-    // residual's real mechanism: nothing was superseded.)
+  it("the flush window no longer forks", async () => {
+    // `flush()` force-posts while an Edit is in flight and keeps the buffer. The
+    // earlier Edit's own ack then does not carry the bytes now in flight — but
+    // the view shows the newest held bytes, so the ack FOLDS instead of
+    // reseeding the view back to it, and a keystroke typed in that window
+    // descends from the bytes in flight instead of branching off a rewound view.
+    // (This test used to pin the fork as an ACCEPTED RESIDUAL: `readDoc()` was
+    // "sxz" and the "y" was overwritten on disk with no notice.)
+    // The SILENCE is unchanged, and still for the same reason: no lineage moved.
     await mount();
     vi.useFakeTimers();
     try {
@@ -547,42 +570,31 @@ describe("shell — S3b epoch-bounded acceptance ordering", () => {
       vi.advanceTimersByTime(300); // posts "sx" — in flight
       view.dispatch({ changes: { from: view.state.doc.length, insert: "y" } }); // in the debounce window
       window.dispatchEvent(new Event("pagehide")); // flush force-posts "sxy", keeps the buffer
-      // The FIRST Edit's ack, same lineage — no longer matches the in-flight
-      // "sxy", so the view is reseeded to "sx" and the drain replays "sxy".
+      // The FIRST Edit's ack, same lineage. The view shows the held "sxy", so
+      // it is folded — no rewind — and the drain replays "sxy" at the new base.
       deliver(
         buildDocument({ docVersion: 2, content: "sx", externalEpoch: 0, epochGeneration: 11 })
       );
-      // The user types on that view: the result FORKS — it has no "y".
+      expect(readDoc()).toBe("sxy");
+      // The user types on that view: the result DESCENDS from "sxy".
       view.dispatch({ changes: { from: view.state.doc.length, insert: "z" } });
-      vi.advanceTimersByTime(300); // in flight is "sxy", so "sxz" only BUFFERS
-      // The host's own continuation: the replayed "sxy" Edit's ack, on the SAME
-      // lineage (an own-edit ack never bumps the epoch). It content-matches the
-      // in-flight bytes, so it FOLDS — the view is not reseeded and keeps the
-      // fork, and the drain posts the buffered "sxz" forward.
+      vi.advanceTimersByTime(300); // "sxy" is in flight, so "sxyz" only BUFFERS
+      // The replayed Edit's ack, on the SAME lineage: folded again, and the
+      // drain posts the buffered "sxyz" forward.
       deliver(
         buildDocument({ docVersion: 3, content: "sxy", externalEpoch: 0, epochGeneration: 11 })
       );
       await Promise.resolve();
-      // No notice — and now for the residual's REAL reason: the newest held bytes
-      // ("sxz") sit on an unmoved lineage, so nothing was superseded. The "y" is
-      // gone from the document all the same, which is the loss this notice cannot
-      // see and the TODO exists to fix.
       expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(0);
-      // MEASURED, so the pin cannot go vacuous if the harness ever settles this
-      // differently: the Edits posted are ["sx", "sxy", "sxy", "sxz"] (the
-      // debounced post, the flush force-post, the retained buffer's replay, then
-      // the fork) and the view ends at "sxz" — i.e. the "z" really was typed onto
-      // the reseeded "sx", so the branch has no "y" in it. Assert both, not just
-      // the silence.
-      const editMessages = postMessage.mock.calls
-        .map(([m]) => m as { type?: string; content?: string; baseDocVersion?: number })
-        .filter((m) => m.type === "edit");
-      expect(editMessages.map((m) => m.content)).toEqual(["sx", "sxy", "sxy", "sxz"]);
-      // The fork is posted against the version the fold left recorded, so the
-      // rewind is invisible to the host — it accepts the forked bytes as a normal
-      // descendant of v3. That is precisely why no notice can be expected here.
-      expect(editMessages[3].baseDocVersion).toBe(3);
-      expect(readDoc()).toBe("sxz"); // forked off "sx": the "y" is gone
+      // MEASURED: the debounced post, the flush force-post, the retained
+      // buffer's replay at the acked base, then the descendant.
+      expect(editPairs()).toEqual([
+        ["sx", 1],
+        ["sxy", 1],
+        ["sxy", 2],
+        ["sxyz", 3],
+      ]);
+      expect(readDoc()).toBe("sxyz"); // every keystroke is still there
     } finally {
       vi.useRealTimers();
     }
@@ -944,6 +956,484 @@ describe("shell — readonly hold notice", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// A host Document carries no correlation to an Edit: the ack of an EARLIER Edit,
+// a stale repost and a refusal of the Edit in flight all arrive as "our lineage,
+// not the bytes in flight". None of them may rewind the view behind bytes this
+// webview still holds, and those bytes must keep a carrier until the host has
+// them — otherwise the next keystroke forks off the rewound view and the fork is
+// what reaches disk.
+describe("shell — own-lineage Documents never rewind un-acked bytes", () => {
+  // The view after every Document delivered through `drive`.
+  const views: string[] = [];
+  // Whether the caret sat at the document end after each of those deliveries.
+  // The text alone cannot show a rewind that is repaired inside ONE delivery (a
+  // reseed back to the host's bytes, then the drain's view advance): the view
+  // ends up identical. The caret does not — a reseed clamps it to the shorter
+  // document and the advance leaves it BEFORE the restored bytes.
+  const caretAtEnd: boolean[] = [];
+  beforeEach(() => {
+    views.length = 0;
+    caretAtEnd.length = 0;
+  });
+  const drive = (message: HostToWebview): void => {
+    deliver(message);
+    views.push(viewText());
+    const { state } = mountedView();
+    caretAtEnd.push(state.selection.main.head === state.doc.length);
+  };
+  // A keystroke at the end with the caret following it, as real typing does.
+  const typeWithCaret = (text: string): void => {
+    typeAtEnd(text);
+    const view = mountedView();
+    view.dispatch({ selection: { anchor: view.state.doc.length } });
+  };
+  const neverShrank = (): boolean =>
+    views.every((v, i) => i === 0 || v.length >= views[i - 1].length);
+
+  // The REAL host reducer (host-session-core is pure) behind a minimal
+  // executor: a TextDocument stand-in, one apply at a time, Documents queued in
+  // post order. The webview under test is the real shell; only the VS Code
+  // plumbing between the two is stood in for.
+  function realHost(seed: string) {
+    const core = createHostSessionCore(
+      { uriString: "file:///t.md", fsPath: "/t.md" },
+      { mintEpochGeneration: () => 11, validateForWrite: () => ({ ok: true }) as never }
+    );
+    let state: HostSessionState = core.initialState(1);
+    const doc = { version: 1, content: seed };
+    let canWrite = true;
+    let taken = 0;
+    let applying: { content: string; pre: string } | null = null;
+    const out: HostToWebview[] = [];
+    const toasts: string[] = [];
+    const run = (event: HostSessionEvent): void => {
+      const r = core.transition(state, event);
+      state = r.state;
+      for (const e of r.effects) {
+        if (e.type === "postDocument") {
+          out.push(
+            buildDocument({
+              docVersion: e.docVersion,
+              content: doc.content,
+              canWrite,
+              externalEpoch: e.externalEpoch,
+              epochGeneration: e.epochGeneration,
+            })
+          );
+        } else if (e.type === "applyEdit") {
+          applying = { content: e.content, pre: doc.content };
+        } else if (e.type === "showError") {
+          toasts.push(e.message);
+        }
+      }
+    };
+    const host = {
+      toasts,
+      disk: () => doc.content,
+      setCanWrite(v: boolean) {
+        canWrite = v;
+      },
+      ready() {
+        run({ type: "ready", documentVersion: doc.version, lineageSince: null });
+      },
+      // The panel became visible again: an unsolicited repost.
+      visible() {
+        run({ type: "viewStateVisible", documentVersion: doc.version, lineageSince: null });
+      },
+      // Edits the webview has posted that the host has not been handed yet.
+      unread: () => editMessages().length - taken,
+      // Hand the next posted Edit to the host.
+      receive() {
+        const e = editMessages()[taken];
+        if (!e) {
+          throw new Error("no unread edit");
+        }
+        taken++;
+        run({
+          type: "edit",
+          baseDocVersion: e.baseDocVersion,
+          content: e.content,
+          documentVersion: doc.version,
+          canWrite,
+          currentContent: doc.content,
+          lineageSince: null,
+        });
+      },
+      // Settle the apply in flight.
+      settle(kind: "ok" | "refused" = "ok") {
+        const a = applying;
+        if (!a) {
+          throw new Error("nothing applying");
+        }
+        applying = null;
+        if (kind === "ok" && a.content !== doc.content) {
+          doc.content = a.content;
+          doc.version++;
+        }
+        run({
+          type: "applyEditSettled",
+          outcome: { kind },
+          settledVersion: doc.version,
+          canWrite,
+          currentContent: doc.content,
+          preApplyContent: a.pre,
+        });
+      },
+      // Deliver every queued Document to the webview, in order.
+      pump() {
+        while (out.length > 0) {
+          drive(out.shift() as HostToWebview);
+        }
+      },
+      // Run host and webview to quiescence.
+      quiesce() {
+        for (let i = 0; i < 50; i++) {
+          if (applying) {
+            host.settle();
+          } else if (host.unread() > 0) {
+            host.receive();
+          } else if (out.length > 0) {
+            host.pump();
+          } else {
+            return;
+          }
+        }
+        throw new Error("did not quiesce");
+      },
+    };
+    return host;
+  }
+
+  describe("against the real host reducer", () => {
+    // Against the REAL host, no legitimate own-lineage flow may read as
+    // foreign: a discard notice in any of these columns means a Document
+    // carried content the webview failed to recognise as its own state.
+    afterEach(() => {
+      expect(noticeCount(".quoll-notice-discard")).toBe(0);
+    });
+
+    async function start(seed: string) {
+      await mount();
+      vi.useFakeTimers();
+      const host = realHost(seed);
+      host.ready();
+      host.pump();
+      expect(viewText()).toBe(seed);
+      return host;
+    }
+
+    it("flush window: a keystroke typed after a force-post the host answers with a STALE repost still reaches disk", async () => {
+      const host = await start("s");
+      typeWithCaret("x");
+      vi.advanceTimersByTime(300); // E1 "sx"
+      typeWithCaret("y");
+      window.dispatchEvent(new Event("pagehide")); // E2 "sxy", force-posted
+      host.receive(); // E1 accepted
+      host.settle(); // ack v2 "sx"
+      host.pump();
+      typeWithCaret("z");
+      vi.advanceTimersByTime(300);
+      host.receive(); // E2 carries base 1 → stale repost of v2 "sx"
+      host.pump();
+      host.quiesce();
+      vi.advanceTimersByTime(300);
+      host.quiesce();
+      expect(host.disk()).toBe("sxyz");
+      expect(viewText()).toBe("sxyz");
+      expect(neverShrank()).toBe(true);
+      // No Document rewound the view even transiently: the caret never left
+      // the end of the typed bytes.
+      // [revert: make viewHoldsUnackedEdit return false → the ack reseeds and
+      // the drain repairs the text, but the caret is left behind]
+      expect(caretAtEnd.length).toBeGreaterThan(2);
+      expect(caretAtEnd.slice(1)).not.toContain(false);
+      expect(noticeCount()).toBe(0);
+    });
+
+    it("flush window: a force-post STASHED behind the write lock converges without a rewind", async () => {
+      const host = await start("s");
+      typeAtEnd("x");
+      vi.advanceTimersByTime(300);
+      typeAtEnd("y");
+      window.dispatchEvent(new Event("pagehide"));
+      host.receive(); // E1 accepted, lock held
+      host.receive(); // E2 stashed
+      typeAtEnd("z");
+      vi.advanceTimersByTime(300);
+      host.quiesce();
+      vi.advanceTimersByTime(300);
+      host.quiesce();
+      expect(host.disk()).toBe("sxyz");
+      expect(viewText()).toBe("sxyz");
+      expect(neverShrank()).toBe(true);
+      expect(noticeCount()).toBe(0);
+    });
+
+    it("an ack, the replay, a stale repost and the final ack never rewind the view", async () => {
+      const host = await start("s");
+      typeWithCaret("x");
+      vi.advanceTimersByTime(300);
+      typeWithCaret("y");
+      window.dispatchEvent(new Event("blur"));
+      host.receive();
+      host.settle();
+      host.pump(); // ack of E1 → the retained buffer is replayed
+      host.receive(); // E2 is stale → repost
+      host.pump();
+      host.quiesce();
+      expect(views.length).toBeGreaterThan(2);
+      expect(views.slice(1).every((v) => v === "sxy")).toBe(true);
+      // …and not transiently either (see `caretAtEnd`): a rewind repaired
+      // inside one delivery leaves the same text but strands the caret.
+      // [revert: make viewHoldsUnackedEdit return false → red here only]
+      expect(caretAtEnd.slice(1)).not.toContain(false);
+      expect(host.disk()).toBe("sxy");
+      expect(noticeCount()).toBe(0);
+    });
+
+    it("a REFUSED Edit with a newer buffer behind it converges on the newest bytes", async () => {
+      const host = await start("s");
+      typeAtEnd("x");
+      vi.advanceTimersByTime(300);
+      typeAtEnd("y");
+      vi.advanceTimersByTime(300);
+      host.receive();
+      host.settle("refused");
+      host.quiesce();
+      expect(host.toasts.length).toBe(1);
+      expect(viewText()).toBe("sxy");
+      expect(host.disk()).toBe("sxy");
+      expect(views.slice(1).every((v) => v === "sxy")).toBe(true);
+    });
+
+    it("a REFUSED Edit with nothing newer keeps its bytes on screen, is not re-posted in a loop, and retries on blur", async () => {
+      const host = await start("s");
+      typeAtEnd("x");
+      vi.advanceTimersByTime(300);
+      host.receive();
+      host.settle("refused");
+      host.pump();
+      expect(host.unread()).toBe(0); // no automatic identical retry
+      expect(viewText()).toBe("sx");
+      host.visible(); // an unsolicited identical repost: still no loop
+      host.pump();
+      expect(host.unread()).toBe(0);
+      expect(viewText()).toBe("sx");
+      window.dispatchEvent(new Event("blur")); // a teardown signal IS a new trigger
+      expect(host.unread()).toBe(1);
+      host.quiesce();
+      expect(host.disk()).toBe("sx");
+      expect(viewText()).toBe("sx");
+    });
+
+    it("a readonly verdict followed by a re-grant brings the view forward and converges", async () => {
+      const host = await start("D1");
+      typeAtEnd("2");
+      vi.advanceTimersByTime(300); // E1 "D12"
+      typeAtEnd("3"); // in the debounce window
+      host.setCanWrite(false);
+      host.receive(); // readonly verdict
+      host.pump();
+      expect(viewText()).toBe("D1"); // a readonly Document always shows the host's bytes
+      window.dispatchEvent(new Event("blur"));
+      host.setCanWrite(true);
+      host.visible();
+      host.pump();
+      expect(viewText()).toBe("D123"); // forward again BEFORE the replay is acked
+      host.quiesce();
+      expect(host.disk()).toBe("D123");
+      expect(viewText()).toBe("D123");
+    });
+
+    it("a no-op flush ack does not swallow a later Edit that is still pending", async () => {
+      const host = await start("s");
+      typeAtEnd("q");
+      deleteAtEnd();
+      window.dispatchEvent(new Event("blur")); // E0 "s" — a no-op for the host
+      typeAtEnd("y");
+      window.dispatchEvent(new Event("blur")); // E1 "sy"
+      deleteAtEnd(); // the view is back at "s", inside the debounce window
+      host.receive(); // E0 → no-op repost of v1 "s"
+      host.pump();
+      host.quiesce();
+      vi.advanceTimersByTime(300);
+      host.quiesce();
+      expect(viewText()).toBe("s");
+      expect(host.disk()).toBe("s");
+    });
+
+    it("a keystroke in the debounce window survives a drain that is not a Document's (theme change)", async () => {
+      const host = await start("s");
+      typeAtEnd("x");
+      vi.advanceTimersByTime(300);
+      host.receive();
+      host.settle("refused");
+      host.pump(); // "sx" is held, not re-posted
+      expect(host.unread()).toBe(0);
+      typeAtEnd("y");
+      deliver({ protocol: PROTOCOL_VERSION, type: "theme", themeKind: "dark" });
+      expect(viewText()).toBe("sxy"); // not pulled back to the held "sx"
+      vi.advanceTimersByTime(300);
+      host.quiesce();
+      expect(host.disk()).toBe("sxy");
+      expect(viewText()).toBe("sxy");
+    });
+  });
+
+  describe("scripted Document sequences", () => {
+    const G11 = { externalEpoch: 0, epochGeneration: 11 } as const;
+    const seedS = (): HostToWebview => buildDocument({ docVersion: 1, content: "s", ...G11 });
+    const internalReject = (): HostToWebview =>
+      buildEditRejected({ code: "internal_error", message: "no" });
+
+    async function startScripted(): Promise<void> {
+      await mount();
+      vi.useFakeTimers();
+      drive(seedS());
+    }
+
+    it("a keystroke in the debounce window survives an edit-rejected drain", async () => {
+      await startScripted();
+      typeAtEnd("x");
+      vi.advanceTimersByTime(300); // E(1, sx)
+      typeAtEnd("y");
+      vi.advanceTimersByTime(300); // buffered "sxy"
+      typeAtEnd("z"); // in the window
+      deliver(internalReject());
+      expect(viewText()).toBe("sxyz");
+    });
+
+    it("the post dedupe does not outlive an identity transition", async () => {
+      await startScripted();
+      typeAtEnd("x");
+      vi.advanceTimersByTime(300); // (sx, base 1) on generation 11
+      drive(seedS()); // refusal: held, not re-posted
+      expect(editPairs()).toEqual([["sx", 1]]);
+      // A new host session restarts at the SAME version with the SAME text.
+      drive(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 12 }));
+      expect(viewText()).toBe("s");
+      typeAtEnd("x"); // the same character again, in the window
+      drive(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 12 }));
+      expect(viewText()).toBe("sx");
+      // The same (content, base) pair — but on a lineage that never answered it.
+      expect(editPairs()).toEqual([
+        ["sx", 1],
+        ["sx", 1],
+      ]);
+    });
+
+    it("a held Edit lost to a FOREIGN EPOCH is dropped and still raises the discard notice", async () => {
+      await startScripted();
+      typeAtEnd("x");
+      vi.advanceTimersByTime(300);
+      drive(seedS()); // refusal: held
+      drive(
+        buildDocument({ docVersion: 2, content: "FOREIGN", externalEpoch: 1, epochGeneration: 11 })
+      );
+      expect(viewText()).toBe("FOREIGN");
+      expect(noticeCount(".quoll-notice-discard")).toBe(1);
+      expect(editPairs()).toEqual([["sx", 1]]);
+    });
+
+    it("the Document behind a rejected draft does not make the saved state read as foreign", async () => {
+      await startScripted();
+      typeAtEnd("x");
+      vi.advanceTimersByTime(300); // A = E(1, sx): the host applies it
+      typeAtEnd("!");
+      window.dispatchEvent(new Event("blur")); // B = E(1, sx!): stashed, then fails validation
+      // The host's drain: disk = A, the Document carries the DRAFT B, then the reject.
+      drive(buildDocument({ docVersion: 2, content: "sx!", ...G11 }));
+      deliver(internalReject());
+      deleteAtEnd(); // the user fixes the draft: "sx"…
+      typeAtEnd("c"); // …"sxc"
+      vi.advanceTimersByTime(300); // C = E(2, sxc)
+      typeAtEnd("?");
+      vi.advanceTimersByTime(300); // buffered "sxc?"
+      // C is refused: the host reposts its real document, A.
+      drive(buildDocument({ docVersion: 2, content: "sx", ...G11 }));
+      expect(noticeCount(".quoll-notice-discard")).toBe(0);
+      expect(viewText()).toBe("sxc?");
+      expect(editPairs().at(-1)).toEqual(["sxc?", 2]);
+    });
+
+    it("a long-delayed ack of an early Edit is not treated as foreign, however many posts followed", async () => {
+      await startScripted();
+      typeAtEnd("1");
+      vi.advanceTimersByTime(300); // E(1, s1) — applied, its ack is delayed
+      for (let i = 0; i < 33; i++) {
+        typeAtEnd(String.fromCharCode(97 + (i % 26)));
+        window.dispatchEvent(new Event("blur")); // 33 distinct force-posts, no Document
+      }
+      const newest = viewText();
+      drive(buildDocument({ docVersion: 2, content: "s1", ...G11 }));
+      expect(noticeCount(".quoll-notice-discard")).toBe(0);
+      expect(viewText()).toBe(newest);
+      expect(editPairs().at(-1)).toEqual([newest, 2]);
+    });
+  });
+});
+
+// The stated residual of the change above. The host has paths that deliver
+// FOREIGN bytes without an epoch advance (host-session-core's own ACCEPTED
+// RESIDUALs: an unobserved settle, a failed settlement transition). The webview
+// cannot tell such a Document from a refusal or a stale repost of its own
+// lineage, so it keeps the user's bytes on screen and replays them over the
+// foreign content — silently. These pins record the MEASURED outcome so the
+// protocol fix has tests to flip; do not "restore" them if they go red for that
+// reason.
+describe("shell — ACCEPTED RESIDUAL: same-epoch unrecognised content", () => {
+  const G11 = { externalEpoch: 0, epochGeneration: 11 } as const;
+  const unrecognised = (): HostToWebview => buildDocument({ docVersion: 2, content: "X", ...G11 });
+
+  async function startSeeded(): Promise<void> {
+    await mount();
+    vi.useFakeTimers();
+    deliver(buildDocument({ docVersion: 1, content: "s", ...G11 }));
+  }
+
+  it("a lone in-flight Edit is kept on screen and re-posted over the unrecognised content, with no notice", async () => {
+    // Edit↔Document correlation in the protocol is expected to flip this pin.
+    await startSeeded();
+    typeAtEnd("x");
+    vi.advanceTimersByTime(300); // E(1, sx)
+    deliver(unrecognised());
+    expect(viewText()).toBe("sx");
+    expect(editPairs()).toEqual([
+      ["sx", 1],
+      ["sx", 2],
+    ]);
+    expect(noticeCount()).toBe(0);
+  });
+
+  it("an in-flight Edit plus a keystroke in the debounce window are replayed over the unrecognised content", async () => {
+    // Edit↔Document correlation in the protocol is expected to flip this pin.
+    await startSeeded();
+    typeAtEnd("x");
+    vi.advanceTimersByTime(300); // E(1, sx)
+    typeAtEnd("y"); // in the window
+    deliver(unrecognised());
+    expect(viewText()).toBe("sxy");
+    expect(editPairs().at(-1)).toEqual(["sxy", 2]);
+    expect(noticeCount()).toBe(0);
+  });
+
+  it("an Edit held after a refusal is re-posted over the unrecognised content once the version moves", async () => {
+    // Edit↔Document correlation in the protocol is expected to flip this pin.
+    await startSeeded();
+    typeAtEnd("x");
+    vi.advanceTimersByTime(300); // E(1, sx)
+    deliver(buildDocument({ docVersion: 1, content: "s", ...G11 })); // a refusal repeating the base: held
+    expect(editPairs()).toEqual([["sx", 1]]);
+    deliver(unrecognised());
+    expect(viewText()).toBe("sx");
+    expect(editPairs()).toEqual([
+      ["sx", 1],
+      ["sx", 2],
+    ]);
+    expect(noticeCount()).toBe(0);
   });
 });
 
