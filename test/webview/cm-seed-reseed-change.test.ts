@@ -1,4 +1,4 @@
-import type { Text } from "@codemirror/state";
+import { Text } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
 import { commonAffixLengths } from "../../src/shared/minimal-span.js";
 import { computeReseedChange, splitToCmText } from "../../src/webview/cm/seed.js";
@@ -22,11 +22,12 @@ function deriveViaStringCore(
   };
 }
 
-// Apply the computed single-span change to `old` and assert it reproduces
-// `next` in CM's LF-internal coordinates — the contract the reseed relies on.
-function applyChange(old: Text, change: { from: number; to: number; insert: Text }): string {
-  const s = old.toString();
-  return s.slice(0, change.from) + change.insert.toString() + s.slice(change.to);
+// Apply the computed single-span change through CM's real `Text.replace`, so the
+// result carries a real line model. Callers compare with `Text.eq`, which checks
+// the line count and every line's text — a string-splice oracle cannot see a
+// line-boundary mismatch (e.g. a malformed insert holding a raw "\n").
+function applyChange(old: Text, change: { from: number; to: number; insert: Text }): Text {
+  return old.replace(change.from, change.to, change.insert);
 }
 
 describe("computeReseedChange — minimal single-span reseed change", () => {
@@ -36,7 +37,7 @@ describe("computeReseedChange — minimal single-span reseed change", () => {
     const change = computeReseedChange(old, next);
     expect(change.to - change.from).toBe(1);
     expect(change.insert.toString()).toBe("B");
-    expect(applyChange(old, change)).toBe(next.toString());
+    expect(applyChange(old, change).eq(next)).toBe(true);
   });
 
   it("an append leaves the common prefix untouched (from at old end)", () => {
@@ -45,7 +46,7 @@ describe("computeReseedChange — minimal single-span reseed change", () => {
     const change = computeReseedChange(old, next);
     expect(change.from).toBe(old.length);
     expect(change.to).toBe(old.length);
-    expect(applyChange(old, change)).toBe(next.toString());
+    expect(applyChange(old, change).eq(next)).toBe(true);
   });
 
   it("a prepend leaves the common suffix untouched (to at 0-side)", () => {
@@ -58,7 +59,7 @@ describe("computeReseedChange — minimal single-span reseed change", () => {
     // pins the suffix scan: round-trip reassembly alone cannot detect a
     // non-minimal `to` because the extra span is absorbed into `insert`.
     expect(change.to).toBe(0);
-    expect(applyChange(old, change)).toBe(next.toString());
+    expect(applyChange(old, change).eq(next)).toBe(true);
   });
 
   it("fully divergent content degrades to a whole-doc replace", () => {
@@ -67,7 +68,7 @@ describe("computeReseedChange — minimal single-span reseed change", () => {
     const change = computeReseedChange(old, next);
     expect(change.from).toBe(0);
     expect(change.to).toBe(old.length);
-    expect(applyChange(old, change)).toBe(next.toString());
+    expect(applyChange(old, change).eq(next)).toBe(true);
   });
 
   it("identical content yields an empty no-op change", () => {
@@ -75,7 +76,7 @@ describe("computeReseedChange — minimal single-span reseed change", () => {
     const change = computeReseedChange(old, splitToCmText("same\ncontent"));
     expect(change.from).toBe(change.to);
     expect(change.insert.length).toBe(0);
-    expect(applyChange(old, change)).toBe(old.toString());
+    expect(applyChange(old, change).eq(old)).toBe(true);
   });
 
   it("overlapping prefix/suffix runs do not double-count (from <= to)", () => {
@@ -85,7 +86,7 @@ describe("computeReseedChange — minimal single-span reseed change", () => {
     const next = splitToCmText("aa");
     const change = computeReseedChange(old, next);
     expect(change.from).toBeLessThanOrEqual(change.to);
-    expect(applyChange(old, change)).toBe(next.toString());
+    expect(applyChange(old, change).eq(next)).toBe(true);
   });
 
   it("a surrogate-pair difference reassembles exactly (may split mid-pair)", () => {
@@ -95,7 +96,7 @@ describe("computeReseedChange — minimal single-span reseed change", () => {
     const next = splitToCmText("a😃b");
     const change = computeReseedChange(old, next);
     expect(change.from).toBeLessThanOrEqual(change.to);
-    expect(applyChange(old, change)).toBe(next.toString());
+    expect(applyChange(old, change).eq(next)).toBe(true);
   });
 
   it("multi-line CRLF-origin content diffs in LF-internal coordinates", () => {
@@ -106,7 +107,7 @@ describe("computeReseedChange — minimal single-span reseed change", () => {
     const change = computeReseedChange(old, next);
     expect(change.to).toBeLessThanOrEqual(old.length); // never exceeds doc.length
     expect(change.insert.toString()).toBe("Y");
-    expect(applyChange(old, change)).toBe("x\ny\nz".replace("y", "Y"));
+    expect(applyChange(old, change).eq(next)).toBe(true);
   });
 
   // The Text-iterator scan must produce exactly the span the shared string core
@@ -222,8 +223,23 @@ describe("computeReseedChange — minimal single-span reseed change", () => {
       const change = computeReseedChange(oldDoc, newDoc);
       const ref = deriveViaStringCore(oldDoc, newDoc);
       expect({ from: change.from, to: change.to, insert: change.insert.toString() }).toEqual(ref);
-      expect(applyChange(oldDoc, change)).toBe(newDoc.toString());
+      expect(applyChange(oldDoc, change).eq(newDoc)).toBe(true);
     }
+  });
+
+  it("negative control: a malformed insert is caught by the Text oracle, not by string splicing", () => {
+    // `Text.of(["a\nb"])` is ONE line whose text contains a newline — a malformed
+    // Text (well-formed input is one array element per line). The old string
+    // oracle agrees with `next` because only the characters are compared; the
+    // real-Text oracle disagrees (3 lines vs 4) because the line model differs.
+    const old = splitToCmText("x\ny");
+    const next = splitToCmText("a\nb\ny");
+    const change = { from: 0, to: 1, insert: Text.of(["a\nb"]) };
+    const s = old.toString();
+    expect(s.slice(0, change.from) + change.insert.toString() + s.slice(change.to)).toBe(
+      next.toString()
+    );
+    expect(applyChange(old, change).eq(next)).toBe(false);
   });
 
   it("never flattens either whole document to a string", () => {
