@@ -2,6 +2,16 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.86 — 2026-10-07
+
+### Fixed
+
+- In a file with Windows line endings (CRLF), copying or cutting whole lines with several cursors and no selection now pastes them back as whole lines. They used to be spliced into the middle of the lines the cursors were on.
+
+### Changed
+
+- Copying, cutting or dragging text out of a CRLF file now puts Unix line endings (LF) on the clipboard, as the code block copy button already did. The file itself is still saved with CRLF. VS Code's own text editor copies CRLF from such a file, so the two now differ. Not yet verified: what Windows actually places on the native clipboard, and how every paste target reacts — VS Code, its terminal and current Notepad accept LF, but older Windows controls or byte-sensitive targets may show the lines run together.
+
 ## 0.1.85 — 2026-10-06
 
 ### Fixed
