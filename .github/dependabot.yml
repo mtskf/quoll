@@ -3,8 +3,9 @@
 # regardless of the grouping below.
 #
 # Goal: keep dependencies visible without daily churn. Routine minor+patch
-# bumps arrive as ONE grouped PR per ecosystem per week; majors still open
-# individually because they usually need a manual look.
+# bumps arrive as ONE grouped PR per ecosystem per week (two npm dependencies
+# are kept out of it, see below); majors still open individually because they
+# usually need a manual look.
 version: 2
 updates:
   # pnpm dependency graph (Dependabot reads pnpm-lock.yaml under the `npm`
@@ -17,10 +18,24 @@ updates:
       npm-minor-and-patch:
         patterns:
           - "*"
+        # A red CI step skips every later step for the whole grouped PR, so
+        # the two dependencies known to turn it red open on their own: a Biome
+        # bump can reformat files and fail lint (#432), and @lezer/markdown is
+        # version-pinned by test/webview/cm-lezer-table-internals-tripwire.test.ts
+        # because the table guard mirrors its internals.
+        exclude-patterns:
+          - "@biomejs/biome"
+          - "@lezer/markdown"
         update-types:
           - minor
           - patch
     ignore:
+      # mocha 12 requires Node ^20.19 || >=22.12; the E2E suite runs in the
+      # extension host of the pinned VS Code (1.94, Node 20.16). Drop this
+      # entry when engines.vscode moves past that (#427).
+      - dependency-name: "mocha"
+        update-types:
+          - "version-update:semver-major"
       # engines.vscode <-> @types/vscode <-> @types/node are exact-version pins
       # bumped together by hand on a matching VS Code Electron-Node release
       # (CLAUDE.md "Dependency pins"). Silence only their routine VERSION updates
