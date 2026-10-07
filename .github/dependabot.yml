@@ -3,9 +3,9 @@
 # regardless of the grouping below.
 #
 # Goal: keep dependencies visible without daily churn. Routine minor+patch
-# bumps arrive grouped, a few PRs per ecosystem per week; majors still open
-# individually because they usually need a manual look (vitest's are the
-# exception — see its group).
+# bumps arrive as ONE grouped PR per ecosystem per week (two npm dependencies
+# are kept out of it, see below); majors still open individually because they
+# usually need a manual look.
 version: 2
 updates:
   # pnpm dependency graph (Dependabot reads pnpm-lock.yaml under the `npm`
@@ -14,31 +14,18 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
-    # A dependency joins the first group it matches, so the catch-all is last.
     groups:
-      # The runtime dependencies. The editor mirrors Lezer internals, so a
-      # parser bump can need code changes; kept apart so it never holds the
-      # tooling bumps red, or the reverse.
-      codemirror-lezer:
-        patterns:
-          - "@codemirror/*"
-          - "@lezer/*"
-        update-types:
-          - minor
-          - patch
-      # @vitest/* peer on vitest by exact version, so they move together,
-      # majors included (#404).
-      vitest:
-        patterns:
-          - "vitest"
-          - "@vitest/*"
       npm-minor-and-patch:
         patterns:
           - "*"
-        # A Biome bump can reformat files; its red lint step skipped every
-        # later CI step for the 14 other bumps in the same PR (#432).
+        # A red CI step skips every later step for the whole grouped PR, so
+        # the two dependencies known to turn it red open on their own: a Biome
+        # bump can reformat files and fail lint (#432), and @lezer/markdown is
+        # version-pinned by test/webview/cm-lezer-table-internals-tripwire.test.ts
+        # because the table guard mirrors its internals.
         exclude-patterns:
           - "@biomejs/biome"
+          - "@lezer/markdown"
         update-types:
           - minor
           - patch
