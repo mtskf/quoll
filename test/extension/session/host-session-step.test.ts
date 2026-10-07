@@ -25,6 +25,7 @@ import {
   createHostSessionCore,
   type HostSessionEffect,
   type HostSessionEvent,
+  type HostSessionState,
   isWriteLockHeld,
 } from "../../../src/extension/session/host-session-core.js";
 import {
@@ -835,7 +836,7 @@ describe("createHostSessionStep", () => {
       }
     );
     // Edit #1 in flight (lock held at base 5), edit #2 stashed behind it.
-    let state = {
+    let state: HostSessionState = {
       ...core.initialState(5),
       pendingApplyBaseVersion: 5,
       inFlightContent: "edit1",

@@ -1,29 +1,32 @@
 {
-  // Type-check program scoped to the protocol drift-guard.
+  // Type-check program for the non-E2E unit suites vitest runs —
+  // test/extension, test/markdown, test/shared, test/fixtures — plus the two
+  // runner configs (vitest.config.ts, vitest.browser.config.ts).
   //
   // Why a separate config from test/extension/tsconfig.json:
-  //   The e2e config emits CJS into out/test-e2e/ for mocha. The unit
-  //   drift-guard files (currently just types-equality.test.ts) DO need
-  //   a real tsc program so type-level AssertEqual<...> failures surface
-  //   as compile errors instead of being stripped silently by esbuild's
-  //   transpile-only path under vitest. This config wires that program.
+  //   The e2e config emits CJS into out/test-e2e/ for mocha. The unit suites
+  //   need a real tsc program too: vitest is transpile-only, so without one a
+  //   type error in a test — or a failing type-level AssertEqual<...> — is
+  //   stripped silently instead of surfacing as a compile error. This config
+  //   wires that program.
   //
   // Why noEmit: tsc here is a CI gate, not a build step. vitest still
   // runs through its own transpiler — this only fails the `pnpm compile`
   // chain when a type-level contract drifts.
   //
-  // Why the narrow include: this config exists ONLY to type-check the
-  // protocol drift guard. Widening to `test/**/*.test.ts` would surface
-  // long-standing vacuous-type failures in the wider unit suite
-  // (vscode-stub TextLine shape divergence in
-  // test/extension/session/document-message.test.ts, dead `reason` references in
-  // test/webview/persistence.test.ts) — those are real follow-up TODOs
-  // (tracked under Slice 8b/8c follow-ups) but are out of scope for the
-  // drift-guard wiring PR.
+  // Why `e2e/**`, `launch.ts` and `temp-root.ts` are excluded: they belong to
+  // the CJS/mocha program in test/extension/tsconfig.json. Some of them are
+  // still pulled into this program by import (types-equality.test.ts imports
+  // ./e2e/types, launch-wiring.test.ts imports ./launch and ./temp-root),
+  // which is fine under noEmit.
   //
-  // Why rootDir is the repo root: the drift guard imports canonical
-  // types from src/shared/protocol.ts; the e2e config keeps rootDir
+  // Why rootDir is the repo root: the suites import canonical types from
+  // src/ (e.g. src/shared/protocol.ts); the e2e config keeps rootDir
   // narrow to "." so we explicitly widen here.
+  //
+  // The include globs are a convenience, not the guarantee. The authority for
+  // "is every test file type-checked" is the reachability assertion in
+  // test/build/no-file-level-ts-nocheck.test.ts, which asks the programs.
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "module": "esnext",
@@ -34,9 +37,13 @@
     "rootDir": "../.."
   },
   "include": [
-    "./types-equality.test.ts",
+    "./**/*.ts",
+    "../markdown/**/*.ts",
+    "../shared/**/*.ts",
+    "../fixtures/**/*.ts",
     "../../src/shared/**/*.ts",
-    "./e2e/types.ts",
-    "./e2e/constants.ts"
-  ]
+    "../../vitest.config.ts",
+    "../../vitest.browser.config.ts"
+  ],
+  "exclude": ["./e2e/**", "./launch.ts", "./temp-root.ts"]
 }

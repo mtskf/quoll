@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, type Mock, vi } from "vitest";
 import { runE2E } from "./launch";
 import type { RunTempRoot } from "./temp-root";
 
@@ -7,11 +7,11 @@ import type { RunTempRoot } from "./temp-root";
 // dispose() runs on BOTH the pass and the fail path. Restoring `process.exit(1)`
 // in the catch (the conventional CLI idiom) would keep every other suite green
 // while silently skipping the finally — so pin it here.
-const fakeRoot = (): RunTempRoot & { dispose: ReturnType<typeof vi.fn> } => ({
+const fakeRoot = (): RunTempRoot & { dispose: Mock<() => void> } => ({
   root: "/t/r",
   userDataDir: "/t/r/ud",
   workDir: "/t/r/w",
-  dispose: vi.fn(),
+  dispose: vi.fn<() => void>(),
 });
 
 const noopPreflight = (): void => undefined;

@@ -112,11 +112,14 @@ const resolveCliProjectTarget = (target: string): string =>
 // DEFAULT include — measured at 594 files (PR #412 cycle 4), among them
 // `test/markdown` (29) and 5 of `test/shared`'s 6 files (all but
 // `eol-pair-table.ts`, now swept via `test/webview/tsconfig.json`'s explicit
-// include), which no real program type-checks. ⚠️ EVERY number in this sentence
+// include), which no real program type-checked then. ⚠️ EVERY number in this sentence
 // is a count — recount all three before reusing any of them. Both have already
 // gone stale once: the total read "570" and the `test/shared` figure read "4",
 // both measured 2026-08-30 and both since corrected. Recount with the guard's own
 // `readProject` helper (this file), run against `tsconfig.base.json`, not by eye.
+// Both directories are in `test/extension/tsconfig.unit.json` now; what the
+// default include still holds beyond the swept union is one file, the fixture
+// `test/build/fixtures/reach.tsx` (measured 2026-10-07: 608 against 607).
 // Directives there change nothing, so reporting them would be pure false alarm.
 //
 // Letting tsc resolve `extends` rather than reading the raw field is the same
@@ -217,8 +220,9 @@ const readProject = (configPath: string) => {
   // `parseJsonSourceFileConfigFileContent` has run — it is populated BY the
   // parse, not by the read (measured: `undefined` before, populated after).
   // Reading it earlier would classify every config as a leaf, promote
-  // `tsconfig.base.json` to a swept project, and start reporting `test/markdown`
-  // and `test/shared` — silently, since the `?? []` swallows the `undefined`.
+  // `tsconfig.base.json` to a swept project, and start reporting whatever only
+  // its default include reaches (`test/markdown` and `test/shared` when this
+  // landed) — silently, since the `?? []` swallows the `undefined`.
   return { parsed, extendsTargets: source.extendedSourceFiles ?? [] };
 };
 
@@ -552,9 +556,9 @@ describe("the sweep follows the program, not a filename pattern", () => {
 
   it("finds a file the include glob never matched, reached only by import", () => {
     // The reason a program is the containment oracle and a glob is not:
-    // `test/extension/tsconfig.unit.json` includes four paths, none of which
+    // `test/extension/tsconfig.unit.json` includes seven paths, none of which
     // matches `src/extension` or `src/markdown` — the program reaches those only
-    // through `types-equality.test.ts`'s imports. A `.mts` pulled in by an
+    // through its test files' imports. A `.mts` pulled in by an
     // explicit specifier is a program input that `**/*.ts` does not match
     // either — the old collector had to guess a wider extension set to cover it.
     writeProject(["entry.ts"]);
@@ -741,8 +745,9 @@ describe("the sweep enumerates the repo's tsc programs, not a fixed directory", 
     // resolves it to `base.json`; a hand-rolled resolver that appends
     // `/tsconfig.json` to non-`.json` targets instead produces
     // `base/tsconfig.json`, fails to match, and promotes the base to a swept
-    // project — whose default include is the whole repo, so `test/markdown` and
-    // `test/shared` start raising false alarms.
+    // project — whose default include is the whole repo, so files no real
+    // program holds start raising false alarms (`test/markdown` and
+    // `test/shared` when this landed).
     // ⚠️ The base MUST be named `tsconfig.base.json`, not `base.json`.
     // `findConfigFiles` matches /^tsconfig(\..+)?\.json$/, so a `base.json`
     // never enters discovery at all — and then this assertion holds whether
@@ -926,11 +931,11 @@ describe("the sweep enumerates the repo's tsc programs, not a fixed directory", 
 });
 
 describe("no file in any tsc program switches its whole file off", () => {
-  // Built once, in the describe body, and shared by all four assertions.
+  // Built once, in the describe body, and shared by all five assertions.
   //
   // Two reasons this is not a detail. (a) Cost: each project is a full
   // `ts.Program`, ~150–400 ms; re-deriving per `it` would build all seven once
-  // per assertion — four times over. (b) Flake: vitest's default `testTimeout`
+  // per assertion — five times over. (b) Flake: vitest's default `testTimeout`
   // is 5000 ms and this repo
   // deliberately runs uncapped parallel workers (see vitest.config.ts's note on
   // the ruled-out load-flake), so a multi-second body inside an `it` is exactly
@@ -947,8 +952,10 @@ describe("no file in any tsc program switches its whole file off", () => {
     // is satisfiable by ONE program while every other one shrinks to its anchor
     // plus transitive imports — and a file dropped out of every program is
     // exactly as unchecked as one carrying a directive, with no text in it to
-    // notice. Six of the seven floors are roughly half the count measured when
-    // this landed; `test/build`'s is two-thirds (12 of 18) because it is the
+    // notice. Five of the seven floors are roughly half the count measured when
+    // this landed; `test/extension/tsconfig.unit.json`'s is roughly half of the
+    // 210 measured when its include was widened to the unit suites vitest runs;
+    // `test/build`'s is two-thirds (12 of 18) because it is the
     // smallest program, where halving leaves a floor low enough that a collapse
     // could still clear it. Either way routine churn never touches this list
     // while a program losing most of its `include` goes red naming itself.
@@ -958,7 +965,7 @@ describe("no file in any tsc program switches its whole file off", () => {
       "src/webview/tsconfig.json": 80,
       "test/build/tsconfig.json": 12,
       "test/extension/tsconfig.json": 25,
-      "test/extension/tsconfig.unit.json": 7,
+      "test/extension/tsconfig.unit.json": 100,
       "test/webview-browser/tsconfig.json": 90,
       "test/webview/tsconfig.json": 160,
       "tsconfig.json": 45,
@@ -975,18 +982,51 @@ describe("no file in any tsc program switches its whole file off", () => {
     expect(swept.files.size).toBeGreaterThan(300);
     // Named anchors, one per layer, so "reaches the whole repo" is not just a
     // number. `protocol.ts` is the file the non-vacuity spike planted into;
-    // the last two are only reachable transitively or from a narrow include.
+    // `types-equality.test.ts` and the browser smoke test were the two only
+    // reachable transitively or from a narrow include when this landed; the
+    // session, `test/markdown` and `vitest.config.ts` anchors name the unit
+    // program's widened include.
     for (const anchor of [
       "src/extension/extension.ts",
       "src/markdown/validate-for-write.ts",
       "src/shared/protocol.ts",
       "src/webview/shell.ts",
       "test/build/no-file-level-ts-nocheck.test.ts",
+      "test/extension/session/host-session-step.test.ts",
       "test/extension/types-equality.test.ts",
+      "test/markdown/round-trip.test.ts",
       "test/webview-browser/harness-smoke.browser.test.ts",
+      "vitest.config.ts",
     ]) {
       expect(swept.files.has(anchor)).toBe(true);
     }
+  });
+
+  it("type-checks every test file under test/, so none runs outside every program", () => {
+    // vitest is transpile-only: a `*.test.ts` in no tsc program runs green with
+    // type errors in it, and any type-level assertion it carries is vacuous.
+    // The include globs are not the mechanism — this is. It asks the swept
+    // programs, so a new directory nobody added to an include, and an include
+    // entry someone dropped, both land here naming the files.
+    //
+    // No exclusions: the e2e and browser suites are not collected by the
+    // default vitest config, but each sits in its own program, so "every
+    // `*.test.ts` under test/" holds without restating vitest's include/exclude.
+    // An exemption, if one is ever needed, is a named FILE with its reason —
+    // not a directory and not a count.
+    const findTests = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+        const path = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          return findTests(path);
+        }
+        return entry.name.endsWith(".test.ts") ? [relative(REPO_ROOT, path)] : [];
+      });
+    const tests = findTests(join(REPO_ROOT, "test"));
+
+    // The walk found the suite at all (guards an empty walk passing vacuously).
+    expect(tests).toContain("test/markdown/round-trip.test.ts");
+    expect(tests.filter((file) => !swept.files.has(file))).toEqual([]);
   });
 
   it("reports no file that switches its whole file off", () => {
