@@ -562,12 +562,12 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
 
   // Has the host's lineage moved on from these HELD bytes? Its STAMP is the pair
   // recorded at capture time; the currently recorded pair is where the host has
-  // since got to. TWO callers, one per holder, and the question is holder-neutral
-  // even though the name is not: the replay side drops `buffered` when this is
-  // true (replay only while the stamp's lineage still leads), and
-  // `lostToSupersession` asks the same question of the SETTLED IN-FLIGHT Edit,
-  // which has no replay to decline — `onReducerCommit` already cleared it. Do not
-  // reuse this as a buffer-only predicate.
+  // since got to. TWO callers, and the question is holder-neutral even though the
+  // name is not: the replay side drops `buffered` when this is true (replay only
+  // while the stamp's lineage still leads), and `lostToSupersession` asks the
+  // same question of the NEWEST held content — `buffered`, or with none the
+  // SETTLED IN-FLIGHT Edit, which has no replay to decline (`onReducerCommit`
+  // already cleared it). Do not reuse this as a buffer-only predicate.
   const shouldDropBufferedForEpoch = (held: HeldEdit): boolean =>
     supersedesIdentity({ from: held, to: recordedIdentity() });
 
@@ -810,9 +810,10 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
       return;
     }
     if (!seeded || !canPost()) {
-      // Gate held / pre-seed (NOT readonly): keep the content buffered
-      // so a later ack or serialize-error gate clear can replay it; do not
-      // drop it.
+      // Gate held (NOT readonly): keep the content buffered so a later ack
+      // or serialize-error gate clear can replay it; do not drop it.
+      // (`!seeded` is defensive — pre-seed never passes the `!canWrite`
+      // return above.)
       buffered = stampHeld(opts.getDoc());
       return;
     }
@@ -857,11 +858,11 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
     // ack (onReducerCommit clears editInFlight when the reducer's
     // committed value is false, THEN drains).
     //
-    // The `!seeded` guard mirrors trySend's pre-seed hold. A buffer
-    // captured before the first host snapshot (e.g. cancelPendingFlush
-    // on a pre-seed reseed) must NOT post with the placeholder
-    // docVersion 0; it waits for the seed. Symmetric with trySend's
-    // `!seeded || !canPost()` arm.
+    // The `!seeded` guard holds a pre-seed capture. A buffer captured
+    // before the first host snapshot (cancelPendingFlush on a pre-seed
+    // reseed — trySend never makes one, its `!canWrite` return fires
+    // first) must NOT post with the placeholder docVersion 0; it waits
+    // for the seed.
     // Epoch-bounded buffer validity (S3b): drop (and log) a held buffer whose
     // stamped identity is no longer live — foreign bytes landed under a
     // same-generation epoch advance, or the host identity transitioned across
