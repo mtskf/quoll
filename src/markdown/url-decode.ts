@@ -224,11 +224,15 @@ function decodeCharacterReferences(s: string): string {
  *   - `\` is doubled everywhere, not just before punctuation — a lone
  *     backslash left in front of an escape this function inserts would
  *     swallow it.
- *   - `<` / `>` become `&lt;` / `&gt;`. Neither destination form can hold
- *     them raw, and a backslash escape inside the angle form is not honoured
- *     by the shipped parser.
- *   - The angle form is used only for whitespace or parentheses, which the
- *     bare form cannot carry.
+ *   - `<` / `>` become `&lt;` / `&gt;` in both forms. The angle form cannot
+ *     hold either raw (the shipped parser ends it at the first `>`, rejects
+ *     a `<`, and honours no backslash escape there), and the bare form
+ *     cannot start with `<`. Writing them as references everywhere keeps one
+ *     rule for both forms.
+ *   - The angle form is used only for whitespace or parentheses. The bare
+ *     form cannot carry whitespace, and carries unescaped parentheses only
+ *     when they balance; wrapping every parenthesised href avoids a balance
+ *     check.
  *
  * Reference escaping runs first: run second, it would re-escape the
  * `&lt;` / `&gt;` this function has just written.
