@@ -943,6 +943,55 @@ describe("shell — readonly hold notice", () => {
     }
   });
 
+  it("a storm does NOT replace an unsaved notice already on screen", async () => {
+    await mount();
+    vi.useFakeTimers();
+    try {
+      deliver(buildDocument({ docVersion: 1, content: "s", epochGeneration: 1 }));
+      deliver(buildDocument({ docVersion: 1, content: "s", epochGeneration: 2 }));
+      deliver(buildDocument({ docVersion: 1, content: "s", epochGeneration: 3 }));
+      const view = mountedView();
+      view.dispatch({ changes: { from: view.state.doc.length, insert: "x" } });
+      vi.advanceTimersByTime(300); // posts — in flight
+      // The host repeats the base the Edit was posted on: a refusal.
+      deliver(buildDocument({ docVersion: 1, content: "s", epochGeneration: 3 }));
+      const unsaved = container?.querySelector(".quoll-resync-notice") as HTMLElement;
+      expect(unsaved.classList.contains("quoll-notice-unsaved")).toBe(true);
+      // Settle the refused Edit first — blur retries it, the host acks — so the
+      // transition below supersedes nothing (see the hold sibling above).
+      window.dispatchEvent(new Event("blur"));
+      expect(postedEdits().map((m) => m.content)).toEqual(["sx", "sx"]);
+      deliver(buildDocument({ docVersion: 2, content: "sx", epochGeneration: 3 }));
+      // The transition that crosses the storm threshold.
+      deliver(buildDocument({ docVersion: 2, content: "sx", epochGeneration: 4 }));
+      await Promise.resolve(); // the storm's deferred render runs — and is declined
+      expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(1);
+      expect(container?.querySelector(".quoll-resync-notice")).toBe(unsaved);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("an unsaved does NOT replace a hold notice already on screen", async () => {
+    await mount();
+    vi.useFakeTimers();
+    try {
+      holdThenReadonly();
+      window.dispatchEvent(new Event("blur"));
+      const hold = holdNotices()?.[0] as HTMLElement;
+      expect(hold).toBeDefined();
+      // Re-grant replays the held bytes; the host then repeats that base: a refusal.
+      deliver(buildDocument({ docVersion: 2, content: "s" }));
+      expect(postedEdits().map((m) => m.content)).toEqual(["sx", "sxy"]);
+      deliver(buildDocument({ docVersion: 2, content: "s" }));
+      expect(mountedView().state.sliceDoc()).toBe("sxy"); // refused, so kept on screen
+      expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(1);
+      expect(container?.querySelector(".quoll-resync-notice")).toBe(hold);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("shows NO notice for a programmatic change under a readonly document", async () => {
     await mount();
     vi.useFakeTimers();
