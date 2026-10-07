@@ -160,50 +160,88 @@ function decodableCodePoint(cp: number): boolean {
 // (relative path), fail-open. NUL substitution closes the hole.
 const UNDECODABLE_SUBSTITUTE = "\u0000";
 
+// Every character-reference shape the decoder consumes. Shared with
+// encodeMarkdownDestination so the two cannot disagree about what counts as
+// a reference.
+//
+// Hex regex MUST accept both `#x` and `#X` prefixes (CommonMark
+// accepts both); the `i` flag makes the regex case-insensitive on
+// the prefix AND the hex digits AND the named-entity letter class.
+//
+// Two arms with different `;` policies (see NAMED_ENTITIES header
+// for the rationale): numeric refs accept an optional `;`, named
+// refs require it so that benign URL query parameter names are not
+// consumed as undecodable entities.
+const CHARACTER_REFERENCE = /&(?:(#x[0-9a-f]+|#[0-9]+);?|([a-zA-Z][a-zA-Z0-9]*);)/gi;
+
 function decodeCharacterReferences(s: string): string {
-  // Hex regex MUST accept both `#x` and `#X` prefixes (CommonMark
-  // accepts both); the `i` flag makes the regex case-insensitive on
-  // the prefix AND the hex digits AND the named-entity letter class.
-  //
-  // Two arms with different `;` policies (see NAMED_ENTITIES header
-  // for the rationale): numeric refs accept an optional `;`, named
-  // refs require it so that benign URL query parameter names are not
-  // consumed as undecodable entities.
-  return s.replace(
-    /&(?:(#x[0-9a-f]+|#[0-9]+);?|([a-zA-Z][a-zA-Z0-9]*);)/gi,
-    (_m, num: string | undefined, name: string | undefined) => {
-      if (num !== undefined) {
-        const second = num.charAt(1);
-        if (second === "x" || second === "X") {
-          const cp = Number.parseInt(num.slice(2), 16);
-          return decodableCodePoint(cp) ? String.fromCodePoint(cp) : UNDECODABLE_SUBSTITUTE;
-        }
-        const cp = Number.parseInt(num.slice(1), 10);
+  return s.replace(CHARACTER_REFERENCE, (_m, num: string | undefined, name: string | undefined) => {
+    if (num !== undefined) {
+      const second = num.charAt(1);
+      if (second === "x" || second === "X") {
+        const cp = Number.parseInt(num.slice(2), 16);
         return decodableCodePoint(cp) ? String.fromCodePoint(cp) : UNDECODABLE_SUBSTITUTE;
       }
-      // Named entities: lowercase lookup against a lowercase-keyed
-      // table catches both CommonMark-canonical case (e.g. `&Tab;`)
-      // and adversarial lowercase (e.g. `&tab;`). The "fail-closed
-      // over CommonMark-literal" principle gives us license to decode
-      // either form as a deliberate overshoot — browsers do NOT decode
-      // lowercase `&tab;` in href contexts, but the gate rejects both
-      // forms uniformly (see NAMED_ENTITIES header for the rationale).
-      // An UNKNOWN named entity is treated as undecodable
-      // and substituted (same fail-closed reasoning as numeric
-      // undecodables): leaving `&unknownentity;` literal would let an
-      // attacker hide scheme chars (`javascript&unknownentity;:alert(1)`
-      // breaks the head-anchored scheme regex and accepts as relative).
-      // The `Object.hasOwn` guard is what keeps prototype member names in
-      // that unknown set: NAMED_ENTITIES is a plain object literal, so a
-      // bare index would resolve `&constructor;` (and any other
-      // Object.prototype member name surviving the `.toLowerCase()` fold)
-      // to the inherited native function — coercing its source string into
-      // the URL and bypassing the NUL substitute. Mirrors the own-property
-      // guard in inline-ir.ts's decodeAltEntities.
-      const key = (name as string).toLowerCase();
-      return Object.hasOwn(NAMED_ENTITIES, key)
-        ? NAMED_ENTITIES[key as NamedEntityKey]
-        : UNDECODABLE_SUBSTITUTE;
+      const cp = Number.parseInt(num.slice(1), 10);
+      return decodableCodePoint(cp) ? String.fromCodePoint(cp) : UNDECODABLE_SUBSTITUTE;
     }
-  );
+    // Named entities: lowercase lookup against a lowercase-keyed
+    // table catches both CommonMark-canonical case (e.g. `&Tab;`)
+    // and adversarial lowercase (e.g. `&tab;`). The "fail-closed
+    // over CommonMark-literal" principle gives us license to decode
+    // either form as a deliberate overshoot — browsers do NOT decode
+    // lowercase `&tab;` in href contexts, but the gate rejects both
+    // forms uniformly (see NAMED_ENTITIES header for the rationale).
+    // An UNKNOWN named entity is treated as undecodable
+    // and substituted (same fail-closed reasoning as numeric
+    // undecodables): leaving `&unknownentity;` literal would let an
+    // attacker hide scheme chars (`javascript&unknownentity;:alert(1)`
+    // breaks the head-anchored scheme regex and accepts as relative).
+    // The `Object.hasOwn` guard is what keeps prototype member names in
+    // that unknown set: NAMED_ENTITIES is a plain object literal, so a
+    // bare index would resolve `&constructor;` (and any other
+    // Object.prototype member name surviving the `.toLowerCase()` fold)
+    // to the inherited native function — coercing its source string into
+    // the URL and bypassing the NUL substitute. Mirrors the own-property
+    // guard in inline-ir.ts's decodeAltEntities.
+    const key = (name as string).toLowerCase();
+    return Object.hasOwn(NAMED_ENTITIES, key)
+      ? NAMED_ENTITIES[key as NamedEntityKey]
+      : UNDECODABLE_SUBSTITUTE;
+  });
+}
+
+/**
+ * Inverse of decodeMarkdownDestination: write `href` as a CommonMark link
+ * destination that decodes back to the same string, for any `href` without
+ * CR/LF (no single-line destination form can carry a line ending).
+ *
+ *   - `&` becomes `&amp;` only where the decoder would otherwise read a
+ *     character reference. A backslash cannot do this job: the decoder
+ *     unescapes backslashes BEFORE it decodes references, so `\&amp;` still
+ *     decodes to `&`. The reference pass is a single pass, so the `&` that
+ *     `&amp;` yields is never re-read as the start of another reference.
+ *   - `\` is doubled everywhere, not just before punctuation — a lone
+ *     backslash left in front of an escape this function inserts would
+ *     swallow it.
+ *   - `<` / `>` become `&lt;` / `&gt;` in both forms. The angle form cannot
+ *     hold either raw (the shipped parser ends it at the first `>`, rejects
+ *     a `<`, and honours no backslash escape there), and the bare form
+ *     cannot start with `<`. Writing them as references everywhere keeps one
+ *     rule for both forms.
+ *   - The angle form is used only for whitespace or parentheses. The bare
+ *     form cannot carry whitespace, and carries unescaped parentheses only
+ *     when they balance; wrapping every parenthesised href avoids a balance
+ *     check.
+ *
+ * Reference escaping runs first: run second, it would re-escape the
+ * `&lt;` / `&gt;` this function has just written.
+ */
+export function encodeMarkdownDestination(href: string): string {
+  const enc = href
+    .replace(CHARACTER_REFERENCE, (ref) => `&amp;${ref.slice(1)}`)
+    .replace(/\\/g, "\\\\")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  return /[\s()]/.test(enc) ? `<${enc}>` : enc;
 }
