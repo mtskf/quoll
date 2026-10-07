@@ -7,10 +7,9 @@
   // resolution + DOM lib + vscode-webview types) so the tests see the exact
   // types the code they exercise is built with.
   //
-  // Scope is test/webview ONLY. The wider unit suite has long-standing
-  // type drift outside this directory (vscode-stub TextLine shape in
-  // test/extension/session/document-message.test.ts) that is a separate follow-up;
-  // a test/webview-rooted include never pulls it in.
+  // Scope is test/webview plus the two cross-suite inputs named in `include`
+  // (test/fixtures, test/shared/eol-pair-table.ts). The host-side unit suites
+  // are type-checked by test/extension/tsconfig.unit.json, not here.
   //
   // noEmit (inherited): this is a CI gate, not a build step — vitest still
   // runs through its own transpiler. rootDir is the repo root so the

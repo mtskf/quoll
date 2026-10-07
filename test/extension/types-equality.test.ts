@@ -113,9 +113,9 @@ describe("handoff type pins", () => {
     // implementation calls document.lineAt(endLine - 1) with no re-clamp.
     // The brand makes clampHandoffSelection the only construction point.
     //
-    // Lives here (not in the handoff unit test) for the reason spelled out in
-    // the status-bar pin below: this file is the one test program `pnpm
-    // compile` type-checks, so a @ts-expect-error here is non-vacuous.
+    // Lives here (not in the handoff unit test) because this file is the
+    // repo's home for tsc-enforced type-level pins (see the header); `pnpm
+    // compile` type-checks it, so a @ts-expect-error here is non-vacuous.
     // Revert-check: drop the brand from HandoffRevealSelection and the
     // directive below becomes unused → tsc errors on it.
     const raw = {} as unknown as HandleContextHandoffPayload;
