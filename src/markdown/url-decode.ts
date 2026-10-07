@@ -236,6 +236,8 @@ function decodeCharacterReferences(s: string): string {
 export function encodeMarkdownDestination(href: string): string {
   const enc = href
     .replace(CHARACTER_REFERENCE, (ref) => `&amp;${ref.slice(1)}`)
-    .replace(/[\\<>]/g, (ch) => (ch === "\\" ? "\\\\" : ch === "<" ? "&lt;" : "&gt;"));
+    .replace(/\\/g, "\\\\")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
   return /[\s()]/.test(enc) ? `<${enc}>` : enc;
 }

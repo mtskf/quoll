@@ -210,14 +210,11 @@ describe("encodeMarkdownDestination", () => {
         href += atoms[Math.floor(rand() * atoms.length)];
       }
       const enc = encodeMarkdownDestination(href);
-      if (decodeMarkdownDestination(enc) !== href || parsedDestination(enc) !== href) {
+      const decoded = decodeMarkdownDestination(enc);
+      const parsed = parsedDestination(enc);
+      if (decoded !== href || parsed !== href) {
         // Report the sample, not a bare boolean.
-        expect({
-          href,
-          enc,
-          decoded: decodeMarkdownDestination(enc),
-          parsed: parsedDestination(enc),
-        }).toEqual({
+        expect({ href, enc, decoded, parsed }).toEqual({
           href,
           enc,
           decoded: href,
