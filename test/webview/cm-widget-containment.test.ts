@@ -32,6 +32,8 @@ vi.mock("../../src/webview/host.js", () => ({
 }));
 
 let container: HTMLElement | null = null;
+// The identity pair for fixtures that stay on one host lineage throughout.
+const PAIR = { externalEpoch: 0, epochGeneration: 1, settledEditId: 0 } as const;
 const mounted: EditorHandle[] = [];
 
 function makeState(overrides: Partial<WebviewState> = {}): WebviewState {
@@ -88,7 +90,7 @@ function mount(opts: { onDispatch?: (action: Action) => void } = {}): {
 
 it("a throwing widget render leaves the session fully settled", () => {
   const { handle, view } = mount();
-  handle.applyDocument({ content: "seed\n", eol: "\n", canWrite: true, docVersion: 1 });
+  handle.applyDocument({ content: "seed\n", eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
   vi.spyOn(console, "error").mockImplementation(() => {});
   // ⚠️ Spy `render`, NOT `toDOM`. `toDOM` is the base's contained entry point,
   // so replacing it would bypass the exact mechanism under test.
@@ -99,12 +101,24 @@ it("a throwing widget render leaves the session fully settled", () => {
     });
 
   expect(() =>
-    handle.applyDocument({ content: "a\n\n---\n\nb\n", eol: "\n", canWrite: true, docVersion: 7 })
+    handle.applyDocument({
+      content: "a\n\n---\n\nb\n",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 7,
+      ...PAIR,
+    })
   ).not.toThrow();
   // The wedge test: a SECOND snapshot still lands. This is the assertion that
   // fails without containment even after the widget is healthy again.
   expect(() =>
-    handle.applyDocument({ content: "a\n\n---\n\nbb\n", eol: "\n", canWrite: true, docVersion: 8 })
+    handle.applyDocument({
+      content: "a\n\n---\n\nbb\n",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 8,
+      ...PAIR,
+    })
   ).not.toThrow();
   spy.mockRestore();
 
@@ -124,7 +138,7 @@ it("a StateField block widget: a throwing table render settles the same way", ()
   // implementation to run against, instead of the synthetic stub in
   // widget-base.test.ts.
   const { handle, view } = mount();
-  handle.applyDocument({ content: "seed\n", eol: "\n", canWrite: true, docVersion: 1 });
+  handle.applyDocument({ content: "seed\n", eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
   const err = vi.spyOn(console, "error").mockImplementation(() => {});
   const spy = vi
     .spyOn(TableBlockWidget.prototype as unknown as { render: () => HTMLElement }, "render")
@@ -138,10 +152,16 @@ it("a StateField block widget: a throwing table render settles the same way", ()
   // vacuous.
   const table = "intro\n\n| a | b |\n| - | - |\n| 1 | 2 |\n";
   expect(() =>
-    handle.applyDocument({ content: table, eol: "\n", canWrite: true, docVersion: 7 })
+    handle.applyDocument({ content: table, eol: "\n", canWrite: true, docVersion: 7, ...PAIR })
   ).not.toThrow();
   expect(() =>
-    handle.applyDocument({ content: `${table}\ntail\n`, eol: "\n", canWrite: true, docVersion: 8 })
+    handle.applyDocument({
+      content: `${table}\ntail\n`,
+      eol: "\n",
+      canWrite: true,
+      docVersion: 8,
+      ...PAIR,
+    })
   ).not.toThrow();
   // Assert the hook actually ran, rather than inferring it from the placeholder.
   expect(spy).toHaveBeenCalled();
@@ -167,7 +187,7 @@ it("a throwing table patch tears the old element down and never writes bytes", (
   // Same caret caveat as above: prose first, so the table is actually rendered.
   const v1 = "intro\n\n| a | b |\n| - | - |\n| 1 | 2 |\n";
   const v2 = "intro\n\n| a | b |\n| - | - |\n| 9 | 2 |\n";
-  handle.applyDocument({ content: v1, eol: "\n", canWrite: true, docVersion: 1 });
+  handle.applyDocument({ content: v1, eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
   // Arm the table's document-level drag listeners, so this exercises a real
   // `dispose` with something to abort rather than a no-op one.
   const cell = document.querySelector(".quoll-table-block td") as HTMLElement | null;
@@ -187,7 +207,7 @@ it("a throwing table patch tears the old element down and never writes bytes", (
     });
   const before = hostBytes(view);
   expect(() =>
-    handle.applyDocument({ content: v2, eol: "\n", canWrite: true, docVersion: 2 })
+    handle.applyDocument({ content: v2, eol: "\n", canWrite: true, docVersion: 2, ...PAIR })
   ).not.toThrow();
   expect(spy).toHaveBeenCalled();
   spy.mockRestore();
@@ -221,17 +241,23 @@ it("non-vacuity: bypassing the base reproduces the wedge", () => {
   // CodeMirror started containing widget DOM construction or the containment
   // moved — and the base class's whole rationale needs re-reading.
   const { handle } = mount();
-  handle.applyDocument({ content: "seed\n", eol: "\n", canWrite: true, docVersion: 1 });
+  handle.applyDocument({ content: "seed\n", eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
   const spy = vi.spyOn(ThematicBreakWidget.prototype, "toDOM").mockImplementationOnce(() => {
     throw new Error("forced widget failure");
   });
   expect(() =>
-    handle.applyDocument({ content: "a\n\n---\n\nb\n", eol: "\n", canWrite: true, docVersion: 7 })
+    handle.applyDocument({
+      content: "a\n\n---\n\nb\n",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 7,
+      ...PAIR,
+    })
   ).toThrow();
   spy.mockRestore();
   // The wedge, pinned: the view cannot apply another snapshot even now that the
   // widget is healthy.
   expect(() =>
-    handle.applyDocument({ content: "plain\n", eol: "\n", canWrite: true, docVersion: 8 })
+    handle.applyDocument({ content: "plain\n", eol: "\n", canWrite: true, docVersion: 8, ...PAIR })
   ).toThrow();
 });

@@ -2,6 +2,35 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.86 — 2026-10-07
+
+### Fixed
+
+- In a file with Windows line endings (CRLF), copying or cutting whole lines with several cursors and no selection now pastes them back as whole lines. They used to be spliced into the middle of the lines the cursors were on.
+
+### Changed
+
+- Copying, cutting or dragging text out of a CRLF file now puts Unix line endings (LF) on the clipboard, as the code block copy button already did. The file itself is still saved with CRLF. VS Code's own text editor copies CRLF from such a file, so the two now differ. Not yet verified: what Windows actually places on the native clipboard, and how every paste target reacts — VS Code, its terminal and current Notepad accept LF, but older Windows controls or byte-sensitive targets may show the lines run together.
+
+## 0.1.85 — 2026-10-06
+
+### Fixed
+
+- Pasting text together with an image (for example a captioned picture copied from a web page) no longer loses the text. The caption used to disappear, and if the image could not be pasted nothing was inserted at all.
+- Sending the document to Claude Code or Codex no longer reports success while an edit Quoll could not save is still pending. The handoff now stops with a message instead of passing along an out-of-date version of the file.
+
+### Changed
+
+- When a paste carries both text and an image, Quoll now keeps both: the text is inserted first and the image follows it.
+
+## 0.1.84 — 2026-10-02
+
+### Fixed
+
+- Switching a file's line endings (LF ↔ CRLF) no longer collapses multiple cursors into one. Every cursor and selection now stays where you put it.
+- Format Document no longer deletes non-breaking spaces, full-width (ideographic) spaces or escaped tabs at the edge of a table cell.
+- Switching line endings while you are typing no longer loses unsaved keystrokes in a few remaining cases, such as when the editor tab has just become visible again.
+
 ## 0.1.83 — 2026-10-01
 
 ### Fixed

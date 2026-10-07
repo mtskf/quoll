@@ -140,6 +140,7 @@ describe("preserve-unsaved-on-close", function () {
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 1,
       content: `SOLE_DIRTY ${original}`,
       baseDocVersion: seed.message.docVersion,
     });

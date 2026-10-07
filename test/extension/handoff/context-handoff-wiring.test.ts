@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { createContextHandoffWiring } from "../../../src/extension/handoff/context-handoff-wiring.js";
 import type { EditSettledBarrier } from "../../../src/extension/session/edit-settled-barrier.js";
+import { REJECTION_BLOCKS_HANDOFF_MESSAGE } from "../../../src/extension/surface/rejection-registry.js";
 
 // A fake barrier that CAPTURES the (run, onDrop) pair without running it — the
 // wiring's single-flight / disposed routing is observable without triggering the
@@ -26,13 +27,21 @@ const fakeDocument = {
   isDirty: false,
 } as never;
 
-function makeWiring(barrier: EditSettledBarrier, isDisposed: () => boolean) {
+function makeWiring(
+  barrier: EditSettledBarrier,
+  isDisposed: () => boolean,
+  rejection: { isPending: () => boolean; errors: string[] } = { isPending: () => false, errors: [] }
+) {
   return createContextHandoffWiring({
     document: fakeDocument,
     viewType: "quoll.editMarkdown",
     editSettledBarrier: barrier,
     isDisposed,
     armRevealCaretSuppression: () => {},
+    isRejectionPending: rejection.isPending,
+    showError: (message) => {
+      rejection.errors.push(message);
+    },
   });
 }
 
@@ -78,6 +87,22 @@ describe("createContextHandoffWiring", () => {
     // Simulate a failed-apply drop: the barrier fires the captured onDrop.
     calls[0].onDrop?.();
     // Guard released → a later handoff is accepted again.
+    wiring.handleCodexContextHandoff();
+    expect(calls).toHaveLength(2);
+  });
+
+  it("releases the Codex single-flight guard after a pending-rejection refusal (thunk RAN, returned early)", async () => {
+    const { barrier, calls } = makeCaptureBarrier();
+    const rejection = { isPending: () => true, errors: [] as string[] };
+    const wiring = makeWiring(barrier, () => false, rejection);
+    wiring.handleCodexContextHandoff();
+    expect(calls).toHaveLength(1);
+    // Run the deferred thunk: the handler refuses at entry and resolves; its
+    // .finally must release the guard.
+    calls[0].run();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(rejection.errors).toEqual([REJECTION_BLOCKS_HANDOFF_MESSAGE]);
+    // Guard released → the next ⌘J is accepted, not silently swallowed.
     wiring.handleCodexContextHandoff();
     expect(calls).toHaveLength(2);
   });

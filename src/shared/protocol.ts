@@ -22,7 +22,8 @@
  *
  * Why a separate `protocol` envelope field:
  *   `protocol: PROTOCOL_VERSION` is the negotiation point for any incompatible
- *   change (a new REQUIRED field is one — version 2 added `DocumentMessage.eol`).
+ *   change (a new REQUIRED field is one — version 2 added `DocumentMessage.eol`,
+ *   version 3 the Edit id pair `EditMessage.editId` / `DocumentMessage.settledEditId`).
  *   Peers detect a mismatch at the boundary before parsing the payload.
  *
  * Rules for this module:
@@ -37,7 +38,7 @@
  *     rule above, since BOTH sides of the bridge consume this module.
  */
 
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 /** Hard cap on inbound webview→host content payload length, measured in UTF-16
  *  code units (i.e. `String.prototype.length`). 4 * 1024 * 1024 code units is
@@ -253,13 +254,11 @@ export function isDocumentEol(value: unknown): value is DocumentEol {
  *  at the protocol layer — see MAX_CONTENT_LENGTH for the directionality
  *  rationale.
  *
- *  `externalEpoch` + `epochGeneration` are an EXCLUSIVE PAIR — both present or
- *  both absent; a partial pair is a boundary-INVALID message (validator-
- *  authoritative). They are wire-OPTIONAL for one release so an old host that
- *  never sends them does not brick a new webview (absence = "no epoch info" =
- *  today's unconditional-replay behaviour). Since `PROTOCOL_VERSION` 2 an old
- *  host is rejected at `isProtocolMatch` before the pair is read, so that
- *  tolerance is unreachable; making the pair required is a follow-up.
+ *  `externalEpoch` + `epochGeneration` are both REQUIRED — a Document missing
+ *  either is a boundary-INVALID message. Requiring them did not bump
+ *  `PROTOCOL_VERSION`, unlike `eol`: `buildDocumentMessage` already emitted
+ *  both before version 2 existed, so every version-2 host sends the pair and
+ *  the stricter validator rejects no message a conforming host produces.
  *  Semantics (S3a plumbs them; S3b consumes them): `externalEpoch` is host-owned and monotonic WITHIN one host
  *  session (starts at 0), advancing whenever document content changed by
  *  anything other than the webview's own acked edit lineage; `epochGeneration`
@@ -269,10 +268,23 @@ export function isDocumentEol(value: unknown): value is DocumentEol {
  *  generations from a real advance. Identity, not ordering — never compared for
  *  magnitude.
  *
- *  The fields are typed as INDEPENDENTLY optional, but the EXCLUSIVE-pair
- *  contract (both present or both absent; a partial pair is invalid) is enforced
- *  at the boundary by `isValidEpochIdentity` — the validator is the authority,
- *  not the type. The host's `buildDocumentMessage` always emits BOTH. */
+ *  `settledEditId` is the highest `EditMessage.editId` this host session has
+ *  received (0 before the first Edit) — REQUIRED, hence `PROTOCOL_VERSION` 3.
+ *  For the webview session that minted those ids it reads as "the host is done
+ *  with every Edit up to this id" — DONE, not saved: the Edit was applied,
+ *  refused, or dropped (a stashed Edit replaced by a newer one is dropped
+ *  without a verdict of its own). That holds because the host emits a Document
+ *  only while its write lock is free, and with the lock free no received Edit
+ *  is still waiting (it was judged on arrival, or held under the lock and
+ *  resolved by the settlement or recovery that released it).
+ *
+ *  It is NOT comparable across a whole `epochGeneration`: ids are minted per
+ *  webview session (a reloaded webview restarts at 1) while the host's mark
+ *  never goes down within its session, so after a reload the mark can exceed
+ *  ids the new webview has not sent yet. A consumer must mint above the last
+ *  `settledEditId` it has seen before it compares — the webview does
+ *  (cm/edit-sync.ts `onHostSnapshot`), and reads the mark to tell a Document
+ *  produced before the host judged its in-flight Edit from that Edit's answer. */
 export type DocumentMessage = Envelope & {
   type: "document";
   content: string;
@@ -280,8 +292,9 @@ export type DocumentMessage = Envelope & {
   themeKind: ThemeKind;
   canWrite: boolean;
   eol: DocumentEol;
-  externalEpoch?: number;
-  epochGeneration?: number;
+  externalEpoch: number;
+  epochGeneration: number;
+  settledEditId: number;
 };
 
 /** Theme change only — no content, no version. Pushed on
@@ -440,11 +453,20 @@ export type ReadyMessage = Envelope & {
  *
  *  `content` is bounded by MAX_CONTENT_LENGTH at the validator boundary —
  *  this is the directional cap that protects the host from oversized
- *  webview-originated payloads. */
+ *  webview-originated payloads.
+ *
+ *  `editId` identifies this Edit to the host. Minted by the webview, strictly
+ *  increasing within one webview session, never reused (gaps are fine — a post
+ *  that failed to send still consumed its id). The host echoes the highest id
+ *  it has received on every Document (`DocumentMessage.settledEditId`), which
+ *  is what lets the webview tell whether a Document was produced before or
+ *  after the host judged a given Edit — within one webview session only; see
+ *  `DocumentMessage.settledEditId` for the reload caveat. */
 export type EditMessage = Envelope & {
   type: "edit";
   content: string;
   baseDocVersion: number;
+  editId: number;
 };
 
 /** Webview→host request to open an external URL. The webview's click
@@ -702,33 +724,20 @@ function isUnboundedContent(value: unknown): value is string {
   return typeof value === "string";
 }
 
-/** One component (epoch OR generation) of the Document's identity pair: a
- *  non-negative safe integer. `externalEpoch` starts at 0 and only advances;
- *  `epochGeneration` is a counter-salted timestamp (always positive). Both are
+/** One component (epoch OR generation) of the Document's identity pair, and
+ *  `settledEditId`: a non-negative safe integer. `externalEpoch` starts at 0
+ *  and only advances; `epochGeneration` is a counter-salted timestamp (always
+ *  positive); `settledEditId` is 0 until the first Edit arrives. All are
  *  bounded by the safe-integer ceiling for the same reason `docVersion` is —
  *  values beyond 2^53 stop incrementing/comparing reliably. */
 function isEpochComponent(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
-/** The Document's `externalEpoch` + `epochGeneration` pair is EXCLUSIVE:
- *  both valid, or both absent. A partial pair (exactly one present) is a
- *  boundary-INVALID message — the webview must never see a half-formed
- *  identity (its S3b drop-and-adopt logic enumerates only well-formed states:
- *  absent, or a valid pair). Absence is tolerated (old host → new webview
- *  skew): the webview falls back to today's unconditional-replay behaviour.
- *  Since `PROTOCOL_VERSION` 2 an old host fails `isProtocolMatch` first, so
- *  this tolerance is unreachable; making the pair required is a follow-up. */
-function isValidEpochIdentity(epoch: unknown, generation: unknown): boolean {
-  const epochAbsent = epoch === undefined;
-  const generationAbsent = generation === undefined;
-  if (epochAbsent && generationAbsent) {
-    return true; // no epoch info — tolerated
-  }
-  if (epochAbsent || generationAbsent) {
-    return false; // partial pair — invalid
-  }
-  return isEpochComponent(epoch) && isEpochComponent(generation);
+/** A webview-minted Edit id: a positive safe integer (ids start at 1; 0 is the
+ *  host's "no Edit received yet" value on `DocumentMessage.settledEditId`). */
+function isEditId(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
 }
 
 function isBoundedContent(value: unknown): value is string {
@@ -750,7 +759,9 @@ export function isHostToWebview(value: unknown): value is HostToWebview {
         isThemeKind(v.themeKind) &&
         typeof v.canWrite === "boolean" &&
         isDocumentEol(v.eol) &&
-        isValidEpochIdentity(v.externalEpoch, v.epochGeneration)
+        isEpochComponent(v.externalEpoch) &&
+        isEpochComponent(v.epochGeneration) &&
+        isEpochComponent(v.settledEditId)
       );
     case "theme":
       return isThemeKind(v.themeKind);
@@ -837,7 +848,9 @@ export function isWebviewToHost(value: unknown): value is WebviewToHost {
     case "ready":
       return true;
     case "edit":
-      return isBoundedContent(v.content) && isValidDocVersion(v.baseDocVersion);
+      return (
+        isBoundedContent(v.content) && isValidDocVersion(v.baseDocVersion) && isEditId(v.editId)
+      );
     case "open-external":
       return typeof v.href === "string" && v.href.length <= MAX_HREF_LENGTH;
     case "open-link":

@@ -72,6 +72,7 @@ describe("send-sync-throw-guarded (Codex N5)", function () {
       panel.simulateInbound({
         protocol: PROTOCOL_VERSION,
         type: "edit",
+        editId: 1,
         content: draft,
         baseDocVersion: seedV,
       })

@@ -341,6 +341,11 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     );
     let state = core.initialState(document.version);
 
+    // The session's pending-rejection predicate — one definition, two readers:
+    // the cross-surface registry below (tab-only command path to the forward
+    // swap) and the context-handoff wiring (both AI handoffs refuse while set).
+    const isRejectionPending = (): boolean => state.rejection.kind === "pending";
+
     // Publish THIS session's pending-rejection state to the cross-surface
     // registry keyed by document.uri, so the TAB-ONLY command path to the forward
     // swap (quoll.reopenInTextEditor title-bar button / quoll.toggleEditor
@@ -349,9 +354,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // switch-to-text arm applies below, which that command path cannot reach
     // because it has no panel closure. Identity-safe deregistration on dispose
     // (pushed onto `disposables`). See surface/rejection-registry.ts.
-    disposables.push(
-      registerPendingRejection(document.uri.toString(), () => state.rejection.kind === "pending")
-    );
+    disposables.push(registerPendingRejection(document.uri.toString(), isRejectionPending));
 
     // Edit-applied barrier for the document side channels (context-handoff /
     // codex-context-handoff / switch-to-text). It DEFERS a side-channel thunk
@@ -483,24 +486,26 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       showError,
       canWrite: canWriteNow,
       readLineageSince: () => liveLineageSince(() => canonicalDocumentText(document)),
-      buildSeedDocument: (docVersion, externalEpoch, epochGeneration) => {
+      buildSeedDocument: (docVersion, externalEpoch, epochGeneration, settledEditId) => {
         const message = buildDocumentMessageFromDocument(document, {
           docVersion,
           themeKind: themeKindFromColorTheme(window.activeColorTheme.kind),
           canWrite: canWriteNow(),
           externalEpoch,
           epochGeneration,
+          settledEditId,
         });
         lineage.noteHandedText(() => message.content, docVersion, document.version);
         return message;
       },
-      buildRejectedDraft: (content, docVersion, externalEpoch, epochGeneration) => {
+      buildRejectedDraft: (content, docVersion, externalEpoch, epochGeneration, settledEditId) => {
         const message = buildRejectedDraftFromDocument(document, content, {
           docVersion,
           themeKind: themeKindFromColorTheme(window.activeColorTheme.kind),
           canWrite: canWriteNow(),
           externalEpoch,
           epochGeneration,
+          settledEditId,
         });
         // The HOST text under this label, not the draft: the draft is the
         // webview's own bytes, and its next Edit is built on this label.
@@ -817,13 +822,20 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // both arms behind the editSettledBarrier so a handoff reads the APPLIED
     // document after an in-flight edit settles. The tier-0 reveal choreography,
     // the activeTextEditor guard, and the Codex single-flight guard all live in
-    // createContextHandoffWiring. No shared mutable state with the reducer.
+    // createContextHandoffWiring. No shared mutable state with the reducer: the
+    // wiring only READS state.rejection, through the injected predicate.
     const contextHandoffWiring = createContextHandoffWiring({
       document,
       viewType: QuollEditorPanel.viewType,
       editSettledBarrier,
       isDisposed: () => disposed,
       armRevealCaretSuppression: () => revealCaretSuppression.arm(),
+      // Same predicate the switch-to-text arm reads directly and the registry
+      // publishes: while a write-gate rejection is pending the draft is
+      // webview-only, so a handoff would reference a document the user is not
+      // looking at and report success.
+      isRejectionPending,
+      showError,
     });
 
     const handleInbound = (raw: unknown): void => {
@@ -880,6 +892,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
             dispatch({
               type: "edit",
               baseDocVersion: raw.baseDocVersion,
+              editId: raw.editId,
               content: raw.content,
               documentVersion: document.version,
               canWrite: canWriteNow(),

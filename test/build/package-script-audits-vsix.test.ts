@@ -24,6 +24,13 @@ const pkg = JSON.parse(
 describe("pnpm package audit wiring", () => {
   const packageScript: string = pkg.scripts.package;
 
+  it("builds before packaging", () => {
+    // vsce zips whatever is in dist/ and the audit checks presence, not
+    // freshness — without the leading build a stale bundle ships as a
+    // passing .vsix. Chained with `&&` so a failed type-check stops here.
+    expect(packageScript.startsWith("pnpm build && ")).toBe(true);
+  });
+
   it("packages the .vsix", () => {
     expect(packageScript).toContain("vsce package");
   });

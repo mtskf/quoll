@@ -38,7 +38,8 @@ export type WebviewState = {
   readonly canWrite: boolean;
   /** Single-flight invariant: at most one Edit pending at any time. Set
    *  true by a successful post-edit dispatch, cleared by the next non-stale
-   *  Document (which is the host's authoritative acknowledgement). */
+   *  Document the host produced AFTER judging that Edit (see the `document`
+   *  action's `editPending`). */
   readonly editInFlight: boolean;
   /** Most recent send-side failure — dispatched when postMessage throws
    *  (closed MessagePort, structuredClone error, host throttle) during
@@ -58,14 +59,18 @@ export type Action =
       readonly themeKind: ThemeKind;
       /** Identity-transition adoption (S3b): when true, bypass the stale
        *  two-comparison drop and adopt this Document unconditionally. A new host
-       *  session (fresh epochGeneration, or a legacy host that dropped the pair)
-       *  legitimately restarts at a LOWER docVersion; version ordering is
-       *  meaningful only within one generation. The shell computes this (via
-       *  edit-sync's `isIdentityTransition`) and threads it here so the reducer's
-       *  inlined copy of the stale guard cannot re-drop the adoption and strand
-       *  the webview permanently deaf to the live host. Absent/false on ordinary
-       *  same-generation (or pure-absent legacy) Documents. */
+       *  session (fresh epochGeneration) legitimately restarts at a LOWER
+       *  docVersion; version ordering is meaningful only within one generation.
+       *  The shell computes this (via edit-sync's `isIdentityTransition`) and
+       *  threads it here so the reducer's inlined copy of the stale guard cannot
+       *  re-drop the adoption and strand the webview permanently deaf to the
+       *  live host. Absent/false on ordinary same-generation Documents. */
       readonly adopt?: boolean;
+      /** The Document was produced before the host judged the in-flight Edit
+       *  (`settledEditId` below its id), so it is not that Edit's answer: keep
+       *  `editInFlight`. Computed by edit-sync (`onHostSnapshot`'s return).
+       *  Never raises the flag; absent/false clears it. */
+      readonly editPending?: boolean;
     }
   | { readonly type: "theme"; readonly themeKind: ThemeKind }
   | { readonly type: "post-edit" }
@@ -138,7 +143,7 @@ export function reducer(state: WebviewState, action: Action): WebviewState {
         docVersion: action.docVersion,
         theme: action.themeKind,
         canWrite: action.canWrite,
-        editInFlight: false,
+        editInFlight: state.editInFlight && action.editPending === true,
         // A fresh non-stale Document clears a prior host reject so the user
         // can resume editing (existing behavior; kept after the warning-
         // field pruning).

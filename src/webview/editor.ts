@@ -9,7 +9,14 @@
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { foldedRanges, forceParsing } from "@codemirror/language";
 import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
-import { Compartment, EditorState, Prec, Transaction } from "@codemirror/state";
+import {
+  Compartment,
+  EditorState,
+  Prec,
+  type StateEffect,
+  type Text,
+  Transaction,
+} from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { perfNow, perfRecord } from "../shared/perf.js";
 import {
@@ -139,21 +146,39 @@ export type EditorOptions = {
    *  The full rule lives on `EditSyncOptions.onLocalEditDiscarded` (cm/edit-sync.ts)
    *  — do not restate it here; this is a pass-through. */
   onLocalEditDiscarded?: () => void;
+  /** Fired when edit-sync is holding un-posted edits under a readonly document
+   *  (shown at most once per readonly episode). The shell wires it to a
+   *  user-visible notice and returns whether that notice was shown — `false`
+   *  asks for a retry. Pass-through — the rule lives on
+   *  `EditSyncOptions.onReadonlyHold` (cm/edit-sync.ts). */
+  onReadonlyHold?: () => boolean;
+  /** Fired when the host refused an Edit and nothing newer is held: the bytes
+   *  stay on screen, un-saved. The shell wires it to a user-visible notice.
+   *  Pass-through — the rule lives on `EditSyncOptions.onEditRefused`. */
+  onEditRefused?: () => void;
 };
 
 /** The part of a host `DocumentMessage` the editor consumes. An object, not
- *  positional arguments: three same-typed `number` fields would be swappable
+ *  positional arguments: its same-typed `number` fields would be swappable
  *  without a type error, and the shell already holds exactly this shape.
  *  `eol` is required — the editor never infers the document EOL from
  *  `content` (see `DocumentMessage` in shared/protocol.ts). */
 export type HostSnapshot = Pick<
   DocumentMessage,
-  "content" | "eol" | "canWrite" | "docVersion" | "externalEpoch" | "epochGeneration"
+  | "content"
+  | "eol"
+  | "canWrite"
+  | "docVersion"
+  | "externalEpoch"
+  | "epochGeneration"
+  | "settledEditId"
 >;
 
 export type EditorHandle = {
-  /** Replace the editor's document from a host snapshot. */
-  applyDocument(snapshot: HostSnapshot): void;
+  /** Replace the editor's document from a host snapshot. Returns whether the
+   *  in-flight Edit is still awaiting the host's verdict (edit-sync's
+   *  `onHostSnapshot`) — the reducer's `editPending`. */
+  applyDocument(snapshot: HostSnapshot): boolean;
   /** Fired by the shell after every state-changing dispatch — the SOLE
    *  drain entry point. */
   onReducerCommit(editInFlight: boolean): void;
@@ -206,14 +231,19 @@ export type EditorHandle = {
    *  the currently recorded pair? (S3b) The shell calls this BEFORE applyDocument
    *  so it can bypass its whole-Document stale-version drop and thread the
    *  `adopt` flag to the reducer. Delegates to edit-sync's pure predicate. */
-  isIdentityTransition(externalEpoch?: number, epochGeneration?: number): boolean;
+  isIdentityTransition(externalEpoch: number, epochGeneration: number): boolean;
 };
 
 /** Dispatch `post-edit` and ship the Edit message in the same tick.
  *  Returns `true` if the host accepted the message (postMessage did not
  *  throw), `false` otherwise — edit-sync consumes the boolean to decide
  *  whether to retain the buffer. */
-function postEditMessage(dispatch: Dispatch, content: string, baseDocVersion: number): boolean {
+function postEditMessage(
+  dispatch: Dispatch,
+  content: string,
+  baseDocVersion: number,
+  editId: number
+): boolean {
   if (content.length > MAX_CONTENT_LENGTH) {
     // The host boundary validator (isBoundedContent, shared/protocol.ts) drops
     // an over-limit `edit` with only a console.warn — no `edit-rejected`, no
@@ -244,6 +274,7 @@ function postEditMessage(dispatch: Dispatch, content: string, baseDocVersion: nu
     type: "edit",
     content,
     baseDocVersion,
+    editId,
   };
   const postStart = QUOLL_PERF ? perfNow() : 0;
   const ok = safePostMessage(getHost(), message, "edit", (err) => {
@@ -341,9 +372,18 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   const sync = createEditSync({
     getDoc: serializeForHost,
     canPost: () => canPostEdit(opts.getState()),
-    post: (content, baseDocVersion) => postEditMessage(opts.dispatch, content, baseDocVersion),
+    post: (content, baseDocVersion, editId) =>
+      postEditMessage(opts.dispatch, content, baseDocVersion, editId),
     onResyncStorm: opts.onResyncStorm,
     onLocalEditDiscarded: opts.onLocalEditDiscarded,
+    onReadonlyHold: opts.onReadonlyHold,
+    onEditRefused: opts.onEditRefused,
+    // Bring the view forward to bytes edit-sync still holds un-acked, through
+    // the SAME reseed transaction a host Document uses (non-history, annotated
+    // `hostDocumentReseed`, `seeding`-guarded so it is not read back as a local
+    // edit, main caret clamped, folds reconciled). No effects and no callback:
+    // nothing about the host's snapshot changed, only what the view shows.
+    showHeld: (content) => replaceViewText(splitToCmText(content), []),
   });
 
   const imagePaste = createImagePasteDrop({
@@ -833,15 +873,17 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // paths where this handler SWALLOWS a paste (in-code, null conversion): both
         // exempt a clipboard carrying an image file item (hasImageFileItem) — NOT
         // because an image copy lacks a text/html flavour; copying an image out of a
-        // web page carries both. The insert path does NOT exempt it: a fragment that
-        // emits real Markdown syntax is inserted here even when an image rides along,
-        // and imagePaste never runs. Accepted because a "Copy image" clipboard's HTML
-        // is a bare <img>, which converts to nothing → null → the exempted path.
-        // Non-convertible → return false, plain paste runs.
+        // web page carries both. The insert path hands the event on instead: with an
+        // image item riding along it inserts the conversion and returns false
+        // un-prevented, so imagePaste runs next and anchors after the inserted text.
+        // (A "Copy image" clipboard's HTML is a bare <img> → null → the exempted path.)
+        // Non-convertible → normally return false so imagePaste / plain paste run;
+        // swallowed only when nothing downstream could insert and a selection is at
+        // stake (canDeferWithoutDataLoss in rich-html-paste.ts).
         richHtmlPaste({ canWrite: () => opts.getState().canWrite }),
         // Paste/drop image ingestion: capture image files, post image-write, and
         // insert the relative link at a position-mapped anchor on the host's
-        // reply. canWrite mirrors edit-sync's readonly hard-drop; the host is the
+        // reply. canWrite mirrors edit-sync's readonly drop; the host is the
         // authoritative gate (sniff + size cap + read-only).
         imagePaste.extension,
         EditorView.lineWrapping,
@@ -855,22 +897,10 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // both are installed by the same state commit even if that dispatch later
         // throws from its DOM phase.
         docEolComp.of(quollDocumentEol.of("\n")),
-        // Copy / cut / drag-out keep the document's EOL, as they did when the
-        // lineSeparator facet rendered them. CM joins the copied ranges with
-        // state.lineBreak (now LF) and hands the result to this filter, so one pass
-        // covers both the between-range joins and each range's interior. The INPUT
-        // direction needs no filter: CM splits incoming clipboard text with its
-        // default /\r\n?|\n/.
-        // ⚠️ Known cost, accepted deliberately: CM recognises a linewise copy only
-        // when `lastLinewiseCopy === text.toString()` (LF-joined), so CRLF on the
-        // clipboard makes multi-cursor linewise copy/paste unrecognisable. Dropping
-        // this filter would repair that at the price of putting LF on a Windows
-        // clipboard where VS Code's own editor puts CRLF — filed with its
-        // measurement prerequisite in docs/TODO.md, not spent here.
-        EditorView.clipboardOutputFilter.of((text, state) => {
-          const eol = state.facet(quollDocumentEol);
-          return eol === "\n" ? text : text.split("\n").join(eol);
-        }),
+        // No clipboardOutputFilter: copy / cut / drag-out carry LF whatever the
+        // document's EOL. CM recognises its own linewise copy by comparing the
+        // LF-normalised paste with the string it copied, so a CRLF clipboard broke
+        // multi-cursor line copy → paste.
         editableComp.of([
           EditorView.editable.of(initialCanWrite),
           EditorState.readOnly.of(!initialCanWrite),
@@ -886,7 +916,12 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
             //      synchronous onReducerCommit → replayIfNeeded chain
             //      that fires INSIDE the local-edit-attempt dispatch
             //      below would otherwise post them again and the
-            //      banner would flicker. ORDER IS LOAD-BEARING.
+            //      banner would flicker. ORDER IS LOAD-BEARING — twice
+            //      over: that drain runs INSIDE this update listener, and
+            //      with a buffer in hand it could reach `showHeld`, which
+            //      dispatches a reseed on the view — from within the very
+            //      update that is delivering the user's keystroke. An
+            //      empty buffer keeps the drain out of that step.
             //   2. dispatch(local-edit-attempt) — clears the gate via
             //      the reducer; drain sees empty buffer (step 1) → no-op.
             // Then onLocalChange's debounce reads FRESH getDoc() — which
@@ -924,82 +959,61 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     mount.classList.toggle("read-only", !canWrite);
   }
 
-  return {
-    applyDocument(snapshot) {
-      const { content, eol, canWrite, docVersion, externalEpoch, epochGeneration } = snapshot;
-      // Cancel a scheduled flush BEFORE writing the snapshot so a pending
-      // debounced Edit cannot post the host's own bytes back — this also
-      // captures an in-window keystroke into the buffer so it survives
-      // the reseed and replays on the ack.
-      sync.cancelPendingFlush();
-      // Read BEFORE the reseed dispatch, so it must see the OLD EOL — it does,
-      // because docEolComp is reconfigured inside that dispatch. The SAME
-      // serializer edit-sync's getDoc uses, so this comparison and edit-sync's
-      // buffers cannot disagree about what the document's bytes are.
-      const liveDoc = serializeForHost();
-      const aheadOfHost = liveDoc !== content;
-      // ok-ack fold (update-loop guard — ARCHITECTURE.md §3/§5/§7). A host
-      // Document that merely ECHOES our own in-flight edit back is an ack, not
-      // a divergence. When the user kept typing during the in-flight window the
-      // live buffer has advanced past those acked bytes; a wholesale reseed
-      // would visibly REWIND the newer keystrokes (and a keystroke typed during
-      // the revert round-trip would fork off the stale base and be lost). The
-      // buffered edit replays forward on the reducer commit below, so fold this
-      // ack into version bookkeeping only — skip the visible content replace.
-      // Gated on canWrite so the readonly hard-drop path (cancelPendingFlush
-      // nulled the buffer) is untouched. The live buffer is always a descendant
-      // of what we posted, so an echo match means the acked content is a strict
-      // ancestor of the buffer — never a genuine external divergence (whose
-      // content never matches our posted bytes), which still reseeds.
-      //
-      // `acksInFlightEdit` answers content-echo AND identity-lineage continuity
-      // in ONE call, against the pair recorded BEFORE this snapshot (hence the
-      // call sits above `onHostSnapshot`). Both halves are load-bearing: content
-      // equality alone does not make a Document ours — another writer can land
-      // byte-identical bytes, which the host reports as a foreign epoch advance
-      // (or a new generation after a host restart), and edit-sync then DROPS the
-      // replay buffer for exactly that pair. Folding there would leave the
-      // ahead-of-host keystrokes on screen with nothing left to post them: they
-      // look saved, are not, and resurface on the next keystroke as bytes the
-      // host already superseded. Display and replay must obey one rule — see
-      // `supersedesIdentity` in cm/edit-sync.ts.
-      const foldsOkAck =
-        aheadOfHost && canWrite && sync.acksInFlightEdit(content, externalEpoch, epochGeneration);
-      const needsReseed = aheadOfHost && !foldsOkAck;
-      // Compute the inserted Text once so we can read its length for the
-      // selection clamp WITHOUT depending on a post-dispatch state read —
-      // selection is applied in resulting-doc coords inside this single
-      // transaction. splitToCmText's length is what view.state.doc.length
-      // will be after the change lands — the LF-internal UTF-16 code unit
-      // count (the split strips a CRLF's \r), which is exactly what CM
-      // selection positions are measured in. Do NOT substitute content.length
-      // here; see cm/seed.ts for the byte rationale.
-      const insertText = needsReseed ? splitToCmText(content) : null;
-      const newDocLength = insertText !== null ? insertText.length : view.state.doc.length;
-      // Computed BEFORE dispatch (needs the PRE-change view.state.doc — see the
-      // helper's CRLF note). Reused below, post-dispatch, to derive the edited
-      // span in POST-change coordinates for reconcileReseedFolds's orphan gate.
-      const computedChange =
-        insertText !== null ? computeReseedChange(view.state.doc, insertText) : null;
-      // An EMPTY change (from === to AND no insert) means the two docs are
-      // content-identical — an EOL-only switch on a multi-line document. Treat it
-      // as no reseed at all: only the compartments are reconfigured, so the
-      // selection (secondary ranges included) and the folds are left untouched.
-      const reseedChange =
-        computedChange !== null &&
-        (computedChange.from !== computedChange.to || computedChange.insert.length > 0)
-          ? computedChange
-          : null;
-      // Capture BEFORE the reseed. The needsReseed branch replaces ONE minimal
-      // span (computeReseedChange above, not a wholesale `0..doc.length`
-      // replace), but CodeMirror's default selection mapping still collapses a
-      // cursor that sits INSIDE the deleted span to that span's start — which
-      // is exactly where the accept-mid-typing race puts it. We re-set the
-      // caret in the SAME transaction below, clamped to the new doc bounds,
-      // so typing through an accept boundary keeps the edit point — and the
-      // atomic doc+editable contract (test "l") still holds because it is
-      // one dispatch.
-      const prevMain = reseedChange !== null ? view.state.selection.main : undefined;
+  // The ONE way host-supplied text replaces the view's text. Two callers share
+  // it so they cannot drift: `applyDocument` (a host Document, which also carries
+  // the docEol + editable compartment effects) and edit-sync's `showHeld` (the
+  // view is brought forward to bytes this webview still holds un-acked).
+  //   - `insertText === null` means "leave the text alone" — the caller decided
+  //     not to reseed (applyDocument's fold and not-ahead arms); only `effects`
+  //     ride the dispatch.
+  //   - The dispatch is skipped only when there is NOTHING to say: no text
+  //     change AND no effects. applyDocument always passes its compartment
+  //     effects, so its dispatch stays unconditional.
+  //   - ORDER: dispatch inside the `seeding` guard → guard released →
+  //     `afterDispatch` → fold reconcile. `afterDispatch` runs OUTSIDE the guard
+  //     on purpose: it is where applyDocument hands the snapshot to edit-sync, and
+  //     a throw from it must not be able to strand `seeding`.
+  // A function DECLARATION (hoisted): `showHeld` is wired into createEditSync
+  // above, before `view` exists. That is sound because it is only ever invoked
+  // later, from a drain.
+  function replaceViewText(
+    insertText: Text | null,
+    effects: readonly StateEffect<unknown>[],
+    afterDispatch?: () => void
+  ): void {
+    // Read the inserted Text's length for the selection clamp WITHOUT depending
+    // on a post-dispatch state read — selection is applied in resulting-doc
+    // coords inside this single transaction. A split Text's length is what
+    // view.state.doc.length will be after the change lands — the LF-internal
+    // UTF-16 code unit count (the split strips a CRLF's \r), which is exactly
+    // what CM selection positions are measured in. Do NOT substitute the host
+    // string's length here; see cm/seed.ts for the byte rationale.
+    const newDocLength = insertText !== null ? insertText.length : view.state.doc.length;
+    // Computed BEFORE dispatch (needs the PRE-change view.state.doc — see
+    // computeReseedChange's CRLF note). Reused below, post-dispatch, to derive the edited
+    // span in POST-change coordinates for reconcileReseedFolds's orphan gate.
+    const computedChange =
+      insertText !== null ? computeReseedChange(view.state.doc, insertText) : null;
+    // An EMPTY change (from === to AND no insert) means the two docs are
+    // content-identical — an EOL-only switch on a multi-line document. Treat it
+    // as no reseed at all: only the compartments are reconfigured, so the
+    // selection (secondary ranges included) and the folds are left untouched.
+    const reseedChange =
+      computedChange !== null &&
+      (computedChange.from !== computedChange.to || computedChange.insert.length > 0)
+        ? computedChange
+        : null;
+    // Capture BEFORE the reseed. A text-replacing call replaces ONE minimal
+    // span (computeReseedChange above, not a wholesale `0..doc.length`
+    // replace), but CodeMirror's default selection mapping still collapses a
+    // cursor that sits INSIDE the deleted span to that span's start — which
+    // is exactly where the accept-mid-typing race puts it. We re-set the
+    // caret in the SAME transaction below, clamped to the new doc bounds,
+    // so typing through an accept boundary keeps the edit point — and the
+    // atomic doc+editable contract (test "l") still holds because it is
+    // one dispatch.
+    const prevMain = reseedChange !== null ? view.state.selection.main : undefined;
+    if (reseedChange !== null || effects.length > 0) {
       seeding = true;
       try {
         view.dispatch({
@@ -1008,17 +1022,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
           // frontmatter state machine distinguish a reseed from user edits
           // (and from other addToHistory=false transactions).
           annotations: [Transaction.addToHistory.of(false), hostDocumentReseed.of(true)],
-          effects: [
-            // The host's `eol`, never inferred from `content`. UNCONDITIONAL
-            // (fold or reseed alike): on a no-newline document the bytes are
-            // identical under either EOL, so an EOL-only switch there is not
-            // `aheadOfHost` and this effect is the only thing that installs it.
-            docEolComp.reconfigure(quollDocumentEol.of(eol)),
-            editableComp.reconfigure([
-              EditorView.editable.of(canWrite),
-              EditorState.readOnly.of(!canWrite),
-            ]),
-          ],
+          effects,
           ...(reseedChange !== null
             ? {
                 // Minimal single-span change (not a wholesale {0, doc.length}
@@ -1027,7 +1031,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
                 // spring the document open. computeReseedChange trims the common
                 // prefix/suffix so foldState ranges outside the real edit survive.
                 // Operands are CM Text in LF-internal coords (view.state.doc, not
-                // the sliceDoc() render) — see the helper's CRLF note. insertText
+                // the sliceDoc() render) — see computeReseedChange's CRLF note. insertText
                 // stays the pre-split snapshot Text (also feeds newDocLength).
                 changes: reseedChange,
               }
@@ -1051,80 +1055,161 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // echo-Edit detection.
         seeding = false;
       }
-      sync.onHostSnapshot(docVersion, canWrite, externalEpoch, epochGeneration);
-      setReadOnlyClass(canWrite);
-      // Reconcile native folds that the minimal-span reseed REMAPPED. The diff maps
-      // overlapping folds through the change (preserving them — PR #292), but an
-      // external insert INTO a collapsed section can widen a mapped fold to swallow a
-      // newly-inserted sibling heading, hiding it until the user unfolds; and an edit
-      // that strips a folded heading's OWN marker can orphan its fold entirely (no
-      // canonical range left to clamp to). Only meaningful when the reseed actually
-      // changed the document (reseedChange !== null). This is a SEPARATE, display-only
-      // dispatch carrying NO `changes` — byte-identical round-trip, and a no-op for the
-      // updateListener's `docChanged`-gated edit-sync — so it behaves exactly like a
-      // user fold/unfold (hence NOT annotated as a hostDocumentReseed; it rewrites no
-      // document bytes). addToHistory.of(false) keeps the clamp out of undo.
-      // reconcileReseedFolds self-guards on a complete parse tree. The edited-span
-      // argument is in POST-change coordinates (reseedChange.from is unaffected by its
-      // own edit; the edit's far end shifts to reseedChange.from + insert.length) —
-      // reconcileReseedFolds uses it to gate the orphan-release path to folds whose OWN
-      // line OR span the reseed actually touched, per its JSDoc.
-      //
-      // An EMPTY change never reaches here (reseedChange is null for it, above).
-      // That is load-bearing, not just an optimisation: the orphan gate's span
-      // test is boundary-inclusive, so a zero-width edited span sitting on a
-      // fold's boundary would otherwise (mis)count as touching it and spring a
-      // still-valid fold open (pinned by (r5)).
-      if (
-        reseedChange !== null &&
-        // Only reconcile — and only pay for the forced parse — when there are active
-        // folds to reconcile. Folding is opt-in, so the overwhelming majority of
-        // reseeds have no folds and nothing to clamp; skipping keeps the whole-doc
-        // parse off the common no-fold reseed path (Codex review). foldedRanges is
-        // O(folds), cheap.
-        foldedRanges(view.state).size > 0
-      ) {
-        // Force ONE bounded complete parse so reconcileReseedFolds' foldable() /
-        // heading walk read the WHOLE tree even when the reseed's bounded apply
-        // parse left the frontier incomplete (large / just-opened doc). forceParsing
-        // — NOT a bare ensureSyntaxTree — is required: its public contract is to
-        // force a bounded parse AND make the completed tree visible to
-        // syntaxTree(view.state) (which foldable() reads); a bare ensureSyntaxTree
-        // advances the parse context but leaves syntaxTree(state) stale (it would
-        // even report syntaxTreeAvailable === true while foldable still reads the old
-        // tree). Reseed is not a keystroke path, so this one-shot parse is acceptable
-        // (mirrors cm/outline/outline-panel.ts); an already-parsed doc returns
-        // instantly with no added parse or dispatch. We call reconcileReseedFolds
-        // even if forceParsing returns false (budget exhausted on a pathological
-        // multi-MB doc): its own syntaxTreeAvailable guard makes that a safe no-op
-        // that leaves the mapped fold untouched (the pre-existing accepted
-        // behaviour), and NOT gating here leaves room for a future retry/publication
-        // path. See .claude/docs/LEARNING.md.
-        const parsed = forceParsing(view, view.state.doc.length, RECONCILE_PARSE_BUDGET_MS);
-        if (!parsed) {
-          // Dev-diagnostic (webview devtools only, never user-facing): the forced
-          // parse hit its budget on a pathological doc, so reconcileReseedFolds
-          // below will bail on its own syntaxTreeAvailable guard and any stale
-          // over-wide fold stays unreconciled (recoverable by unfolding — the
-          // Done-when's accepted no-op path). Logged so a future "inserted section
-          // stayed hidden behind a stale fold on a huge file" report can be
-          // correlated to this budget-miss path. Mirrors the recoverable-
-          // degradation console.warn convention in cm/image/*.
-          console.warn(
-            "[quoll] reconcileReseedFolds: forced parse hit its budget; fold reconciliation skipped (a stale fold, if any, is left unreconciled)"
-          );
-        }
-        const foldEffects = reconcileReseedFolds(view.state, {
-          from: reseedChange.from,
-          to: reseedChange.from + reseedChange.insert.length,
-        });
-        if (foldEffects.length > 0) {
-          view.dispatch({
-            annotations: [Transaction.addToHistory.of(false)],
-            effects: foldEffects,
-          });
-        }
+    }
+    afterDispatch?.();
+    // Reconcile native folds that the minimal-span reseed REMAPPED. The diff maps
+    // overlapping folds through the change (preserving them — PR #292), but an
+    // external insert INTO a collapsed section can widen a mapped fold to swallow a
+    // newly-inserted sibling heading, hiding it until the user unfolds; and an edit
+    // that strips a folded heading's OWN marker can orphan its fold entirely (no
+    // canonical range left to clamp to). Only meaningful when the reseed actually
+    // changed the document (reseedChange !== null). This is a SEPARATE, display-only
+    // dispatch carrying NO `changes` — byte-identical round-trip, and a no-op for the
+    // updateListener's `docChanged`-gated edit-sync — so it behaves exactly like a
+    // user fold/unfold (hence NOT annotated as a hostDocumentReseed; it rewrites no
+    // document bytes). addToHistory.of(false) keeps the clamp out of undo.
+    // reconcileReseedFolds self-guards on a complete parse tree. The edited-span
+    // argument is in POST-change coordinates (reseedChange.from is unaffected by its
+    // own edit; the edit's far end shifts to reseedChange.from + insert.length) —
+    // reconcileReseedFolds uses it to gate the orphan-release path to folds whose OWN
+    // line OR span the reseed actually touched, per its JSDoc.
+    //
+    // An EMPTY change never reaches here (reseedChange is null for it, above).
+    // That is load-bearing, not just an optimisation: the orphan gate's span
+    // test is boundary-inclusive, so a zero-width edited span sitting on a
+    // fold's boundary would otherwise (mis)count as touching it and spring a
+    // still-valid fold open (pinned by (r5)).
+    if (
+      reseedChange !== null &&
+      // Only reconcile — and only pay for the forced parse — when there are active
+      // folds to reconcile. Folding is opt-in, so the overwhelming majority of
+      // reseeds have no folds and nothing to clamp; skipping keeps the whole-doc
+      // parse off the common no-fold reseed path (Codex review). foldedRanges is
+      // O(folds), cheap.
+      foldedRanges(view.state).size > 0
+    ) {
+      // Force ONE bounded complete parse so reconcileReseedFolds' foldable() /
+      // heading walk read the WHOLE tree even when the reseed's bounded apply
+      // parse left the frontier incomplete (large / just-opened doc). forceParsing
+      // — NOT a bare ensureSyntaxTree — is required: its public contract is to
+      // force a bounded parse AND make the completed tree visible to
+      // syntaxTree(view.state) (which foldable() reads); a bare ensureSyntaxTree
+      // advances the parse context but leaves syntaxTree(state) stale (it would
+      // even report syntaxTreeAvailable === true while foldable still reads the old
+      // tree). Reseed is not a keystroke path, so this one-shot parse is acceptable
+      // (mirrors cm/outline/outline-panel.ts); an already-parsed doc returns
+      // instantly with no added parse or dispatch. We call reconcileReseedFolds
+      // even if forceParsing returns false (budget exhausted on a pathological
+      // multi-MB doc): its own syntaxTreeAvailable guard makes that a safe no-op
+      // that leaves the mapped fold untouched (the pre-existing accepted
+      // behaviour), and NOT gating here leaves room for a future retry/publication
+      // path. See .claude/docs/LEARNING.md.
+      const parsed = forceParsing(view, view.state.doc.length, RECONCILE_PARSE_BUDGET_MS);
+      if (!parsed) {
+        // Dev-diagnostic (webview devtools only, never user-facing): the forced
+        // parse hit its budget on a pathological doc, so reconcileReseedFolds
+        // below will bail on its own syntaxTreeAvailable guard and any stale
+        // over-wide fold stays unreconciled (recoverable by unfolding — the
+        // Done-when's accepted no-op path). Logged so a future "inserted section
+        // stayed hidden behind a stale fold on a huge file" report can be
+        // correlated to this budget-miss path. Mirrors the recoverable-
+        // degradation console.warn convention in cm/image/*.
+        console.warn(
+          "[quoll] reconcileReseedFolds: forced parse hit its budget; fold reconciliation skipped (a stale fold, if any, is left unreconciled)"
+        );
       }
+      const foldEffects = reconcileReseedFolds(view.state, {
+        from: reseedChange.from,
+        to: reseedChange.from + reseedChange.insert.length,
+      });
+      if (foldEffects.length > 0) {
+        view.dispatch({
+          annotations: [Transaction.addToHistory.of(false)],
+          effects: foldEffects,
+        });
+      }
+    }
+  }
+
+  return {
+    applyDocument(snapshot) {
+      const { content, eol, canWrite } = snapshot;
+      // Cancel a scheduled flush BEFORE writing the snapshot so a pending
+      // debounced Edit cannot post the host's own bytes back — this also
+      // captures an in-window keystroke into the buffer so it survives
+      // the reseed and replays on the ack.
+      sync.cancelPendingFlush();
+      // Read BEFORE the reseed dispatch, so it must see the OLD EOL — it does,
+      // because docEolComp is reconfigured inside that dispatch. The SAME
+      // serializer edit-sync's getDoc uses, so this comparison and edit-sync's
+      // buffers cannot disagree about what the document's bytes are.
+      const liveDoc = serializeForHost();
+      const aheadOfHost = liveDoc !== content;
+      // ok-ack fold (update-loop guard — ARCHITECTURE.md §3/§5/§7). A host
+      // Document that differs from the view is NOT necessarily a divergence: it
+      // may be the ack of an Edit the user has since typed past, a stale repost,
+      // a refusal of the Edit in flight, or a Document produced before the host
+      // judged it. Reseeding on any of them would
+      // visibly REWIND the newer keystrokes, and a keystroke typed from the
+      // rewound view would fork off bytes edit-sync still holds and lose them.
+      // So the question asked is about the VIEW: while it shows the newest bytes
+      // edit-sync holds un-acked, fold the Document into version bookkeeping
+      // only — skip the visible content replace — and let the drain on the
+      // reducer commit carry the held bytes forward.
+      // Gated on canWrite: a readonly Document always reseeds to the host's
+      // bytes. A buffer held from before the flip survives in edit-sync; on a
+      // re-grant its drain brings the view forward again (`showHeld`) and
+      // replays it.
+      //
+      // `viewHoldsUnackedEdit` answers view-shows-held-bytes AND identity-lineage
+      // continuity in ONE call, with the incoming Document BEFORE it is recorded
+      // (hence the call sits above `onHostSnapshot`). Both halves are
+      // load-bearing: holding bytes alone does not make them still ours to
+      // carry — when another writer lands, the host reports a foreign epoch
+      // advance (or a new generation after a host restart), and edit-sync then
+      // DROPS the replay buffer for exactly that pair. Folding there would leave
+      // the ahead-of-host keystrokes on screen with nothing left to post them:
+      // they look saved, are not, and resurface on the next keystroke as bytes
+      // the host already superseded. Display and replay must obey one rule — see
+      // `supersedesIdentity` in cm/edit-sync.ts. (Foreign bytes that arrive
+      // WITHOUT an epoch advance are recognised there by content; the drain
+      // comment states what that cannot see.)
+      const foldsOkAck = aheadOfHost && canWrite && sync.viewHoldsUnackedEdit(liveDoc, snapshot);
+      const needsReseed = aheadOfHost && !foldsOkAck;
+      // Decide HERE whether the text is replaced at all; `replaceViewText` owns
+      // how. `null` (the fold and the not-ahead arms) leaves the text alone, and
+      // the dispatch then carries the compartment effects only.
+      // splitToCmText, not `content` itself: CM positions are LF-internal UTF-16
+      // code units (see cm/seed.ts for the byte rationale).
+      const insertText = needsReseed ? splitToCmText(content) : null;
+      // Assigned by the callback below, which `replaceViewText` runs on every
+      // arm. The initial value is never returned: a throwing dispatch (or a
+      // throwing callback) propagates out of applyDocument, so the shell never
+      // dispatches the `document` action and `editInFlight` is left as it was.
+      let editPending = false;
+      replaceViewText(
+        insertText,
+        [
+          // The host's `eol`, never inferred from `content`. UNCONDITIONAL
+          // (fold or reseed alike): on a no-newline document the bytes are
+          // identical under either EOL, so an EOL-only switch there is not
+          // `aheadOfHost` and this effect is the only thing that installs it.
+          docEolComp.reconfigure(quollDocumentEol.of(eol)),
+          editableComp.reconfigure([
+            EditorView.editable.of(canWrite),
+            EditorState.readOnly.of(!canWrite),
+          ]),
+        ],
+        () => {
+          // Runs on EVERY arm, after the dispatch released `seeding` and before
+          // the fold reconcile: edit-sync records the pair and judges the
+          // in-flight Edit against the Document, then the readonly class
+          // follows the capability the dispatch just installed.
+          editPending = sync.onHostSnapshot(snapshot);
+          setReadOnlyClass(canWrite);
+        }
+      );
+      return editPending;
     },
     isIdentityTransition(externalEpoch, epochGeneration) {
       return sync.isIdentityTransition(externalEpoch, epochGeneration);

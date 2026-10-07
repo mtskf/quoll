@@ -63,6 +63,15 @@ let container: HTMLElement | null = null;
 // orphaned timer fires and posts a stray Edit into the next test's freshly
 // reset postMessage trail — a cross-test leak that made the full parallel
 // suite non-deterministically red. dispose() cancels the pending flush.
+// The identity pair for fixtures that stay on one host lineage throughout.
+const PAIR = {
+  externalEpoch: 0,
+  epochGeneration: 1,
+  // A host that has received every Edit posted so far.
+  get settledEditId(): number {
+    return Math.max(0, ...editPosts().map((m) => (m as { editId: number }).editId));
+  },
+};
 const mounted: EditorHandle[] = [];
 
 function makeState(overrides: Partial<WebviewState> = {}): WebviewState {
@@ -158,15 +167,21 @@ function mount(
 describe("editor — applyDocument seeds the CM doc (a)", () => {
   it("rawText reaches the CM document (LF seed, so sliceDoc() is byte-identical)", () => {
     const { handle, view } = mount();
-    handle.applyDocument({ content: "# hello\n\nworld", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({
+      content: "# hello\n\nworld",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
     expect(view.state.sliceDoc()).toBe("# hello\n\nworld");
   });
 });
 
 // (S3b) applyDocument threads the (externalEpoch, epochGeneration) pair into
 // edit-sync, so editor.isIdentityTransition reflects the recorded pair. Pins the
-// editor.ts threading: without it the pair would record as absent and the
-// same-generation query below would wrongly report a transition.
+// editor.ts threading by value: a constant, swapped, or stale pair would make a
+// same-generation query below report a transition.
 describe("editor — applyDocument threads the identity pair (S3b)", () => {
   it("isIdentityTransition reflects the recorded pair after seeding", () => {
     const { handle } = mount();
@@ -177,10 +192,10 @@ describe("editor — applyDocument threads the identity pair (S3b)", () => {
       docVersion: 1,
       externalEpoch: 0,
       epochGeneration: 111,
+      settledEditId: PAIR.settledEditId,
     });
     expect(handle.isIdentityTransition(0, 222)).toBe(true); // new generation
     expect(handle.isIdentityTransition(9, 111)).toBe(false); // same generation
-    expect(handle.isIdentityTransition(undefined, undefined)).toBe(true); // present→absent
     // A same-generation advance re-records the pair; the predicate tracks it.
     handle.applyDocument({
       content: "seed2",
@@ -189,6 +204,7 @@ describe("editor — applyDocument threads the identity pair (S3b)", () => {
       docVersion: 2,
       externalEpoch: 5,
       epochGeneration: 111,
+      settledEditId: PAIR.settledEditId,
     });
     expect(handle.isIdentityTransition(5, 111)).toBe(false);
     expect(handle.isIdentityTransition(0, 333)).toBe(true);
@@ -204,7 +220,13 @@ describe("editor — applyDocument threads the identity pair (S3b)", () => {
 describe("editor — nascent-setext token markers wired (production mount)", () => {
   it("a strong span carries the quoll-tok-strong marker class", () => {
     const { handle, view } = mount();
-    handle.applyDocument({ content: "Foo **bar**", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({
+      content: "Foo **bar**",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
     const line = view.contentDOM.querySelector(".cm-line");
     const bar = [...(line?.querySelectorAll("span") ?? [])]
       .reverse()
@@ -218,9 +240,9 @@ describe("editor — idempotent reseed posts no Edit (b)", () => {
   it("identical rawText reseed produces no Edit on the post trail", () => {
     vi.useFakeTimers();
     const { handle } = mount();
-    handle.applyDocument({ content: "seed", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({ content: "seed", eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
     expect(editPosts()).toHaveLength(0);
-    handle.applyDocument({ content: "seed", eol: "\n", canWrite: true, docVersion: 2 });
+    handle.applyDocument({ content: "seed", eol: "\n", canWrite: true, docVersion: 2, ...PAIR });
     vi.advanceTimersByTime(1000);
     expect(editPosts()).toHaveLength(0);
   });
@@ -231,10 +253,10 @@ describe("editor — canWrite param drives BOTH editable + readOnly facets (c)",
   it("canWrite:false flips readOnly+editable WITHOUT changing state.canWrite, then canWrite:true flips back", () => {
     const heldState = makeState({ canWrite: true });
     const { handle, view } = mount({ state: heldState });
-    handle.applyDocument({ content: "body", eol: "\n", canWrite: false, docVersion: 1 });
+    handle.applyDocument({ content: "body", eol: "\n", canWrite: false, docVersion: 1, ...PAIR });
     expect(view.state.readOnly).toBe(true);
     expect(view.state.facet(EditorView.editable)).toBe(false);
-    handle.applyDocument({ content: "body", eol: "\n", canWrite: true, docVersion: 2 });
+    handle.applyDocument({ content: "body", eol: "\n", canWrite: true, docVersion: 2, ...PAIR });
     expect(view.state.readOnly).toBe(false);
     expect(view.state.facet(EditorView.editable)).toBe(true);
   });
@@ -243,14 +265,14 @@ describe("editor — canWrite param drives BOTH editable + readOnly facets (c)",
 // (d) Fresh-canWrite seed: applyDocument fires BEFORE getState would see the
 // next reducer commit, so the Compartment + replay gate must use the param.
 describe("editor — fresh canWrite from applyDocument drives Compartment + replay (d)", () => {
-  it("applyDocument({ canWrite: true, ... }) with stale state.canWrite=false leaves view writable AND drains buffered Edit on commit", () => {
+  it("applyDocument({ canWrite: true, ..., ...PAIR }) with stale state.canWrite=false leaves view writable AND drains buffered Edit on commit", () => {
     vi.useFakeTimers();
     const { handle, view, setState, commit } = mount({
       state: makeState({ canWrite: false }),
     });
     // applyDocument with FRESH canWrite=true — drives the Compartment off
     // the PARAM regardless of the stale state.canWrite reader.
-    handle.applyDocument({ content: "seed", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({ content: "seed", eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
     expect(view.state.readOnly).toBe(false);
     expect(view.state.facet(EditorView.editable)).toBe(true);
     view.dispatch({ changes: { from: view.state.doc.length, insert: "x" } });
@@ -279,7 +301,7 @@ describe("editor — ok-ack while ahead does not reseed backwards (d2)", () => {
   it("an ok-ack echoing the in-flight edit does NOT visibly rewind newer keystrokes", () => {
     vi.useFakeTimers();
     const { handle, view, commit } = mount();
-    handle.applyDocument({ content: "D1", eol: "\n", canWrite: true, docVersion: 1 }); // seed at v1
+    handle.applyDocument({ content: "D1", eol: "\n", canWrite: true, docVersion: 1, ...PAIR }); // seed at v1
     // User types "2" → the debounced Edit posts (editInFlight in edit-sync).
     view.dispatch({ changes: { from: view.state.doc.length, insert: "2" } });
     vi.advanceTimersByTime(300);
@@ -292,7 +314,7 @@ describe("editor — ok-ack while ahead does not reseed backwards (d2)", () => {
     expect(view.state.sliceDoc()).toBe("D123");
     // The ok-ack: host applied "D12", echoes it back at v2. It must NOT reseed
     // the doc back to "D12" (which would erase the visible "3").
-    handle.applyDocument({ content: "D12", eol: "\n", canWrite: true, docVersion: 2 });
+    handle.applyDocument({ content: "D12", eol: "\n", canWrite: true, docVersion: 2, ...PAIR });
     expect(view.state.sliceDoc()).toBe("D123"); // no visible rewind
     // The shell's post-dispatch commit clears editInFlight and replays "D123".
     commit(false);
@@ -306,13 +328,13 @@ describe("editor — ok-ack while ahead does not reseed backwards (d2)", () => {
   it("a keystroke typed during the ack round-trip is preserved end-to-end (no fork off a rewound base)", () => {
     vi.useFakeTimers();
     const { handle, view, commit } = mount();
-    handle.applyDocument({ content: "D1", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({ content: "D1", eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
     view.dispatch({ changes: { from: view.state.doc.length, insert: "2" } });
     vi.advanceTimersByTime(300); // posts "D12"
     view.dispatch({ changes: { from: view.state.doc.length, insert: "3" } });
     vi.advanceTimersByTime(300); // buffers "D123"
     // ok-ack #1 echoes "D12" back; the user is ahead at "D123".
-    handle.applyDocument({ content: "D12", eol: "\n", canWrite: true, docVersion: 2 });
+    handle.applyDocument({ content: "D12", eol: "\n", canWrite: true, docVersion: 2, ...PAIR });
     // Before the commit replays, the user types "4" — it must build on the live
     // "D123", not a rewound "D12" base (which would fork off "D124", dropping 3).
     view.dispatch({ changes: { from: view.state.doc.length, insert: "4" } });
@@ -320,7 +342,7 @@ describe("editor — ok-ack while ahead does not reseed backwards (d2)", () => {
     commit(false); // replays "D123" at v2; "D1234" now buffers behind it
     vi.advanceTimersByTime(300);
     // ok-ack #2 echoes "D123" back; the user is ahead at "D1234".
-    handle.applyDocument({ content: "D123", eol: "\n", canWrite: true, docVersion: 3 });
+    handle.applyDocument({ content: "D123", eol: "\n", canWrite: true, docVersion: 3, ...PAIR });
     commit(false); // replays "D1234" at v3
     expect(view.state.sliceDoc()).toBe("D1234");
     const contents = editPosts().map((m) => (m as { content: string }).content);
@@ -331,13 +353,24 @@ describe("editor — ok-ack while ahead does not reseed backwards (d2)", () => {
   it("a genuine external divergence (content not our in-flight edit) still reseeds", () => {
     vi.useFakeTimers();
     const { handle, view } = mount();
-    handle.applyDocument({ content: "D1", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({ content: "D1", eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
     view.dispatch({ changes: { from: view.state.doc.length, insert: "2" } });
     vi.advanceTimersByTime(300); // posts "D12", in flight
     expect(view.state.sliceDoc()).toBe("D12");
     // An EXTERNAL edit changed the file to unrelated content at a newer version.
-    // It does not echo our in-flight "D12", so the reseed must still apply.
-    handle.applyDocument({ content: "EXTERNAL", eol: "\n", canWrite: true, docVersion: 2 });
+    // The host reports a foreign write as an EPOCH ADVANCE, and that — not the
+    // content — is what tells it apart from a Document on our own lineage: the
+    // view holds the in-flight "D12", but that lineage no longer leads, so the
+    // reseed must still apply.
+    handle.applyDocument({
+      content: "EXTERNAL",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 2,
+      externalEpoch: PAIR.externalEpoch + 1,
+      epochGeneration: PAIR.epochGeneration,
+      settledEditId: PAIR.settledEditId,
+    });
     expect(view.state.sliceDoc()).toBe("EXTERNAL");
   });
 
@@ -346,22 +379,22 @@ describe("editor — ok-ack while ahead does not reseed backwards (d2)", () => {
     // when the editor is ahead — so the user MUST have typed past the acked bytes
     // for this to exercise the gate (an ack with live == acked never folds
     // regardless of canWrite). When write access is revoked simultaneously with
-    // the echo ack, cancelPendingFlush's readonly hard-drop path means the
-    // live-ahead content could never replay; folding must be suppressed so the
-    // doc reseeds to the host's authoritative readonly bytes rather than
-    // stranding unsavable content ahead of the host.
+    // the echo ack, nothing can post until write is re-granted — edit-sync only
+    // HOLDS the buffer under readonly; folding must be suppressed so the doc
+    // reseeds to the host's authoritative readonly bytes rather than leaving
+    // unsaved content on screen ahead of a host that will not take it.
     // Revert-check: strip `&& canWrite` from foldsOkAck → this test goes red
     // (foldsOkAck becomes true, the doc keeps the live-ahead "D123").
     vi.useFakeTimers();
     const { handle, view } = mount();
-    handle.applyDocument({ content: "D1", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({ content: "D1", eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
     view.dispatch({ changes: { from: view.state.doc.length, insert: "2" } });
     vi.advanceTimersByTime(300); // posts "D12", in flight
     view.dispatch({ changes: { from: view.state.doc.length, insert: "3" } });
     vi.advanceTimersByTime(300); // buffers "D123" — editor is now AHEAD of the ack
     expect(view.state.sliceDoc()).toBe("D123");
     // ok-ack echoing "D12" back BUT canWrite=false now → must reseed, not fold.
-    handle.applyDocument({ content: "D12", eol: "\n", canWrite: false, docVersion: 2 });
+    handle.applyDocument({ content: "D12", eol: "\n", canWrite: false, docVersion: 2, ...PAIR });
     expect(view.state.readOnly).toBe(true);
     expect(view.state.sliceDoc()).toBe("D12");
   });
@@ -385,6 +418,7 @@ describe("editor — an ack that crossed an EOL-mode switch still folds (d2b)", 
       docVersion: 1,
       externalEpoch: 0,
       epochGeneration: 11,
+      settledEditId: PAIR.settledEditId,
     });
     view.dispatch({ changes: { from: view.state.doc.length, insert: "c" } });
     vi.advanceTimersByTime(300); // posts "a\nbc" — in flight
@@ -398,6 +432,7 @@ describe("editor — an ack that crossed an EOL-mode switch still folds (d2b)", 
       docVersion: 2,
       externalEpoch: 0,
       epochGeneration: 11,
+      settledEditId: PAIR.settledEditId,
     });
     expect(view.state.sliceDoc()).toBe("a\nbcd"); // folded, no rewind
     commit(false);
@@ -430,6 +465,7 @@ describe("editor — ok-ack fold requires identity-lineage continuity (d3)", () 
       docVersion: 1,
       externalEpoch: epoch,
       epochGeneration: gen,
+      settledEditId: PAIR.settledEditId,
     });
     view.dispatch({ changes: { from: view.state.doc.length, insert: "2" } });
     vi.advanceTimersByTime(300); // posts "D12" — in flight
@@ -454,6 +490,7 @@ describe("editor — ok-ack fold requires identity-lineage continuity (d3)", () 
       docVersion: 2,
       externalEpoch: 1,
       epochGeneration: 11,
+      settledEditId: PAIR.settledEditId,
     });
     expect(view.state.sliceDoc()).toBe("D12"); // reseeded to the host's bytes
     // The drain drops the stale-lineage buffer, so nothing replays "D123".
@@ -475,6 +512,7 @@ describe("editor — ok-ack fold requires identity-lineage continuity (d3)", () 
       docVersion: 2,
       externalEpoch: 1,
       epochGeneration: 11,
+      settledEditId: PAIR.settledEditId,
     });
     commit(false); // buffer dropped — no replay
     view.dispatch({ changes: { from: view.state.doc.length, insert: "4" } });
@@ -497,23 +535,13 @@ describe("editor — ok-ack fold requires identity-lineage continuity (d3)", () 
       docVersion: 1,
       externalEpoch: 0,
       epochGeneration: 22,
+      settledEditId: PAIR.settledEditId,
     });
     expect(view.state.sliceDoc()).toBe("D12");
     // ...and the stale-lineage buffer is dropped with it, so nothing replays
     // "D123" over the new host session. Asserting BOTH halves is the point:
     // display (the reseed) and replay (the drop) must agree on one rule, and
     // a test that stops at sliceDoc() pins only the display half.
-    commit(false);
-    expect(editPosts()).toHaveLength(1);
-  });
-
-  it("a content-equal Document that DROPS the pair (legacy host) reseeds instead of folding", () => {
-    vi.useFakeTimers();
-    const { handle, view, commit } = mount();
-    seedAndRunAhead(handle, view, 0, 11);
-    // present→absent is an identity transition too (edit-sync drops the buffer).
-    handle.applyDocument({ content: "D12", eol: "\n", canWrite: true, docVersion: 2 });
-    expect(view.state.sliceDoc()).toBe("D12");
     commit(false);
     expect(editPosts()).toHaveLength(1);
   });
@@ -531,6 +559,7 @@ describe("editor — ok-ack fold requires identity-lineage continuity (d3)", () 
       docVersion: 2,
       externalEpoch: 0,
       epochGeneration: 11,
+      settledEditId: PAIR.settledEditId,
     });
     expect(view.state.sliceDoc()).toBe("D123"); // no visible rewind
     commit(false);
@@ -553,6 +582,7 @@ describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
       docVersion: 1,
       externalEpoch: epoch,
       epochGeneration: gen,
+      settledEditId: PAIR.settledEditId,
     });
     view.dispatch({ changes: { from: view.state.doc.length, insert: "2" } });
     vi.advanceTimersByTime(300); // posts "D12" — in flight, nothing buffered
@@ -571,6 +601,7 @@ describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
       docVersion: 2,
       externalEpoch: 1,
       epochGeneration: 11,
+      settledEditId: PAIR.settledEditId,
     });
     expect(view.state.sliceDoc()).toBe("FOREIGN"); // the reseed really happened
     commit(false);
@@ -602,6 +633,7 @@ describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
       docVersion: 2,
       externalEpoch: 1,
       epochGeneration: 11,
+      settledEditId: PAIR.settledEditId,
     }); // foreign write == the newest bytes
     commit(false);
     expect(onLocalEditDiscarded).not.toHaveBeenCalled();
@@ -619,6 +651,7 @@ describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
       docVersion: 2,
       externalEpoch: 1,
       epochGeneration: 11,
+      settledEditId: PAIR.settledEditId,
     }); // content IS ours
     commit(false);
     expect(onLocalEditDiscarded).not.toHaveBeenCalled();
@@ -640,6 +673,7 @@ describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
       docVersion: 2,
       externalEpoch: 1,
       epochGeneration: 11,
+      settledEditId: PAIR.settledEditId,
     });
     expect(view.state.sliceDoc()).toBe("FOREIGN");
     commit(false);
@@ -658,32 +692,63 @@ describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
       docVersion: 1,
       externalEpoch: 0,
       epochGeneration: 22,
+      settledEditId: PAIR.settledEditId,
     }); // identity transition
     commit(false);
     expect(onLocalEditDiscarded).toHaveBeenCalledTimes(1);
   });
 
   it("does NOT notify when the host reposts different bytes on the SAME lineage", () => {
-    // The seam-level pin for the supersession conjunct, and the shape the host's
-    // stale / no-op repost arm produces routinely: the lineage is unmoved but the
-    // document is NOT carrying our bytes, so the CONTENT conjunct is already
-    // false and only the lineage test keeps this quiet. Drop that conjunct and
-    // every ordinary repost notifies the user of a loss that did not happen.
+    // The shape the host's stale / no-op repost arm produces routinely: the
+    // lineage is unmoved and the Document does not carry our bytes. The view
+    // holds the in-flight Edit, so the Document FOLDS — the local bytes stay on
+    // screen (demoted into the replay buffer) and nothing is announced.
+    // Not a single-conjunct pin for the loss judgement any more: the view keeps
+    // the bytes, so BOTH of its conjuncts are false here. The readonly variant
+    // below is the one that isolates the lineage conjunct.
     vi.useFakeTimers();
     const onLocalEditDiscarded = vi.fn();
     const { handle, view, commit } = mount({ onLocalEditDiscarded });
     seedAndPost(handle, view, 0, 11);
     handle.applyDocument({
-      content: "HOST-OTHER",
+      content: "D1", // the host's own text: on our lineage it has nothing else to show
       eol: "\n",
       canWrite: true,
       docVersion: 2,
       externalEpoch: 0,
       epochGeneration: 11,
+      settledEditId: PAIR.settledEditId,
     }); // same pair, different bytes
+    expect(view.state.sliceDoc()).toBe("D12"); // no rewind: the local bytes stay
+    commit(false);
+    expect(onLocalEditDiscarded).not.toHaveBeenCalled();
+    expect(view.state.sliceDoc()).toBe("D12");
+  });
+
+  it("does NOT notify when a READONLY repost on the SAME lineage rewinds the view", () => {
+    // The seam-level pin for the supersession conjunct of the loss judgement. A
+    // readonly Document never folds, so the view really is reseeded and is NOT
+    // carrying our bytes: the CONTENT conjunct is already true and only the
+    // lineage test keeps this quiet. The bytes are not lost either — they are
+    // held for a re-grant.
+    // [revert: drop `shouldDropBufferedForEpoch(held) &&` from
+    // lostToSupersession → this notifies of a loss that did not happen]
+    vi.useFakeTimers();
+    const onLocalEditDiscarded = vi.fn();
+    const { handle, view, commit } = mount({ onLocalEditDiscarded });
+    seedAndPost(handle, view, 0, 11);
+    handle.applyDocument({
+      content: "D1",
+      eol: "\n",
+      canWrite: false,
+      docVersion: 1,
+      externalEpoch: 0,
+      epochGeneration: 11,
+      settledEditId: PAIR.settledEditId,
+    }); // same pair, write revoked
     // The reseed really happened, so the silence cannot be the content conjunct
     // standing in for the lineage one.
-    expect(view.state.sliceDoc()).toBe("HOST-OTHER");
+    expect(view.state.sliceDoc()).toBe("D1");
     commit(false);
     expect(onLocalEditDiscarded).not.toHaveBeenCalled();
   });
@@ -707,22 +772,24 @@ describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
       docVersion: 2,
       externalEpoch: 0,
       epochGeneration: 11,
+      settledEditId: PAIR.settledEditId,
     }); // our own ack
     commit(false);
     expect(onLocalEditDiscarded).not.toHaveBeenCalled();
   });
 
-  it("ACCEPTED RESIDUAL: a readonly ack + re-grant replay leaves the VIEW behind", () => {
-    // The drain's `!canWrite` guard retains the buffer while the reseed already
-    // moved the view back; the replay's own ack then FOLDS, so the view never
-    // catches up. Disk gets the bytes, the screen does not, and no notice fires
-    // (the lineage never moved). MEASURED so the residual is discoverable: when
-    // the fold/rewind defect is fixed the view becomes "sxy" — update this pin,
-    // do not "restore" the staleness. The silence stays either way.
-    // This is the ONLY test in the tree that observes screen/disk divergence,
-    // which is why it exists beside the TODO: this trigger loses nothing on
-    // disk, so a Done-when phrased as "the in-flight bytes are not lost" cannot
-    // catch a regression in it.
+  it("a readonly ack + re-grant brings the view forward and replays", () => {
+    // A readonly Document always reseeds to the host's bytes while the drain's
+    // `!canWrite` guard retains the buffer. When write comes back the drain
+    // first makes the view SHOW the held bytes (`showHeld`), then replays them
+    // — so screen and disk converge, and a keystroke typed next builds on the
+    // held bytes instead of forking off the rewound view.
+    // The view is asserted IMMEDIATELY after the re-grant's commit, before the
+    // replay's own ack: that final Document carries "sxy" and would reseed the
+    // view by itself, so an end-state-only assertion stays green without
+    // showHeld.
+    // [revert: make editor.ts's `showHeld` a no-op → the view is still "s"
+    // after the re-grant commit]
     vi.useFakeTimers();
     const onLocalEditDiscarded = vi.fn();
     const { handle, view, commit } = mount({ onLocalEditDiscarded });
@@ -733,6 +800,7 @@ describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
       docVersion: 1,
       externalEpoch: 0,
       epochGeneration: 11,
+      settledEditId: PAIR.settledEditId,
     });
     view.dispatch({ changes: { from: view.state.doc.length, insert: "x" } });
     vi.advanceTimersByTime(300); // posts "sx" — in flight
@@ -745,8 +813,10 @@ describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
       docVersion: 2,
       externalEpoch: 0,
       epochGeneration: 11,
+      settledEditId: PAIR.settledEditId,
     }); // write revoked: reseed, buffer held
     commit(false);
+    expect(view.state.sliceDoc()).toBe("s");
     handle.applyDocument({
       content: "s",
       eol: "\n",
@@ -754,8 +824,17 @@ describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
       docVersion: 2,
       externalEpoch: 0,
       epochGeneration: 11,
-    }); // re-granted: the drain posts "sxy"
-    commit(false);
+      settledEditId: PAIR.settledEditId,
+    }); // re-granted
+    expect(view.state.sliceDoc()).toBe("s"); // not yet: the drain does it
+    commit(false); // the drain shows "sxy", then posts it
+    expect(view.state.sliceDoc()).toBe("sxy");
+    expect(editPosts().map((m) => (m as { content: string }).content)).toEqual(["sx", "sxy"]);
+    expect((editPosts()[1] as { baseDocVersion: number }).baseDocVersion).toBe(2);
+    // The advance is a reseed, not a user edit: it is not read back as a local
+    // change, so nothing further is posted once the debounce would have fired.
+    vi.advanceTimersByTime(300);
+    expect(editPosts()).toHaveLength(2);
     handle.applyDocument({
       content: "sxy",
       eol: "\n",
@@ -763,10 +842,11 @@ describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
       docVersion: 3,
       externalEpoch: 0,
       epochGeneration: 11,
-    }); // our own ack → folds
+      settledEditId: PAIR.settledEditId,
+    }); // the replay's ack
     commit(false);
-    expect(editPosts().map((m) => (m as { content: string }).content)).toEqual(["sx", "sxy"]);
-    expect(view.state.sliceDoc()).toBe("s"); // the screen is BEHIND the saved bytes
+    expect(editPosts()).toHaveLength(2);
+    expect(view.state.sliceDoc()).toBe("sxy");
     expect(onLocalEditDiscarded).not.toHaveBeenCalled();
   });
 });
@@ -777,7 +857,7 @@ describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
 // ⚠️ The two reads are NOT symmetric, so one test cannot gate both (measured by
 // two independent reviewers):
 //   - `getDoc()` supplies the bytes edit-sync posts. The ok-ack fold is
-//     EOL-insensitive (`sameTextIgnoringEol`, edit-sync.ts acksInFlightEdit), so
+//     EOL-insensitive (`sameTextIgnoringEol`, edit-sync.ts viewHoldsUnackedEdit), so
 //     a wrong-EOL getDoc no longer shows up as a rewind — it shows up on the WIRE:
 //     the posted Edit carries the wrong separator. Hence this test asserts the
 //     posted bytes literally.
@@ -791,7 +871,13 @@ describe("editor — the outbound serializer pairing (getDoc / liveDoc)", () => 
   it("an ok-ack on a CRLF document folds instead of rewinding (getDoc side)", () => {
     vi.useFakeTimers();
     const { handle, view, commit } = mount();
-    handle.applyDocument({ content: "D1\r\n2", eol: "\r\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({
+      content: "D1\r\n2",
+      eol: "\r\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
     view.dispatch({ changes: { from: view.state.doc.length, insert: "3" } });
     vi.advanceTimersByTime(300);
     expect(editPosts()).toHaveLength(1);
@@ -805,7 +891,13 @@ describe("editor — the outbound serializer pairing (getDoc / liveDoc)", () => 
     // editPosts()[0].content would compare the serializer against itself and the
     // test would pass whatever getDoc does — the one thing this test exists to
     // catch.
-    handle.applyDocument({ content: "D1\r\n23", eol: "\r\n", canWrite: true, docVersion: 2 });
+    handle.applyDocument({
+      content: "D1\r\n23",
+      eol: "\r\n",
+      canWrite: true,
+      docVersion: 2,
+      ...PAIR,
+    });
     // No visible rewind: the "4" is still on screen. Read the interior here
     // (sliceDoc() renders LF now), and the wire separately.
     expect(view.state.doc.toString()).toBe("D1\n234");
@@ -816,7 +908,13 @@ describe("editor — the outbound serializer pairing (getDoc / liveDoc)", () => 
 
   it("an identical CRLF snapshot does not reseed, so multi-range selection survives (liveDoc side)", () => {
     const { handle, view } = mount();
-    handle.applyDocument({ content: "a\r\nb\r\nc", eol: "\r\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({
+      content: "a\r\nb\r\nc",
+      eol: "\r\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
     view.dispatch({
       selection: EditorSelection.create([EditorSelection.range(0, 1), EditorSelection.range(4, 5)]),
     });
@@ -825,7 +923,13 @@ describe("editor — the outbound serializer pairing (getDoc / liveDoc)", () => 
     // NOT ahead of the host, so applyDocument takes no reseed branch and leaves
     // the selection alone. An LF-only `liveDoc` would compare "a\nb\nc" against
     // "a\r\nb\r\nc", enter the reseed branch, and restore only prevMain.
-    handle.applyDocument({ content: "a\r\nb\r\nc", eol: "\r\n", canWrite: true, docVersion: 2 });
+    handle.applyDocument({
+      content: "a\r\nb\r\nc",
+      eol: "\r\n",
+      canWrite: true,
+      docVersion: 2,
+      ...PAIR,
+    });
     expect(view.state.selection.ranges).toHaveLength(2);
     expect(view.state.doc.lines).toBe(3);
   });
@@ -844,7 +948,13 @@ describe("editor — CRLF/LF round-trip uniform scope (e)", () => {
     // sliceDoc() answers neither any more — EditorState.lineSeparator is never
     // provided, so it renders LF like doc.toString().
     const { handle, view } = mount();
-    handle.applyDocument({ content: "a\r\nb\r\nc", eol: "\r\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({
+      content: "a\r\nb\r\nc",
+      eol: "\r\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
     expect(hostBytes(view)).toBe("a\r\nb\r\nc");
     expect(view.state.doc.lines).toBe(3);
     expect(view.state.doc.line(1).text).toBe("a");
@@ -855,7 +965,7 @@ describe("editor — CRLF/LF round-trip uniform scope (e)", () => {
 
   it("LF seed round-trips byte-identically", () => {
     const { handle, view } = mount();
-    handle.applyDocument({ content: "a\nb\nc", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({ content: "a\nb\nc", eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
     // Outbound bytes, not sliceDoc(): EditorState.lineSeparator is never
     // provided, so sliceDoc() always renders LF regardless of the wire eol
     // (see the sibling CRLF/CR-only cases below).
@@ -866,7 +976,13 @@ describe("editor — CRLF/LF round-trip uniform scope (e)", () => {
 
   it("mixed-EOL seed serialises under the WIRE eol regardless of content", () => {
     const { handle, view } = mount();
-    handle.applyDocument({ content: "a\r\nb\nc", eol: "\r\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({
+      content: "a\r\nb\nc",
+      eol: "\r\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
     // Interior: three real lines, no separator inside any of them.
     expect(view.state.doc.lines).toBe(3);
     expect(view.state.doc.line(1).text).toBe("a");
@@ -877,7 +993,7 @@ describe("editor — CRLF/LF round-trip uniform scope (e)", () => {
 
   it("CR-only seed serialises under the WIRE eol regardless of content (host seeds canonical; raw CR-only is unreachable in prod)", () => {
     const { handle, view } = mount();
-    handle.applyDocument({ content: "a\rb\rc", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({ content: "a\rb\rc", eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
     // The split on /\r\n?|\n/ drops the lone CRs, so the CM interior is LF.
     // ⚠️ sliceDoc() cannot observe the EOL: with EditorState.lineSeparator never
     // provided it renders LF whatever the facet holds, so an assertion on it would
@@ -893,7 +1009,7 @@ describe("editor — plain typing + paste round-trip posts the exact Edit (f)", 
   it("a programmatic insert round-trips through sliceDoc + posts the exact Edit content", () => {
     vi.useFakeTimers();
     const { handle, view } = mount();
-    handle.applyDocument({ content: "seed", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({ content: "seed", eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
     view.dispatch({ changes: { from: view.state.doc.length, insert: "typed" } });
     expect(view.state.sliceDoc()).toBe("seedtyped");
     vi.advanceTimersByTime(300);
@@ -911,7 +1027,7 @@ describe("editor — plain typing + paste round-trip posts the exact Edit (f)", 
   it("a paste-shaped insert (large block) round-trips and posts the exact pasted content", () => {
     vi.useFakeTimers();
     const { handle, view } = mount();
-    handle.applyDocument({ content: "", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({ content: "", eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
     const paste = "Para one.\n\nPara two with `code`.\n\n- list a\n- list b\n";
     view.dispatch({ changes: { from: 0, insert: paste } });
     expect(view.state.sliceDoc()).toBe(paste);
@@ -924,17 +1040,24 @@ describe("editor — plain typing + paste round-trip posts the exact Edit (f)", 
 
 // (g) Parse-failure-shaped seed: identical snapshot-object shape, same flip pattern.
 describe("editor — parse-failure-shaped seed still tracks canWrite (g)", () => {
-  it("applyDocument({ content, eol, canWrite: false, docVersion: v }) → readOnly+editable=false; canWrite:true, docVersion:v+1 → readOnly+editable=true", () => {
+  it("applyDocument({ content, eol, canWrite: false, docVersion: v, ...PAIR }) → readOnly+editable=false; canWrite:true, docVersion:v+1 → readOnly+editable=true", () => {
     const { handle, view } = mount({ state: makeState({ canWrite: true }) });
     handle.applyDocument({
       content: "raw with [broken",
       eol: "\n",
       canWrite: false,
       docVersion: 1,
+      ...PAIR,
     });
     expect(view.state.readOnly).toBe(true);
     expect(view.state.facet(EditorView.editable)).toBe(false);
-    handle.applyDocument({ content: "raw with [broken", eol: "\n", canWrite: true, docVersion: 2 });
+    handle.applyDocument({
+      content: "raw with [broken",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 2,
+      ...PAIR,
+    });
     expect(view.state.readOnly).toBe(false);
     expect(view.state.facet(EditorView.editable)).toBe(true);
   });
@@ -945,7 +1068,7 @@ describe("editor — dispose cancels pending flush (k)", () => {
   it("typing then dispose BEFORE debounce fires posts NO Edit", () => {
     vi.useFakeTimers();
     const { handle, view } = mount();
-    handle.applyDocument({ content: "seed", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({ content: "seed", eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
     view.dispatch({ changes: { from: view.state.doc.length, insert: "x" } });
     expect(postMessage).not.toHaveBeenCalled();
     handle.dispose();
@@ -978,7 +1101,7 @@ describe("editor — postEditMessage debounce-path throw surface (V-M13(a))", ()
     });
     const dispatchSpy = vi.fn();
     const { handle, view } = mount({ onDispatch: dispatchSpy });
-    handle.applyDocument({ content: "seed", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({ content: "seed", eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
     view.dispatch({ changes: { from: view.state.doc.length, insert: "x" } });
     vi.advanceTimersByTime(300);
     // post-edit dispatched (single-flight set) THEN serialize-error
@@ -1026,7 +1149,7 @@ describe("editor — postEditMessage survives a throwing serialize-error dispatc
       }
     });
     const { handle, view } = mount({ onDispatch: dispatchSpy });
-    handle.applyDocument({ content: "seed", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({ content: "seed", eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
     view.dispatch({ changes: { from: view.state.doc.length, insert: "x" } });
     // Must not throw out of the debounce-driven flush.
     expect(() => vi.advanceTimersByTime(300)).not.toThrow();
@@ -1063,7 +1186,7 @@ describe("editor — postEditMessage survives a throwing post-edit dispatch (V-M
       }
     });
     const { handle, view } = mount({ onDispatch: dispatchSpy });
-    handle.applyDocument({ content: "seed", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({ content: "seed", eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
     view.dispatch({ changes: { from: view.state.doc.length, insert: "x" } });
     // Must not throw out of the debounce-driven flush.
     expect(() => vi.advanceTimersByTime(300)).not.toThrow();
@@ -1092,7 +1215,7 @@ describe("editor — oversized edit is gated to the serialize-error banner (over
       vi.useFakeTimers();
       const dispatchSpy = vi.fn();
       const { handle, view } = mount({ onDispatch: dispatchSpy });
-      handle.applyDocument({ content: "seed", eol: "\n", canWrite: true, docVersion: 1 });
+      handle.applyDocument({ content: "seed", eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
       // Replace the whole doc with an over-limit body (one code unit past the cap).
       const oversized = "a".repeat(MAX_CONTENT_LENGTH + 1);
       view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: oversized } });
@@ -1117,7 +1240,7 @@ describe("editor — oversized edit is gated to the serialize-error banner (over
     () => {
       vi.useFakeTimers();
       const { handle, view } = mount();
-      handle.applyDocument({ content: "", eol: "\n", canWrite: true, docVersion: 1 });
+      handle.applyDocument({ content: "", eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
       // Exactly the cap is BOUNDED (isBoundedContent uses `<=`), so it must post.
       const atLimit = "a".repeat(MAX_CONTENT_LENGTH);
       view.dispatch({ changes: { from: 0, insert: atLimit } });
@@ -1134,7 +1257,7 @@ describe("editor — oversized edit is gated to the serialize-error banner (over
 describe("editor — atomic seed transaction (l)", () => {
   it("seeding from a readonly prior state lands BOTH the new doc AND editable=true in ONE update", async () => {
     const { handle, view } = mount();
-    handle.applyDocument({ content: "old", eol: "\n", canWrite: false, docVersion: 1 });
+    handle.applyDocument({ content: "old", eol: "\n", canWrite: false, docVersion: 1, ...PAIR });
     expect(view.state.readOnly).toBe(true);
     expect(view.state.facet(EditorView.editable)).toBe(false);
     const observed: Array<{ doc: string; editable: boolean; readOnly: boolean }> = [];
@@ -1151,7 +1274,7 @@ describe("editor — atomic seed transaction (l)", () => {
       ),
     });
     observed.length = 0;
-    handle.applyDocument({ content: "new", eol: "\n", canWrite: true, docVersion: 2 });
+    handle.applyDocument({ content: "new", eol: "\n", canWrite: true, docVersion: 2, ...PAIR });
     expect(observed.length).toBe(1);
     expect(observed[0]).toEqual({ doc: "new", editable: true, readOnly: false });
   });
@@ -1170,7 +1293,7 @@ describe("editor — GFM tree active (n)", () => {
   it("strike + table + task fixture produces Strikethrough / Table / TaskMarker nodes", () => {
     const { handle, view } = mount();
     const fixture = "~~s~~\n\n| a | b |\n| - | - |\n| 1 | 2 |\n\n- [ ] task";
-    handle.applyDocument({ content: fixture, eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({ content: fixture, eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
     // fullTree, not a bare ensureSyntaxTree + null check: only the RETURNED tree is
     // walked here, and fullTree throws with the coverage numbers instead of leaving the
     // caller to hand-roll the guard.
@@ -1192,11 +1315,23 @@ describe("editor — host-seed dispatch excluded from undo history (p)", () => {
   it("undo returns false after seed; real edits are undoable; reseed does not add to history", async () => {
     const { undo } = await import("@codemirror/commands");
     const { handle, view } = mount();
-    handle.applyDocument({ content: "hello\nworld", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({
+      content: "hello\nworld",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
     expect(undo(view)).toBe(false);
     view.dispatch({ changes: { from: view.state.doc.length, insert: "x" } });
     expect(undo(view)).toBe(true);
-    handle.applyDocument({ content: "hello\nworld", eol: "\n", canWrite: true, docVersion: 2 });
+    handle.applyDocument({
+      content: "hello\nworld",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 2,
+      ...PAIR,
+    });
     expect(undo(view)).toBe(false);
   });
 });
@@ -1210,17 +1345,32 @@ describe("editor — host-seed dispatch excluded from undo history (p)", () => {
 describe("editor — caret preserved across accept-and-reseed (q)", () => {
   it("caret at mid-doc stays put when reseed shrinks the doc past the user's typing", () => {
     const { handle, view } = mount();
-    handle.applyDocument({ content: "hello world", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({
+      content: "hello world",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
     // Move caret to position 3 (between "hel" and "lo world").
     view.dispatch({ selection: { anchor: 3 } });
     expect(view.state.selection.main.head).toBe(3);
-    // User typed 'X' at the tail while an Edit was already in flight —
-    // the host snapshot does not yet carry the X, so view doc diverges
-    // past the rawText we're about to reseed with.
+    // User typed 'X' at the tail — still inside the debounce window, so the
+    // view doc diverges past the rawText we're about to reseed with.
     view.dispatch({ changes: { from: view.state.doc.length, insert: "X" } });
     expect(view.state.sliceDoc()).toBe("hello worldX");
-    // Host ack arrives without the in-window 'X'. needsReseed = true.
-    handle.applyDocument({ content: "hello world", eol: "\n", canWrite: true, docVersion: 2 });
+    // A FOREIGN write (epoch advance) arrives without the in-window 'X'. A
+    // Document on our own lineage would fold over the held keystroke; a
+    // foreign one supersedes it, so needsReseed = true.
+    handle.applyDocument({
+      content: "hello world",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 2,
+      externalEpoch: PAIR.externalEpoch + 1,
+      epochGeneration: PAIR.epochGeneration,
+      settledEditId: PAIR.settledEditId,
+    });
     expect(view.state.sliceDoc()).toBe("hello world");
     // The user's caret was at position 3 — well within the new doc
     // length (11). It must stay at 3 rather than being remapped to the
@@ -1231,7 +1381,7 @@ describe("editor — caret preserved across accept-and-reseed (q)", () => {
 
   it("caret past the new doc end is clamped to the end instead of resetting to 0", () => {
     const { handle, view } = mount();
-    handle.applyDocument({ content: "hi", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({ content: "hi", eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
     // User types two characters at end; caret follows the typing.
     view.dispatch({
       changes: { from: view.state.doc.length, insert: "ab" },
@@ -1239,8 +1389,17 @@ describe("editor — caret preserved across accept-and-reseed (q)", () => {
     });
     expect(view.state.sliceDoc()).toBe("hiab");
     expect(view.state.selection.main.head).toBe(4);
-    // Reseed to the shorter host snapshot — caret was past new end.
-    handle.applyDocument({ content: "hi", eol: "\n", canWrite: true, docVersion: 2 });
+    // Reseed to the shorter host snapshot — caret was past new end. A FOREIGN
+    // write (epoch advance): on our own lineage the held "ab" would fold.
+    handle.applyDocument({
+      content: "hi",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 2,
+      externalEpoch: PAIR.externalEpoch + 1,
+      epochGeneration: PAIR.epochGeneration,
+      settledEditId: PAIR.settledEditId,
+    });
     expect(view.state.sliceDoc()).toBe("hi");
     // Clamp to new doc length (2). NOT zero, NOT the original 4.
     expect(view.state.selection.main.head).toBe(2);
@@ -1248,10 +1407,16 @@ describe("editor — caret preserved across accept-and-reseed (q)", () => {
 
   it("caret is clamped to 0 when reseed empties the doc", () => {
     const { handle, view } = mount();
-    handle.applyDocument({ content: "hello world", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({
+      content: "hello world",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
     view.dispatch({ selection: { anchor: 5 } });
     expect(view.state.selection.main.head).toBe(5);
-    handle.applyDocument({ content: "", eol: "\n", canWrite: true, docVersion: 2 });
+    handle.applyDocument({ content: "", eol: "\n", canWrite: true, docVersion: 2, ...PAIR });
     expect(view.state.sliceDoc()).toBe("");
     expect(view.state.selection.main.head).toBe(0);
     expect(view.state.selection.main.anchor).toBe(0);
@@ -1259,38 +1424,74 @@ describe("editor — caret preserved across accept-and-reseed (q)", () => {
 
   it("range selection is preserved when both endpoints fit in the new doc", () => {
     const { handle, view } = mount();
-    handle.applyDocument({ content: "hello world", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({
+      content: "hello world",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
     view.dispatch({ selection: { anchor: 1, head: 5 } });
-    handle.applyDocument({ content: "hello worldX", eol: "\n", canWrite: true, docVersion: 2 });
+    handle.applyDocument({
+      content: "hello worldX",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 2,
+      ...PAIR,
+    });
     expect(view.state.selection.main.anchor).toBe(1);
     expect(view.state.selection.main.head).toBe(5);
   });
 
   it("range selection is clamped when the reseed doc is shorter than head", () => {
     const { handle, view } = mount();
-    handle.applyDocument({ content: "hello world", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({
+      content: "hello world",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
     view.dispatch({ selection: { anchor: 3, head: 8 } });
-    handle.applyDocument({ content: "hello", eol: "\n", canWrite: true, docVersion: 2 });
+    handle.applyDocument({ content: "hello", eol: "\n", canWrite: true, docVersion: 2, ...PAIR });
     expect(view.state.selection.main.anchor).toBe(3);
     expect(view.state.selection.main.head).toBe(5);
   });
 
   it("range selection is clamped when both anchor and head exceed the reseed doc length", () => {
     const { handle, view } = mount();
-    handle.applyDocument({ content: "hello world", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({
+      content: "hello world",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
     view.dispatch({ selection: { anchor: 7, head: 9 } });
-    handle.applyDocument({ content: "hi", eol: "\n", canWrite: true, docVersion: 2 });
+    handle.applyDocument({ content: "hi", eol: "\n", canWrite: true, docVersion: 2, ...PAIR });
     expect(view.state.selection.main.anchor).toBe(2);
     expect(view.state.selection.main.head).toBe(2);
   });
 
   it("same-content reseed (needsReseed=false) does NOT disturb the selection", () => {
     const { handle, view } = mount();
-    handle.applyDocument({ content: "hello world", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({
+      content: "hello world",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
     view.dispatch({ selection: { anchor: 3, head: 6 } });
     expect(view.state.selection.main.anchor).toBe(3);
     expect(view.state.selection.main.head).toBe(6);
-    handle.applyDocument({ content: "hello world", eol: "\n", canWrite: true, docVersion: 2 });
+    handle.applyDocument({
+      content: "hello world",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 2,
+      ...PAIR,
+    });
     expect(view.state.sliceDoc()).toBe("hello world");
     expect(view.state.selection.main.anchor).toBe(3);
     expect(view.state.selection.main.head).toBe(6);
@@ -1298,24 +1499,42 @@ describe("editor — caret preserved across accept-and-reseed (q)", () => {
 
   it("multi-cursor is collapsed to main-only on reseed (KISS intentional)", async () => {
     const { handle, view } = mount();
-    handle.applyDocument({ content: "hello world", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({
+      content: "hello world",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
     const { EditorSelection } = await import("@codemirror/state");
     view.dispatch({
       selection: EditorSelection.create([EditorSelection.cursor(3), EditorSelection.cursor(7)]),
     });
     expect(view.state.selection.ranges.length).toBe(2);
-    handle.applyDocument({ content: "hello world!", eol: "\n", canWrite: true, docVersion: 2 });
+    handle.applyDocument({
+      content: "hello world!",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 2,
+      ...PAIR,
+    });
     expect(view.state.selection.ranges.length).toBe(1);
     expect(view.state.selection.main.head).toBe(3);
   });
 
   it("an EOL-only reseed keeps every cursor (no change, so no selection to restore)", () => {
     const { handle, view } = mount();
-    handle.applyDocument({ content: "a\nb\nc", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({ content: "a\nb\nc", eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
     view.dispatch({
       selection: EditorSelection.create([EditorSelection.cursor(1), EditorSelection.cursor(3)]),
     });
-    handle.applyDocument({ content: "a\r\nb\r\nc", eol: "\r\n", canWrite: true, docVersion: 2 });
+    handle.applyDocument({
+      content: "a\r\nb\r\nc",
+      eol: "\r\n",
+      canWrite: true,
+      docVersion: 2,
+      ...PAIR,
+    });
     expect(hostBytes(view)).toBe("a\r\nb\r\nc");
     expect(view.state.selection.ranges.map((r) => r.head)).toEqual([1, 3]);
     expect(view.state.selection.ranges.length).toBe(2);
@@ -1324,13 +1543,19 @@ describe("editor — caret preserved across accept-and-reseed (q)", () => {
   it("seeding guard resets to false even when dispatch throws inside applyDocument", () => {
     vi.useFakeTimers();
     const { handle, view } = mount();
-    handle.applyDocument({ content: "initial", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({ content: "initial", eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
     const spy = vi.spyOn(view, "dispatch").mockImplementationOnce(() => {
       throw new Error("dispatch test throw");
     });
     try {
       expect(() =>
-        handle.applyDocument({ content: "other", eol: "\n", canWrite: true, docVersion: 2 })
+        handle.applyDocument({
+          content: "other",
+          eol: "\n",
+          canWrite: true,
+          docVersion: 2,
+          ...PAIR,
+        })
       ).toThrow("dispatch test throw");
     } finally {
       spy.mockRestore();
@@ -1356,7 +1581,7 @@ describe("editor — local-edit-attempt + discardBuffer on docChanged", () => {
       state: stateWithError,
       onDispatch,
     });
-    handle.applyDocument({ content: "hello\n", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({ content: "hello\n", eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
 
     // Programmatic transaction stands in for a keystroke.
     view.dispatch({
@@ -1376,7 +1601,7 @@ describe("editor — local-edit-attempt + discardBuffer on docChanged", () => {
       state: makeState(),
       onDispatch,
     });
-    handle.applyDocument({ content: "hello\n", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({ content: "hello\n", eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
 
     view.dispatch({
       changes: { from: view.state.doc.length, insert: "x" },
@@ -1404,7 +1629,13 @@ describe("editor — local-edit-attempt + discardBuffer on docChanged", () => {
       const initial = makeState();
       const m = mount({ state: initial, onDispatch });
 
-      m.handle.applyDocument({ content: "safe\n", eol: "\n", canWrite: true, docVersion: 1 });
+      m.handle.applyDocument({
+        content: "safe\n",
+        eol: "\n",
+        canWrite: true,
+        docVersion: 1,
+        ...PAIR,
+      });
 
       // (2) post → in-flight
       m.view.dispatch({ changes: { from: m.view.state.doc.length, insert: "X" } });
@@ -1484,6 +1715,7 @@ describe("editor — list hang-indent wiring", () => {
       eol: "\n",
       canWrite: true,
       docVersion: 1,
+      ...PAIR,
     });
     // Wiring: the const ViewPlugin is registered AND exposes its decorations
     // accessor on the mounted view (proves the `{ decorations }` wiring, not
@@ -1521,6 +1753,7 @@ describe("editor — frontmatter block-on-open via applyDocument seed (r)", () =
       eol: "\n",
       canWrite: true,
       docVersion: 1,
+      ...PAIR,
     });
     expect(view.state.field(frontmatterBlockField).kind).toBe("collapsed");
     expect(view.state.facet(quollSyntaxExclusionZones)).toEqual([{ from: 0, to: 16 }]);
@@ -1529,7 +1762,7 @@ describe("editor — frontmatter block-on-open via applyDocument seed (r)", () =
   it("round-trips byte-identically through applyDocument (no injection)", () => {
     const { handle, view } = mount();
     const fm = "---\ntitle: x\n---\n\nbody\n";
-    handle.applyDocument({ content: fm, eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({ content: fm, eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
     expect(view.state.sliceDoc()).toBe(fm);
   });
 });
@@ -1545,6 +1778,7 @@ describe("editor — frontmatter ArrowUp reveal is registered (s)", () => {
       eol: "\n",
       canWrite: true,
       docVersion: 1,
+      ...PAIR,
     });
     view.dispatch({ selection: { anchor: 17 } }); // line directly below the block (TO+1)
     const handled = runScopeHandlers(
@@ -1572,6 +1806,7 @@ describe("editor — host reseed preserves an active reveal (t)", () => {
       eol: "\n",
       canWrite: true,
       docVersion: 1,
+      ...PAIR,
     });
     revealFrontmatterAt(view, 6);
     expect(view.state.field(frontmatterBlockField).kind).toBe("revealed");
@@ -1580,6 +1815,7 @@ describe("editor — host reseed preserves an active reveal (t)", () => {
       eol: "\n",
       canWrite: true,
       docVersion: 2,
+      ...PAIR,
     });
     expect(view.state.field(frontmatterBlockField).kind).toBe("revealed");
   });
@@ -1593,10 +1829,10 @@ describe("editor — host reseed preserves an active reveal (t)", () => {
     );
     const doc = "---\ntitle: x\n---\n\n# Body\n";
     const { handle, view } = mount();
-    handle.applyDocument({ content: doc, eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({ content: doc, eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
     revealFrontmatterAt(view, 6);
     expect(view.state.field(frontmatterBlockField).kind).toBe("revealed");
-    handle.applyDocument({ content: doc, eol: "\n", canWrite: false, docVersion: 2 }); // same bytes, write revoked
+    handle.applyDocument({ content: doc, eol: "\n", canWrite: false, docVersion: 2, ...PAIR }); // same bytes, write revoked
     expect(view.state.field(frontmatterBlockField).kind).toBe("collapsed");
   });
 });
@@ -1609,6 +1845,7 @@ describe("editor — block-style wiring", () => {
       eol: "\n",
       canWrite: true,
       docVersion: 1,
+      ...PAIR,
     });
     // Wiring: both const ViewPlugins are registered AND expose their decorations
     // accessor (proves `{ decorations }` wiring, not just registration).
@@ -1640,7 +1877,7 @@ describe("editor — revealed frontmatter de-markdowns the real task-checkbox pr
     // Body line `- [ ] x` parses as a Task; the exclusion zone must drop the
     // checkbox widget the taskCheckboxReveal provider would emit.
     const doc = "---\n- [ ] x\n---\n\nbody\n";
-    handle.applyDocument({ content: doc, eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({ content: doc, eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
     // Anchor 0 is in-span, on the fence line (line 1 `---`), NOT the task line
     // [4,11]. The provider's caret-on-line reveal-trigger therefore does NOT
     // suppress the checkbox — only the quollSyntaxExclusionZones contribution
@@ -1683,6 +1920,7 @@ describe("editor — context-handoff keymap is registered", () => {
       eol: "\n",
       canWrite: true,
       docVersion: 1,
+      ...PAIR,
     });
     // Select within lines 1–2 (offset 8 is inside line2).
     view.dispatch({ selection: EditorSelection.single(0, 8) });
@@ -1729,6 +1967,7 @@ describe("editor — folding is registered", () => {
       eol: "\n",
       canWrite: true,
       docVersion: 1,
+      ...PAIR,
     });
     // `.cm-foldGutter` is mounted ONLY by quollFolding()'s foldGutter() — absent
     // without the extension, present with it. The non-vacuous wiring proof.
@@ -1744,6 +1983,7 @@ describe("editor — folding is registered", () => {
       eol: "\n",
       canWrite: true,
       docVersion: 1,
+      ...PAIR,
     });
     view.dispatch({ selection: EditorSelection.cursor(0) }); // caret on "- a"
     expect(foldCode(view)).toBe(true);
@@ -1755,7 +1995,7 @@ describe("editor — folding is registered", () => {
     const { EditorSelection } = await import("@codemirror/state");
     const { view, handle } = mount();
     const doc = "- a\n  - b\n  - c\n- d\n";
-    handle.applyDocument({ content: doc, eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({ content: doc, eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
     view.dispatch({ selection: EditorSelection.cursor(0) });
     expect(foldCode(view)).toBe(true);
     expect(foldedRanges(view.state).size).toBe(1);
@@ -1764,7 +2004,7 @@ describe("editor — folding is registered", () => {
     // (native clearTouchedFolds does not fire). The fold persists. Pins the
     // Resolution #1 "folds survive an external reseed" claim through the real
     // applyDocument path (error-handler review, Confidence 85).
-    handle.applyDocument({ content: doc, eol: "\n", canWrite: true, docVersion: 2 });
+    handle.applyDocument({ content: doc, eol: "\n", canWrite: true, docVersion: 2, ...PAIR });
     expect(foldedRanges(view.state).size).toBe(1);
   });
 });
@@ -1780,6 +2020,7 @@ describe("editor — blockquotes are not foldable through the live editor (wirin
       eol: "\n",
       canWrite: true,
       docVersion: 1,
+      ...PAIR,
     });
     settledView(view, 5000);
     const headingLine = view.state.doc.lineAt(0);
@@ -1798,7 +2039,13 @@ describe("caret handoff (applyRemoteCaret + caret-report)", () => {
 
   it("applyRemoteCaret moves the selection to the applyCaret offset and posts NO caret-report", () => {
     const { handle, view } = mount();
-    handle.applyDocument({ content: "hello\nworld\n!", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({
+      content: "hello\nworld\n!",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
     postMessage.mockReset(); // drop seed-driven posts (e.g. lint-diagnostics)
     handle.applyRemoteCaret({ line: 1, character: 2 });
     // line 1 ("world") starts at offset 6; character 2 → offset 8.
@@ -1813,7 +2060,13 @@ describe("caret handoff (applyRemoteCaret + caret-report)", () => {
   it("a user selection change posts a caret-report (debounced) with 0-based line/character", () => {
     vi.useFakeTimers();
     const { handle, view } = mount();
-    handle.applyDocument({ content: "hello\nworld", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({
+      content: "hello\nworld",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
     postMessage.mockReset();
     // Stand in for a user caret move (selection-only dispatch; not seeding, not remote).
     view.dispatch({ selection: { anchor: 3 } });
@@ -1828,7 +2081,13 @@ describe("caret handoff (applyRemoteCaret + caret-report)", () => {
   it("coalesces a burst of selection changes into ONE trailing caret-report", () => {
     vi.useFakeTimers();
     const { handle, view } = mount();
-    handle.applyDocument({ content: "hello\nworld", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({
+      content: "hello\nworld",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
     postMessage.mockReset();
     // A drag-selection / rapid caret walk fires selectionSet many times inside
     // the debounce window; only the LAST survives as a single post.
@@ -1845,7 +2104,13 @@ describe("caret handoff (applyRemoteCaret + caret-report)", () => {
   it("coalesces a burst of range selections to ONE report carrying the LAST selectedChars", () => {
     vi.useFakeTimers();
     const { handle, view } = mount();
-    handle.applyDocument({ content: "hello\nworld", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({
+      content: "hello\nworld",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
     postMessage.mockReset();
     // A drag-select that grows: each dispatch changes the selection length; only
     // the final extent must survive (latest-wins through the debounce).
@@ -1862,7 +2127,13 @@ describe("caret handoff (applyRemoteCaret + caret-report)", () => {
   it("reports the primary-selection char count; a collapsed caret reports 0", () => {
     vi.useFakeTimers();
     const { handle, view } = mount();
-    handle.applyDocument({ content: "hello\nworld", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({
+      content: "hello\nworld",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
     postMessage.mockReset();
     // A non-empty selection: anchor 1 → head 5 spans 4 code units.
     view.dispatch({ selection: { anchor: 1, head: 5 } });
@@ -1882,7 +2153,13 @@ describe("caret handoff (applyRemoteCaret + caret-report)", () => {
   it("flushes the pending caret-report BEFORE switch-to-text on the editor switch", () => {
     vi.useFakeTimers();
     const { handle, view } = mount();
-    handle.applyDocument({ content: "hello\nworld", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({
+      content: "hello\nworld",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
     postMessage.mockReset();
     view.dispatch({ selection: { anchor: 4 } });
     expect(caretReports()).toHaveLength(0); // still debounced
@@ -1903,7 +2180,13 @@ describe("caret handoff (applyRemoteCaret + caret-report)", () => {
   it("flushPending() force-posts the pending caret-report (teardown/hide)", () => {
     vi.useFakeTimers();
     const { handle, view } = mount();
-    handle.applyDocument({ content: "hello\nworld", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({
+      content: "hello\nworld",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
     postMessage.mockReset();
     view.dispatch({ selection: { anchor: 2 } });
     expect(caretReports()).toHaveLength(0); // debounced
@@ -1919,7 +2202,13 @@ describe("caret handoff (applyRemoteCaret + caret-report)", () => {
   it("dispose() cancels a pending caret-report (no stray post through the destroyed view)", () => {
     vi.useFakeTimers();
     const { handle, view } = mount();
-    handle.applyDocument({ content: "hello\nworld", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({
+      content: "hello\nworld",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
     postMessage.mockReset();
     view.dispatch({ selection: { anchor: 2 } });
     handle.dispose();
@@ -1929,7 +2218,13 @@ describe("caret handoff (applyRemoteCaret + caret-report)", () => {
 
   it("applyRemoteCaret posts no `edit` (selection-only, document untouched)", () => {
     const { handle, view } = mount();
-    handle.applyDocument({ content: "alpha\nbeta", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({
+      content: "alpha\nbeta",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
     const before = view.state.sliceDoc();
     postMessage.mockReset();
     handle.applyRemoteCaret({ line: 0, character: 4 });
@@ -1945,7 +2240,13 @@ describe("caret handoff (applyRemoteCaret + caret-report)", () => {
   // focus the view or the carried caret is set-but-invisible ("caret not shown").
   it("applyRemoteCaret focuses the view so the carried caret is painted", () => {
     const { handle, view } = mount();
-    handle.applyDocument({ content: "hello\nworld\n!", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({
+      content: "hello\nworld\n!",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
     // Precondition (non-vacuity): a freshly seeded view is unfocused — the
     // webview owns focus, CM's contenteditable does not.
     expect(view.hasFocus).toBe(false);
@@ -1955,7 +2256,13 @@ describe("caret handoff (applyRemoteCaret + caret-report)", () => {
 
   it("applyRemoteCaret focuses even when the caret is already at the target", () => {
     const { handle, view } = mount();
-    handle.applyDocument({ content: "hello\nworld", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({
+      content: "hello\nworld",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
     // Park the caret at the exact target while unfocused (dispatch does not
     // focus) so the same-position no-op guard fires below.
     view.dispatch({ selection: { anchor: applyCaret(view.state.doc, { line: 0, character: 3 }) } });
@@ -1981,7 +2288,13 @@ describe("caret handoff (applyRemoteCaret + caret-report)", () => {
     const hasFocusSpy = vi.spyOn(document, "hasFocus").mockReturnValue(false);
     try {
       const { handle, view } = mount();
-      handle.applyDocument({ content: "hello\nworld", eol: "\n", canWrite: true, docVersion: 1 });
+      handle.applyDocument({
+        content: "hello\nworld",
+        eol: "\n",
+        canWrite: true,
+        docVersion: 1,
+        ...PAIR,
+      });
       // Sanity: the content DOM does not hold focus before the apply.
       expect(document.activeElement).not.toBe(view.contentDOM);
       postMessage.mockReset();
@@ -2015,6 +2328,7 @@ describe("editor — Codex context-handoff keymap is registered", () => {
       eol: "\n",
       canWrite: true,
       docVersion: 1,
+      ...PAIR,
     });
     // happy-dom's CM platform detection is non-deterministic, so fire BOTH
     // Ctrl-j and Cmd-j; exactly one resolves to Mod-j and posts.
@@ -2070,7 +2384,13 @@ describe("editor — native spellcheck toggle", () => {
 
   it("toggling spellcheck does not mutate the document", () => {
     const { handle, view } = mount();
-    handle.applyDocument({ content: "hello world", eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({
+      content: "hello world",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
     const before = view.state.sliceDoc();
     handle.setSpellcheck(false);
     expect(view.state.sliceDoc()).toBe(before);
@@ -2145,14 +2465,14 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
   it("(r1) a one-char edit below a folded heading keeps the heading folded", () => {
     const { handle, view } = mount();
     const doc = "# One\n\nalpha\nbravo\n\n# Two\n\ncharlie";
-    handle.applyDocument({ content: doc, eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({ content: doc, eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
     const foldFrom = doc.indexOf("\n"); // end of "# One" heading line
     const foldTo = doc.indexOf("\n\n# Two") + 1; // through the blank line
     view.dispatch({ effects: foldEffect.of({ from: foldFrom, to: foldTo }) });
     expect(foldedCount(view)).toBe(1);
 
     const next = doc.replace("charlie", "Charlie"); // edit in the SECOND section
-    handle.applyDocument({ content: next, eol: "\n", canWrite: true, docVersion: 2 });
+    handle.applyDocument({ content: next, eol: "\n", canWrite: true, docVersion: 2, ...PAIR });
 
     expect(view.state.sliceDoc()).toBe(next);
     expect(foldedCount(view)).toBe(1); // fold above the edit survives
@@ -2161,7 +2481,7 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
   it("(r2) a fold BELOW the edit survives, remapped to shifted coordinates", () => {
     const { handle, view } = mount();
     const doc = "# One\n\nalpha\n\n# Two\n\nbravo\ncharlie";
-    handle.applyDocument({ content: doc, eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({ content: doc, eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
     // Fold the SECOND heading's body.
     const foldFrom = doc.indexOf("# Two") + "# Two".length;
     const foldTo = doc.length;
@@ -2173,7 +2493,7 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
     // which a stale un-remapped range would also pass).
     const next = doc.replace("alpha", "alpha extended");
     const delta = next.length - doc.length;
-    handle.applyDocument({ content: next, eol: "\n", canWrite: true, docVersion: 2 });
+    handle.applyDocument({ content: next, eol: "\n", canWrite: true, docVersion: 2, ...PAIR });
 
     expect(view.state.sliceDoc()).toBe(next);
     expect(foldRanges(view)).toEqual([{ from: foldFrom + delta, to: foldTo + delta }]);
@@ -2188,7 +2508,7 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
     // throw. (The coordinate GUARANTEE itself is Task 1's unit test; this test
     // pins fold-survival + no-throw end-to-end on a CRLF doc.)
     const doc = "# One\r\n\r\nalpha\r\nbravo\r\n\r\n# Two\r\n\r\ncharlie";
-    handle.applyDocument({ content: doc, eol: "\r\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({ content: doc, eol: "\r\n", canWrite: true, docVersion: 1, ...PAIR });
     // Fold the first heading region (positions in LF-internal coords).
     const internal = view.state.doc;
     const foldFrom = internal.line(1).to; // end of "# One"
@@ -2199,7 +2519,7 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
     // External reseed changing an interior line (still CRLF).
     const next = doc.replace("charlie", "Charlie");
     expect(() =>
-      handle.applyDocument({ content: next, eol: "\r\n", canWrite: true, docVersion: 2 })
+      handle.applyDocument({ content: next, eol: "\r\n", canWrite: true, docVersion: 2, ...PAIR })
     ).not.toThrow();
     expect(hostBytes(view)).toBe(next); // byte-identical, no corruption
     expect(foldedCount(view)).toBe(1);
@@ -2212,6 +2532,7 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
       eol: "\n",
       canWrite: true,
       docVersion: 1,
+      ...PAIR,
     });
     postMessage.mockReset(); // ignore the seed's traffic
     handle.applyDocument({
@@ -2219,6 +2540,7 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
       eol: "\n",
       canWrite: true,
       docVersion: 2,
+      ...PAIR,
     });
     expect(editPosts()).toEqual([]); // reseed is display-only, never posts an edit
   });
@@ -2228,7 +2550,13 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
     // Seed as CRLF: the interior is "a\nb\nc" and only the OUTBOUND bytes carry
     // \r\n. Pin the pre-reseed side too, so the flip below is observed in both
     // directions rather than passing on a document that was LF all along.
-    handle.applyDocument({ content: "a\r\nb\r\nc", eol: "\r\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({
+      content: "a\r\nb\r\nc",
+      eol: "\r\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
     expect(hostBytes(view)).toBe("a\r\nb\r\nc");
     const foldFrom = view.state.doc.line(1).to;
     view.dispatch({ effects: foldEffect.of({ from: foldFrom, to: view.state.doc.length }) });
@@ -2237,7 +2565,13 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
     // Reseed the SAME content as LF: raw differs (aheadOfHost true) but the
     // normalized Text is identical → computeReseedChange yields an empty change.
     expect(() =>
-      handle.applyDocument({ content: "a\nb\nc", eol: "\n", canWrite: true, docVersion: 2 })
+      handle.applyDocument({
+        content: "a\nb\nc",
+        eol: "\n",
+        canWrite: true,
+        docVersion: 2,
+        ...PAIR,
+      })
     ).not.toThrow();
     // Read the OUTBOUND bytes: sliceDoc() renders LF for every document, so it
     // would answer "a\nb\nc" whether or not the EOL facet followed the reseed.
@@ -2251,7 +2585,7 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
     // Fold "# One"'s body [foldFrom, foldTo]; the caret rests at 0 (outside the
     // fold) so the selection-head clear does NOT fire.
     const doc = "# One\n\nalpha\nbravo\n\n# Two\n\ncharlie";
-    handle.applyDocument({ content: doc, eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({ content: doc, eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
     const foldFrom = doc.indexOf("\n"); // end of "# One"
     const foldTo = doc.indexOf("\n\n# Two") + 1;
     view.dispatch({ effects: foldEffect.of({ from: foldFrom, to: foldTo }) });
@@ -2260,7 +2594,7 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
     // External edit INSIDE the folded region: "bravo" -> "BR" (shrinks by 3).
     const next = doc.replace("bravo", "BR");
     const delta = next.length - doc.length; // -3
-    handle.applyDocument({ content: next, eol: "\n", canWrite: true, docVersion: 2 });
+    handle.applyDocument({ content: next, eol: "\n", canWrite: true, docVersion: 2, ...PAIR });
 
     expect(view.state.sliceDoc()).toBe(next);
     // Fold persists, remapped: from unchanged (before the edit), to shrinks by
@@ -2271,7 +2605,7 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
   it("(r7) a reseed that inserts a sibling heading INTO a folded section clamps the stale fold so the new heading is not hidden", () => {
     const { handle, view } = mount();
     const doc = "# One\n\nalpha\nbravo\n\n# Two\n\ncharlie";
-    handle.applyDocument({ content: doc, eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({ content: doc, eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
     // Fold "# One" at its CANONICAL range (what foldCode/the gutter would produce),
     // so the fold matches foldable() exactly BEFORE the reseed remaps it.
     settledView(view, 5000);
@@ -2288,7 +2622,7 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
     // overlapping fold THROUGH the insert, so without reconciliation it widens to
     // swallow "# New" — hiding the new section behind the stale fold.
     const next = doc.replace("alpha", "alpha\n\n# New\n\ngamma");
-    handle.applyDocument({ content: next, eol: "\n", canWrite: true, docVersion: 2 });
+    handle.applyDocument({ content: next, eol: "\n", canWrite: true, docVersion: 2, ...PAIR });
     expect(view.state.sliceDoc()).toBe(next);
 
     // The section is still collapsed (the fold is preserved, not sprung open)...
@@ -2305,7 +2639,7 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
   it("(r8) a reseed that removes the heading marker on a folded line fully unfolds it (no clamp target)", () => {
     const { handle, view } = mount();
     const doc = "# One\n\nalpha\nbravo\n\n# Two\n\ncharlie";
-    handle.applyDocument({ content: doc, eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({ content: doc, eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
     settledView(view, 5000);
     const line1 = view.state.doc.line(1);
     const canonical = foldable(view.state, line1.from, line1.to);
@@ -2318,7 +2652,7 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
     // External reseed strips the ATX marker: "# One" -> "One" (no longer a heading,
     // so line 1 is no longer foldable at all).
     const next = doc.replace("# One", "One");
-    handle.applyDocument({ content: next, eol: "\n", canWrite: true, docVersion: 2 });
+    handle.applyDocument({ content: next, eol: "\n", canWrite: true, docVersion: 2, ...PAIR });
 
     expect(view.state.sliceDoc()).toBe(next);
     expect(foldedCount(view)).toBe(0); // fully released, not clamped to an empty range
@@ -2327,7 +2661,7 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
   it("(r9) clamping a fold that contains a nested child heading keeps the child but reveals an inserted sibling", () => {
     const { handle, view } = mount();
     const doc = "# One\n\n## Sub\n\nfoo\n\n# Two\n\nbar";
-    handle.applyDocument({ content: doc, eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({ content: doc, eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
     settledView(view, 5000);
     const line1 = view.state.doc.line(1);
     const canonical = foldable(view.state, line1.from, line1.to); // includes "## Sub"
@@ -2341,7 +2675,7 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
     // INTO One's folded body. Reconciliation must clamp so "# New" is revealed,
     // while the child "## Sub" stays inside the fold.
     const next = doc.replace("foo", "foo\n\n# New\n\ngamma");
-    handle.applyDocument({ content: next, eol: "\n", canWrite: true, docVersion: 2 });
+    handle.applyDocument({ content: next, eol: "\n", canWrite: true, docVersion: 2, ...PAIR });
     expect(view.state.sliceDoc()).toBe(next);
 
     expect(foldedCount(view)).toBe(1);
@@ -2362,7 +2696,7 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
     // body-delete case the line-only orphan gate missed, which left a phantom fold
     // pill on a heading that no longer folds.
     const doc = "intro\n\n# One\n\nalpha\nbravo";
-    handle.applyDocument({ content: doc, eol: "\n", canWrite: true, docVersion: 1 });
+    handle.applyDocument({ content: doc, eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
     settledView(view, 5000);
     const line = view.state.doc.line(3); // "# One"
     const canonical = foldable(view.state, line.from, line.to);
@@ -2376,7 +2710,7 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
     // minimal-span diff is a pure deletion whose edited span starts after the
     // heading line, so the line-only gate never sees the touch.
     const next = "intro\n\n# One\n";
-    handle.applyDocument({ content: next, eol: "\n", canWrite: true, docVersion: 2 });
+    handle.applyDocument({ content: next, eol: "\n", canWrite: true, docVersion: 2, ...PAIR });
 
     expect(view.state.sliceDoc()).toBe(next);
     expect(foldedCount(view)).toBe(0); // orphaned fold released, no phantom pill
@@ -2400,7 +2734,7 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
     let virtualNow = Date.now();
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => (virtualNow += 30));
     try {
-      handle.applyDocument({ content: doc, eol: "\n", canWrite: true, docVersion: 1 });
+      handle.applyDocument({ content: doc, eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
     } finally {
       nowSpy.mockRestore();
     }
@@ -2438,7 +2772,7 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
     // concealed behind the stale (remapped, over-wide) fold.
     postMessage.mockReset(); // ignore the seed traffic; watch the reseed only
     const next = doc.replace("alpha", "alpha\n\n# New\n\ngamma");
-    handle.applyDocument({ content: next, eol: "\n", canWrite: true, docVersion: 2 });
+    handle.applyDocument({ content: next, eol: "\n", canWrite: true, docVersion: 2, ...PAIR });
     expect(view.state.sliceDoc()).toBe(next);
 
     // The forced parse ran (frontier complete) AND the fold was clamped so the new
@@ -2485,7 +2819,7 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
     let virtualNow = Date.now();
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => (virtualNow += 600));
     try {
-      handle.applyDocument({ content: doc, eol: "\n", canWrite: true, docVersion: 1 });
+      handle.applyDocument({ content: doc, eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
       // Precondition: the seed left the frontier genuinely incomplete (else
       // forceParsing would return true instantly and this test would be vacuous).
       expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(false);
@@ -2502,6 +2836,7 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
         eol: "\n",
         canWrite: true,
         docVersion: 2,
+        ...PAIR,
       });
     } finally {
       nowSpy.mockRestore();
@@ -2515,5 +2850,55 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
     );
     expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(false);
     warnSpy.mockRestore();
+  });
+
+  it("(r13) held bytes that insert a sibling heading INTO a folded section do not leave it hidden after the view advance", () => {
+    // The view advance (edit-sync's `showHeld`, on a write re-grant) goes
+    // through the SAME reseed helper as a host Document, so the fold
+    // reconciliation runs for it too — the (r7) shape, with the inserted
+    // heading coming from the user's own held bytes instead of the host.
+    // [revert: skip the fold reconcile for the showHeld caller (e.g. gate the
+    // reconcile block on `afterDispatch !== undefined`) → the remapped fold
+    // swallows "# New"]
+    const { handle, view, commit } = mount();
+    const doc = "# One\n\nalpha\nbravo\n\n# Two\n\ncharlie";
+    handle.applyDocument({ content: doc, eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
+    settledView(view, 5000);
+    const line1 = view.state.doc.line(1); // "# One"
+    const canonical = foldable(view.state, line1.from, line1.to);
+    if (!canonical) {
+      throw new Error("heading line should be foldable");
+    }
+    vi.useFakeTimers();
+    // The user types a new section into "# One"'s body.
+    const next = doc.replace("alpha", "alpha\n\n# New\n\ngamma");
+    const insertAt = doc.indexOf("alpha") + "alpha".length;
+    view.dispatch({ changes: { from: insertAt, insert: "\n\n# New\n\ngamma" } });
+    vi.advanceTimersByTime(300); // posts `next` — in flight
+    expect(editPosts()).toHaveLength(1);
+    // Write is revoked: the readonly Document rewinds the view to the host's
+    // bytes (the un-acked Edit is demoted into the buffer and held).
+    handle.applyDocument({ content: doc, eol: "\n", canWrite: false, docVersion: 1, ...PAIR });
+    commit(false);
+    expect(view.state.sliceDoc()).toBe(doc);
+    // While rewound, "# One" is folded at its canonical range — which, in this
+    // text, spans the whole body up to "# Two".
+    view.dispatch({ effects: foldEffect.of(canonical) });
+    expect(foldedCount(view)).toBe(1);
+
+    // Write re-granted: the drain brings the view forward to the held bytes,
+    // inserting "# New" INTO the folded span.
+    handle.applyDocument({ content: doc, eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
+    commit(false);
+    expect(view.state.sliceDoc()).toBe(next);
+    expect(editPosts()).toHaveLength(2);
+
+    // Still collapsed, but clamped back to "# One"'s real section end.
+    expect(foldedCount(view)).toBe(1);
+    const newHeadingPos = next.indexOf("# New");
+    const [range] = foldRanges(view);
+    expect(range.to).toBeLessThanOrEqual(newHeadingPos); // "# New" NOT concealed
+    const freshLine1 = view.state.doc.line(1);
+    expect(foldable(view.state, freshLine1.from, freshLine1.to)).toEqual(range);
   });
 });
