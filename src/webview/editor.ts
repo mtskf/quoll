@@ -897,22 +897,10 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // both are installed by the same state commit even if that dispatch later
         // throws from its DOM phase.
         docEolComp.of(quollDocumentEol.of("\n")),
-        // Copy / cut / drag-out keep the document's EOL, as they did when the
-        // lineSeparator facet rendered them. CM joins the copied ranges with
-        // state.lineBreak (now LF) and hands the result to this filter, so one pass
-        // covers both the between-range joins and each range's interior. The INPUT
-        // direction needs no filter: CM splits incoming clipboard text with its
-        // default /\r\n?|\n/.
-        // ⚠️ Known cost, accepted deliberately: CM recognises a linewise copy only
-        // when `lastLinewiseCopy === text.toString()` (LF-joined), so CRLF on the
-        // clipboard makes multi-cursor linewise copy/paste unrecognisable. Dropping
-        // this filter would repair that at the price of putting LF on a Windows
-        // clipboard where VS Code's own editor puts CRLF — filed with its
-        // measurement prerequisite in docs/TODO.md, not spent here.
-        EditorView.clipboardOutputFilter.of((text, state) => {
-          const eol = state.facet(quollDocumentEol);
-          return eol === "\n" ? text : text.split("\n").join(eol);
-        }),
+        // No clipboardOutputFilter: copy / cut / drag-out carry LF whatever the
+        // document's EOL. CM recognises its own linewise copy by comparing the
+        // LF-normalised paste with the string it copied, so a CRLF clipboard broke
+        // multi-cursor line copy → paste.
         editableComp.of([
           EditorView.editable.of(initialCanWrite),
           EditorState.readOnly.of(!initialCanWrite),

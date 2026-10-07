@@ -489,11 +489,13 @@ describe("editor — the document EOL lives in state, not in CodeMirror's splitt
     expect(view.state.facet(quollDocumentEol)).toBe("\r\n");
   });
 
-  it("copy carries the document's EOL", () => {
-    // Asserted, not inherited: this fell out of the lineSeparator facet before
-    // and now rests on one explicit clipboardOutputFilter. (copyViaEvent focuses
-    // the view itself — CM's copy handler bails on hasSelection() in an
-    // unfocused happy-dom view.)
+  it("copy puts LF on the clipboard whatever the document's EOL", () => {
+    // The clipboard is NOT an outbound path for the document's EOL: only the
+    // wire is (next test). CM compares a paste against the exact string it
+    // copied, LF-normalised, to recognise a linewise copy, so a CRLF clipboard
+    // broke that recognition (the two tests below). (copyViaEvent focuses the
+    // view itself — CM's copy handler bails on hasSelection() in an unfocused
+    // happy-dom view.)
     const { handle, view } = mount();
     handle.applyDocument({
       content: "a\r\nb",
@@ -503,10 +505,70 @@ describe("editor — the document EOL lives in state, not in CodeMirror's splitt
       ...PAIR,
     });
     view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } });
-    expect(copyViaEvent(view)).toBe("a\r\nb");
+    expect(copyViaEvent(view)).toBe("a\nb");
     handle.applyDocument({ content: "a\nb", eol: "\n", canWrite: true, docVersion: 2, ...PAIR });
     view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } });
     expect(copyViaEvent(view)).toBe("a\nb");
+  });
+
+  // Both tests feed the paste exactly what the copy wrote, so they observe the
+  // round trip rather than a hand-picked clipboard string.
+  // Revert-check: re-add a clipboardOutputFilter that renders the document's
+  // EOL → CM no longer recognises its own linewise copy and the paste lands
+  // inline ("aabb" / "ccdd", and "ab" / "cdef").
+  it("a multi-cursor linewise copy pastes back as whole lines in a CRLF document", () => {
+    const { handle, view } = mount();
+    handle.applyDocument({
+      content: "ab\r\ncd",
+      eol: "\r\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
+    view.dispatch({
+      selection: EditorSelection.create([EditorSelection.cursor(1), EditorSelection.cursor(4)]),
+    });
+    const copied = copyViaEvent(view);
+    expect(copied).toBe("ab\ncd");
+    firePasteAt(view.contentDOM, { text: copied });
+    expectLineModel(view.state.doc, ["ab", "ab", "cd", "cd"]);
+  });
+
+  it("a multi-cursor linewise cut pastes back as whole lines in a CRLF document", () => {
+    const { handle, view } = mount();
+    handle.applyDocument({
+      content: "ab\r\ncd\r\nef",
+      eol: "\r\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
+    view.dispatch({
+      selection: EditorSelection.create([EditorSelection.cursor(1), EditorSelection.cursor(4)]),
+    });
+    const cut = copyViaEvent(view, "cut");
+    expect(cut).toBe("ab\ncd");
+    expectLineModel(view.state.doc, ["ef"]);
+    view.dispatch({ selection: EditorSelection.cursor(1) }); // mid "ef"
+    firePasteAt(view.contentDOM, { text: cut });
+    expectLineModel(view.state.doc, ["ab", "cd", "ef"]);
+  });
+
+  it("a single-cursor line copy pastes back as a whole line in a CRLF document", () => {
+    const { handle, view } = mount();
+    handle.applyDocument({
+      content: "ab\r\ncd",
+      eol: "\r\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
+    view.dispatch({ selection: EditorSelection.cursor(1) });
+    const copied = copyViaEvent(view);
+    expect(copied).toBe("ab");
+    view.dispatch({ selection: EditorSelection.cursor(4) }); // mid "cd"
+    firePasteAt(view.contentDOM, { text: copied });
+    expectLineModel(view.state.doc, ["ab", "ab", "cd"]);
   });
 
   it("a CRLF document's Edit reaches the wire as CRLF", () => {
@@ -619,18 +681,18 @@ describe("editor — a no-newline CRLF document's first Enter folds its ack", ()
   });
 });
 
-/** Dispatch a real `copy` event with a stub `clipboardData` and return what
- *  CodeMirror wrote, so the assertion covers `copiedRange` + the output filter
- *  together rather than the filter alone.
+/** Dispatch a real `copy` (or `cut`) event with a stub `clipboardData` and
+ *  return what CodeMirror wrote, so the assertion covers CM's own handler —
+ *  including the `lastLinewiseCopy` it records for the next paste.
  *
  *  focus() belongs INSIDE the helper, not at each call site: CM's copy handler
  *  bails on `hasSelection(view.contentDOM, view.observer.selectionRange)`
  *  (view/dist:5150), which is false in an unfocused happy-dom view — it writes
  *  nothing and the assertion then fails for a reason unrelated to the EOL. */
-function copyViaEvent(view: EditorView): string {
+function copyViaEvent(view: EditorView, type: "copy" | "cut" = "copy"): string {
   view.focus();
   let written = "";
-  const event = new Event("copy", { bubbles: true, cancelable: true });
+  const event = new Event(type, { bubbles: true, cancelable: true });
   Object.defineProperty(event, "clipboardData", {
     value: {
       // clearData is NOT optional: CM's copy handler calls it before setData
