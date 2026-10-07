@@ -26,6 +26,7 @@ describe("failed-applyedit-surfaced", function () {
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 1,
       content: "new content from webview",
       baseDocVersion: seed.message.docVersion,
     });
@@ -60,6 +61,7 @@ describe("failed-applyedit-surfaced", function () {
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 2,
       content: "new content from webview",
       baseDocVersion: seed.message.docVersion,
     });
@@ -113,6 +115,7 @@ describe("failed-applyedit-surfaced", function () {
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 3,
       content: "first attempt",
       baseDocVersion: seed.message.docVersion,
     });
@@ -126,6 +129,7 @@ describe("failed-applyedit-surfaced", function () {
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 4,
       content: "second attempt",
       baseDocVersion: seed.message.docVersion,
     });
@@ -183,6 +187,7 @@ describe("failed-applyedit-surfaced", function () {
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 5,
       content: "first attempt (sync throw)",
       baseDocVersion: seed.message.docVersion,
     });
@@ -211,6 +216,7 @@ describe("failed-applyedit-surfaced", function () {
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 6,
       content: "second attempt",
       baseDocVersion: seed.message.docVersion,
     });

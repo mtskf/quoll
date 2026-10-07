@@ -165,6 +165,7 @@ describe("racing-applyedit-semantics (Plan S5 experiment)", function () {
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 1,
       content: next,
       baseDocVersion: seed.message.docVersion,
     });

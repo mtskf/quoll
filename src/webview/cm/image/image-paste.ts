@@ -259,11 +259,12 @@ export function createImagePasteDrop(opts: {
         // The only refusal in this loop that used to be silent, and the one with the
         // widest blast radius. `handle` is shared by the paste and drop paths: on the
         // PASTE path `isIngestibleImageItem` never looks at size, so richHtmlPaste has
-        // already deferred on this item; on the DROP path there is no such upstream.
-        // Either way this handler then preventDefaults for the event, skips every file
-        // and returns true — the event is fully consumed, nothing is inserted, and (on
-        // paste) CM's plain-text fallback is suppressed too: a paste that vanishes with
-        // no trace anywhere.
+        // already handed the event on for this item; on the DROP path there is no such
+        // upstream. Either way this handler then preventDefaults for the event, skips
+        // every file and returns true — the event is fully consumed, no image is
+        // inserted, and (on paste) CM's plain-text fallback is suppressed too. Unless a
+        // converted HTML flavour rode along (richHtmlPaste inserted that first), the
+        // paste vanishes with no trace anywhere.
         //
         // Deliberately NOT hoisted into `isIngestibleImageItem`: the per-event
         // aggregate cap below is order-dependent and cannot live in a per-item
@@ -443,6 +444,9 @@ export function createImagePasteDrop(opts: {
     try {
       // resolve runs synchronously from the shell's `editor?.` null-guarded handler
       // (view alive), but guard the dispatch for symmetry with the async paths.
+      // History-recorded on purpose, so the image link stays undoable — at the cost
+      // of the redo branch of anything undone during the round-trip. Change only
+      // with a decision record.
       view.dispatch({
         changes: { from: anchor, insert },
         selection: { anchor: anchor + insert.length },

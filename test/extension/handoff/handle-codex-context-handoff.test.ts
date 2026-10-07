@@ -8,11 +8,13 @@ import {
 const URI = { fsPath: "/ws/notes/x.md" };
 
 function deps(overrides: Partial<Parameters<typeof handleCodexContextHandoff>[0]> = {}) {
-  const calls: { commands: [string, unknown][]; info: string[]; warn: string[] } = {
-    commands: [],
-    info: [],
-    warn: [],
-  };
+  const calls: { commands: [string, unknown][]; info: string[]; warn: string[]; blocked: number } =
+    {
+      commands: [],
+      info: [],
+      warn: [],
+      blocked: 0,
+    };
   const base = {
     documentUri: URI,
     isDirty: false,
@@ -25,6 +27,10 @@ function deps(overrides: Partial<Parameters<typeof handleCodexContextHandoff>[0]
     }),
     showWarn: vi.fn(async (m: string) => {
       calls.warn.push(m);
+    }),
+    isRejectionPending: () => false,
+    showRejectionBlocked: vi.fn(() => {
+      calls.blocked += 1;
     }),
   };
   return { calls, deps: { ...base, ...overrides } };
@@ -89,5 +95,41 @@ describe("handleCodexContextHandoff", () => {
     await handleCodexContextHandoff(d);
     expect(calls.info).toEqual([]); // no false success
     expect(calls.warn.length).toBe(1);
+  });
+
+  it("refuses at entry while a write-gate rejection is pending (no save, no command, one notice)", async () => {
+    const { calls, deps: d } = deps({ isDirty: true, isRejectionPending: () => true });
+    await handleCodexContextHandoff(d);
+    expect(d.save).not.toHaveBeenCalled();
+    expect(calls.commands).toEqual([]);
+    expect(calls.info).toEqual([]); // no false success
+    expect(calls.warn).toEqual([]);
+    expect(calls.blocked).toBe(1);
+  });
+
+  it("refuses when a rejection lands DURING the save (post-await re-check)", async () => {
+    let pending = false;
+    const save = vi.fn(async () => {
+      pending = true; // the webview's Edit was rejected while save() was in flight
+      return true;
+    });
+    const { calls, deps: d } = deps({ isDirty: true, save, isRejectionPending: () => pending });
+    await handleCodexContextHandoff(d);
+    expect(save).toHaveBeenCalledOnce();
+    expect(calls.commands).toEqual([]);
+    expect(calls.info).toEqual([]);
+    expect(calls.blocked).toBe(1);
+  });
+
+  it("hands off normally once the rejection has cleared", async () => {
+    let pending = true;
+    const { calls, deps: d } = deps({ isRejectionPending: () => pending });
+    await handleCodexContextHandoff(d);
+    expect(calls.commands).toEqual([]);
+    pending = false;
+    await handleCodexContextHandoff(d);
+    expect(calls.commands).toEqual([[CODEX_ADD_FILE_COMMAND, URI]]);
+    expect(calls.info.length).toBe(1);
+    expect(calls.blocked).toBe(1);
   });
 });

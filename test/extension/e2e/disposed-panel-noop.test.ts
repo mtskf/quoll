@@ -60,6 +60,7 @@ describe("disposed-panel-noop", function () {
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 1,
       content: "post-dispose edit",
       baseDocVersion: seed.message.docVersion,
     });

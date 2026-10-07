@@ -4,6 +4,7 @@ import {
   buildContextReference,
   CLAUDE_INSERT_AT_MENTIONED_COMMAND,
   clampHandoffSelection,
+  HANDOFF_OPEN_COMMANDS,
   type HandoffRevealSelection,
   handleContextHandoff,
 } from "../../../src/extension/handoff/handle-context-handoff.js";
@@ -120,6 +121,8 @@ function deps(overrides: Partial<Parameters<typeof handleContextHandoff>[1]> = {
     /** Interleaved call order across reveal / command / cleanup / clipboard —
      *  pins the tier-0 sequencing contract. */
     order: string[];
+    /** showRejectionBlocked invocations (the single refusal notice). */
+    blocked: number;
   } = {
     clipboard: [],
     commands: [],
@@ -129,6 +132,7 @@ function deps(overrides: Partial<Parameters<typeof handleContextHandoff>[1]> = {
     reveals: [],
     cleanups: 0,
     order: [],
+    blocked: 0,
   };
   const base = {
     relativePath: "notes/x.md",
@@ -166,6 +170,10 @@ function deps(overrides: Partial<Parameters<typeof handleContextHandoff>[1]> = {
     // Default: the reveal made the doc the activeTextEditor (happy path).
     // Guard tests override with false / an order-recording spy.
     isDocumentActiveTextEditor: () => true,
+    isRejectionPending: () => false,
+    showRejectionBlocked: vi.fn(() => {
+      calls.blocked += 1;
+    }),
   };
   return { calls, deps: { ...base, ...overrides } };
 }
@@ -459,5 +467,151 @@ describe("handleContextHandoff — fallback tier (v1, verbatim)", () => {
     for (const sent of [...insurance.calls.clipboard, ...fallback.calls.clipboard]) {
       expect(hasControlChar(sent)).toBe(false);
     }
+  });
+});
+
+describe("handleContextHandoff — pending write-gate rejection", () => {
+  const payload = { hasSelection: true, startLine: 2, endLine: 5 };
+
+  it("refuses at entry: no save, no reveal, no command, no clipboard, one notice", async () => {
+    const { calls, deps: d } = deps({ isDirty: true, isRejectionPending: () => true });
+    await handleContextHandoff(payload, d);
+    expect(d.save).not.toHaveBeenCalled();
+    expect(calls.order).toEqual([]);
+    expect(calls.info).toEqual([]);
+    expect(calls.warn).toEqual([]);
+    expect(calls.error).toEqual([]);
+    expect(calls.blocked).toBe(1);
+  });
+
+  it("refuses when a rejection lands during the save: no reveal, no clipboard", async () => {
+    let pending = false;
+    const save = vi.fn(async () => {
+      pending = true;
+      return true;
+    });
+    const { calls, deps: d } = deps({ isDirty: true, save, isRejectionPending: () => pending });
+    await handleContextHandoff(payload, d);
+    expect(calls.order).toEqual([]);
+    expect(calls.blocked).toBe(1);
+  });
+
+  it("refuses when a rejection lands during the reveal: cleanup runs, no insert command, no clipboard", async () => {
+    let pending = false;
+    const { calls, deps: d } = deps({ isRejectionPending: () => pending });
+    const reveal = d.revealForMention;
+    d.revealForMention = vi.fn(async (sel: HandoffRevealSelection) => {
+      const cleanup = await reveal(sel);
+      pending = true; // blur force-post rejected while the reveal was in flight
+      return cleanup;
+    });
+    await handleContextHandoff(payload, d);
+    // The temp text tab must still be closed; nothing else may run.
+    expect(calls.order).toEqual(["reveal", "cleanup"]);
+    expect(calls.commands).toEqual([]);
+    expect(calls.clipboard).toEqual([]);
+    expect(calls.info).toEqual([]);
+    expect(calls.blocked).toBe(1);
+  });
+
+  it("refuses the FALLBACK clipboard write when a rejection lands during a failed delegation", async () => {
+    let pending = false;
+    const executeCommand = vi.fn(async (id: string) => {
+      if (id === CLAUDE_INSERT_AT_MENTIONED_COMMAND) {
+        pending = true;
+        throw new Error(`command '${id}' not found`);
+      }
+    });
+    const { calls, deps: d } = deps({ executeCommand, isRejectionPending: () => pending });
+    await handleContextHandoff(payload, d);
+    expect(calls.clipboard).toEqual([]); // nothing to paste was written
+    expect(executeCommand).toHaveBeenCalledTimes(1); // no open/focus commands
+    expect(calls.info).toEqual([]); // no "Copied … paste it" false success
+    expect(calls.error).toEqual([]);
+    expect(calls.blocked).toBe(1);
+  });
+
+  it("a rejection pending after the insert command resolved: no notice, and the insurance clipboard write is silently skipped", async () => {
+    let pending = false;
+    const { calls, deps: d } = deps({ isRejectionPending: () => pending });
+    const exec = d.executeCommand;
+    d.executeCommand = vi.fn(async (id: string) => {
+      await exec(id);
+      pending = true; // rejected Edit arrived while the insert command was in flight
+    });
+    await handleContextHandoff(payload, d);
+    // The resolved delegation is not retracted and raises no "can't hand off"…
+    expect(calls.commands).toEqual([CLAUDE_INSERT_AT_MENTIONED_COMMAND]);
+    expect(calls.cleanups).toBe(1);
+    expect(calls.blocked).toBe(0);
+    // …but nothing new is written to the clipboard while a rejection is pending.
+    expect(calls.clipboard).toEqual([]);
+    expect(calls.info).toEqual([]);
+  });
+
+  it("a rejection that first becomes pending during the temp-tab CLEANUP also skips the insurance write silently", async () => {
+    // Pins the POSITION of the check (after the cleanup await, not merely after
+    // the insert command) AND that the handler AWAITS the cleanup: the cleanup
+    // blocks on a deferred, the rejection lands while it is still running.
+    let pending = false;
+    let cleanupStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      cleanupStarted = resolve;
+    });
+    let releaseCleanup!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    const h = deps({ isRejectionPending: () => pending });
+    h.deps.revealForMention = vi.fn(async (sel: HandoffRevealSelection) => {
+      h.calls.reveals.push(sel);
+      return async () => {
+        h.calls.cleanups += 1;
+        cleanupStarted();
+        await gate;
+      };
+    });
+    const done = handleContextHandoff(payload, h.deps);
+    await started;
+    // Let every microtask settle: a handler that did NOT await the cleanup would
+    // by now have moved on and written the insurance clipboard.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    pending = true; // lands while the temp tab is closing
+    releaseCleanup();
+    await done;
+    expect(h.calls.commands).toEqual([CLAUDE_INSERT_AT_MENTIONED_COMMAND]);
+    expect(h.calls.cleanups).toBe(1);
+    expect(h.calls.clipboard).toEqual([]);
+    expect(h.calls.blocked).toBe(0);
+    expect(h.calls.info).toEqual([]);
+  });
+
+  it("the fallback tier is committed once its clipboard write started (a later rejection does not abort it)", async () => {
+    let pending = false;
+    const { attempted, executeCommand } = rejectInsertExecuteCommand();
+    const writeClipboard = vi.fn(async (_t: string) => {
+      pending = true; // lands during the write — past the abortable range
+    });
+    const { calls, deps: d } = deps({
+      executeCommand,
+      writeClipboard,
+      isRejectionPending: () => pending,
+    });
+    await handleContextHandoff(payload, d);
+    expect(writeClipboard).toHaveBeenCalledOnce();
+    expect(attempted).toEqual([CLAUDE_INSERT_AT_MENTIONED_COMMAND, ...HANDOFF_OPEN_COMMANDS]);
+    expect(calls.info.length).toBe(1); // truthful: the reference IS on the clipboard
+    expect(calls.blocked).toBe(0);
+  });
+
+  it("hands off normally once the rejection has cleared", async () => {
+    let pending = true;
+    const { calls, deps: d } = deps({ isRejectionPending: () => pending });
+    await handleContextHandoff(payload, d);
+    expect(calls.order).toEqual([]);
+    pending = false;
+    await handleContextHandoff(payload, d);
+    expect(calls.commands).toEqual([CLAUDE_INSERT_AT_MENTIONED_COMMAND]);
+    expect(calls.blocked).toBe(1);
   });
 });

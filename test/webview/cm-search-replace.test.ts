@@ -45,7 +45,15 @@ function mount(doc: string, canWrite: boolean) {
   });
   mounted.push({ handle, parent });
   // Arm edit-sync with a host snapshot at v1 (same as a real seed).
-  handle.applyDocument({ content: doc, eol: "\n", canWrite: canWrite, docVersion: 1 });
+  handle.applyDocument({
+    content: doc,
+    eol: "\n",
+    canWrite: canWrite,
+    docVersion: 1,
+    externalEpoch: 0,
+    epochGeneration: 1,
+    settledEditId: 0,
+  });
   const view = EditorView.findFromDOM(
     parent.querySelector(".cm-editor") as HTMLElement
   ) as EditorView;
@@ -81,6 +89,7 @@ describe("in-editor find & replace", () => {
       type: "edit",
       content: "bar bar",
       baseDocVersion: 1,
+      editId: 1,
     });
   });
 

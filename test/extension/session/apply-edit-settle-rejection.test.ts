@@ -121,8 +121,15 @@ function harness(options: HarnessOptions = {}) {
   const attempts: string[] = [];
   const errors: string[] = [];
   const seedBuilds: string[] = [];
-  const documents: { docVersion: number; externalEpoch: number; epochGeneration: number }[] = [];
+  const documents: {
+    docVersion: number;
+    externalEpoch: number;
+    epochGeneration: number;
+    settledEditId: number;
+    content: string;
+  }[] = [];
   let errorAttempts = 0;
+  let nextEditId = 1;
   let settleFailure: SettleFailureMode = false;
   // The executor's SYNCHRONOUS prefix. Since `settle()` became total this is the
   // one remaining way to make `executeDocumentWrite` REJECT, and so the only way
@@ -167,12 +174,18 @@ function harness(options: HarnessOptions = {}) {
     // the settlement's reseed throws mid-`runEffects`, and whether the user still
     // hears about the failed save then depends entirely on `settlementEffects`
     // putting the toast BEFORE the reseed.
-    buildSeedDocument: (docVersion, externalEpoch, epochGeneration) => {
+    buildSeedDocument: (docVersion, externalEpoch, epochGeneration, settledEditId) => {
       seedBuilds.push(`v${docVersion}`);
       if (settleFailure === true) {
         throw new Error("boom-seed");
       }
-      documents.push({ docVersion, externalEpoch, epochGeneration });
+      documents.push({
+        docVersion,
+        externalEpoch,
+        epochGeneration,
+        settledEditId,
+        content: doc.text,
+      });
       return {
         protocol: PROTOCOL_VERSION,
         type: "document",
@@ -183,9 +196,10 @@ function harness(options: HarnessOptions = {}) {
         themeKind: "light",
         externalEpoch,
         epochGeneration,
+        settledEditId,
       } as HostToWebview;
     },
-    buildRejectedDraft: (content, docVersion, externalEpoch, epochGeneration) =>
+    buildRejectedDraft: (content, docVersion, externalEpoch, epochGeneration, settledEditId) =>
       ({
         protocol: PROTOCOL_VERSION,
         type: "document",
@@ -196,6 +210,7 @@ function harness(options: HarnessOptions = {}) {
         themeKind: "light",
         externalEpoch,
         epochGeneration,
+        settledEditId,
       }) as HostToWebview,
     buildTheme: (themeKind) =>
       ({ protocol: PROTOCOL_VERSION, type: "theme", themeKind }) as HostToWebview,
@@ -310,6 +325,7 @@ function harness(options: HarnessOptions = {}) {
       dispatchEvent({
         type: "edit",
         baseDocVersion: live.lastAppliedDocVersion,
+        editId: nextEditId++,
         content,
         documentVersion: doc.version,
         canWrite: true,
@@ -685,12 +701,10 @@ describe("applyEdit settlement: a landed write is acked, not toasted", () => {
     });
 
     const seed = h.identity();
-    // VACUITY HAZARD: if the seed snapshot carried no identity pair, edit-sync's
-    // "both absent -> replay" legacy arm would replay REGARDLESS of any epoch move
-    // and this test would pass for the wrong reason. Pin that the pair is present.
+    // Pin that the seed snapshot carries the identity pair the replay is judged on.
     expect(seed.epochGeneration).toEqual(expect.any(Number));
     expect(seed.externalEpoch).toEqual(expect.any(Number));
-    sync.onHostSnapshot(seed.docVersion, true, seed.externalEpoch, seed.epochGeneration);
+    sync.onHostSnapshot({ ...seed, canWrite: true, settledEditId: 0, content: "" });
 
     webviewDoc = "a";
     sync.onLocalChange(); // posts edit #1 -> in flight
@@ -706,7 +720,7 @@ describe("applyEdit settlement: a landed write is acked, not toasted", () => {
     if (ack === undefined) {
       throw new Error("the settlement posted no Document");
     }
-    sync.onHostSnapshot(ack.docVersion, true, ack.externalEpoch, ack.epochGeneration);
+    sync.onHostSnapshot({ ...ack, canWrite: true });
     sync.onReducerCommit(false);
 
     expect(posted).toEqual([
@@ -717,7 +731,7 @@ describe("applyEdit settlement: a landed write is acked, not toasted", () => {
   });
 
   it("NEGATIVE pin: the same wiring DOES drop the buffer when the epoch advances", () => {
-    // Proves the pin above is not passing through edit-sync's pair-less legacy arm:
+    // Proves the pin above is not passing vacuously:
     // identical shape, but the ack carries `externalEpoch + 1`.
     const h = harness();
     let webviewDoc = "";
@@ -732,14 +746,21 @@ describe("applyEdit settlement: a landed write is acked, not toasted", () => {
     });
 
     const seed = h.identity();
-    sync.onHostSnapshot(seed.docVersion, true, seed.externalEpoch, seed.epochGeneration);
+    sync.onHostSnapshot({ ...seed, canWrite: true, settledEditId: 0, content: "" });
     webviewDoc = "a";
     sync.onLocalChange();
     webviewDoc = "ab";
     sync.onLocalChange();
     expect(posted).toHaveLength(1);
 
-    sync.onHostSnapshot(seed.docVersion + 1, true, seed.externalEpoch + 1, seed.epochGeneration);
+    sync.onHostSnapshot({
+      docVersion: seed.docVersion + 1,
+      canWrite: true,
+      externalEpoch: seed.externalEpoch + 1,
+      epochGeneration: seed.epochGeneration,
+      settledEditId: 1,
+      content: "",
+    });
     sync.onReducerCommit(false);
 
     expect(posted).toHaveLength(1); // no replay

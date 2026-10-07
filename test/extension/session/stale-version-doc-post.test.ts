@@ -45,6 +45,7 @@ const state = (over: Partial<HostSessionState> = {}): HostSessionState => ({
   inFlightContent: null,
   externalEpoch: 0,
   epochGeneration: GEN,
+  lastEditId: 0,
   ...over,
 });
 
@@ -63,7 +64,13 @@ describe("stale-version Document post: keystroke is not lost", () => {
     // the live bytes buildSeedDocument reads. (Old bug: docVersion 1 with v2
     // bytes.) The foreign advance (v1→v2, lock-free) also bumps externalEpoch to 1.
     expect(visible.effects).toEqual([
-      { type: "postDocument", docVersion: 2, externalEpoch: 1, epochGeneration: GEN },
+      {
+        type: "postDocument",
+        docVersion: 2,
+        externalEpoch: 1,
+        epochGeneration: GEN,
+        settledEditId: 0,
+      },
     ]);
 
     // The webview's next keystroke echoes the version it ACTUALLY received on
@@ -79,6 +86,7 @@ describe("stale-version Document post: keystroke is not lost", () => {
     const typed = core.transition(visible.state, {
       type: "edit",
       baseDocVersion: receivedVersion,
+      editId: 1,
       content: "v2 bytes + x",
       documentVersion: 2,
       canWrite: true,
@@ -128,15 +136,16 @@ describe("stale-version Document post: executor pairs live version with live byt
       readLineageSince: () => null,
       // Mirrors the production panel closure: live bytes + the effect's version
       // + the core-managed identity pair.
-      buildSeedDocument: (docVersion, externalEpoch, epochGeneration) =>
+      buildSeedDocument: (docVersion, externalEpoch, epochGeneration, settledEditId) =>
         buildDocumentMessageFromDocument(fakeDoc, {
           docVersion,
           themeKind: "light",
           canWrite: true,
           externalEpoch,
           epochGeneration,
+          settledEditId,
         }),
-      buildRejectedDraft: (content, docVersion, externalEpoch, epochGeneration) =>
+      buildRejectedDraft: (content, docVersion, externalEpoch, epochGeneration, settledEditId) =>
         ({
           protocol: PROTOCOL_VERSION,
           type: "document",
@@ -147,6 +156,7 @@ describe("stale-version Document post: executor pairs live version with live byt
           themeKind: "light",
           externalEpoch,
           epochGeneration,
+          settledEditId,
         }) as HostToWebview,
       buildTheme: (themeKind) =>
         ({ protocol: PROTOCOL_VERSION, type: "theme", themeKind }) as HostToWebview,

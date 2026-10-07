@@ -43,6 +43,7 @@ describe("readonly-uri-no-write", function () {
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 1,
       content: "would-be-saved content",
       baseDocVersion: seed.message.docVersion,
     });

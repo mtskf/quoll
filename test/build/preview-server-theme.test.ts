@@ -129,13 +129,16 @@ describe("preview server — the seed carries the current protocol and a wire eo
     expect(PREVIEW_PROTOCOL_VERSION).toBe(PROTOCOL_VERSION);
   });
 
-  it("a served instance seeds that protocol version and an eol", async () => {
+  it("a served instance seeds that protocol version, an eol and the epoch pair", async () => {
     // Revert-check: put `protocol: 1` back in preview.template.html → red.
     const { status, body } = await fetchInstance({ content: "# hi\n" });
 
     expect(status).toBe(200);
     expect(body).toContain(`protocol: ${PROTOCOL_VERSION},`);
     expect(body).toContain("eol: DOC_EOL,");
+    expect(body).toContain("externalEpoch: 0,");
+    expect(body).toContain("epochGeneration: 1,");
+    expect(body).toContain("settledEditId: 0,");
     // Absent eol: read off the doc's bytes (LF here).
     expect(body).toContain('var DOC_EOL = "\\n";');
   });

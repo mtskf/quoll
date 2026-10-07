@@ -14,10 +14,10 @@
 //    selection) — no paste of any kind happens.
 //  - `emittedMarkdownSyntax === false` — the walk produced escaped text and line
 //    structure only. The conversion is valid Markdown, but the caller prefers the
-//    clipboard's own `text/plain` bytes over this module's escaped rendering — or
-//    lets imagePaste have the event when an image file rides along. Only when
-//    NEITHER exists does it insert this module's output after all, so the escaped
-//    rendering is a live path, not dead code.
+//    clipboard's own `text/plain` bytes over this module's escaped rendering.
+//    With no plain flavour — or with an image file riding along, where imagePaste
+//    keeps the plain flavour from ever landing — it inserts this module's output
+//    after all, so the escaped rendering is a live path, not dead code.
 //    This is the dominant path for clipboards that carry a merely presentational
 //    HTML flavour. See the `HtmlToMarkdownResult` docblock at the bottom.
 //
@@ -41,9 +41,10 @@
 //    hand would come back as `\- \[ \]` — which is why the caller defers on
 //    `emittedMarkdownSyntax === false`. On an ordinary clipboard, one carrying a
 //    safe plain fallback, that defer inserts the clipboard's own bytes verbatim,
-//    exactly as typing them would. It is NOT unconditional: when nothing downstream
-//    can absorb the defer (an HTML-only clipboard) the caller inserts this escaped
-//    rendering after all, because the alternative is a paste that does nothing.
+//    exactly as typing them would. It is NOT unconditional: the caller inserts this
+//    escaped rendering after all whenever the plain flavour cannot land — there is
+//    none (an HTML-only clipboard), or an image file item rides along and
+//    imagePaste consumes the event before CM's plain paste can run.
 //  - Whether a container is visually EMPTY is decided by ONE rule —
 //    `blankAfterInvisible` (full-strip of the `\p{DI} ∪ \p{Cf}` format+ignorable class +
 //    whitespace), measured over
@@ -75,6 +76,7 @@
 //    ANY thrown value, so the handler always has a safe defer-to-plain-paste path.
 
 import { isAllowedUrl } from "../../../markdown/url-allowlist.js";
+import { encodeMarkdownDestination } from "../../../markdown/url-decode.js";
 import { MAX_LIST_NUMBER } from "../list/list-transform.js";
 import { SKIP_TAGS, tableElementToGfm } from "./html-table-to-gfm.js";
 
@@ -273,21 +275,11 @@ function skipTagsText(el: Element): string {
 }
 
 /** Write `url` (already `isAllowedUrl`-approved) as a CommonMark link destination
- *  that cannot terminate early. Angle-bracket form tolerates spaces and parens
- *  but not `<`/`>`/newlines; bare form is used when the URL has none of
- *  ` ()<>`; otherwise `<`/`>` are percent-encoded and the safest form chosen.
- *  Newlines are stripped (isAllowedUrl already rejects control bytes; belt-and-
+ *  that decodes back to the same URL. Newlines are stripped first — the encoder
+ *  cannot carry them (isAllowedUrl already rejects control bytes; belt-and-
  *  braces). */
 function markdownDestination(url: string): string {
-  const clean = url.replace(/[\r\n]/g, "");
-  if (!/[\s()<>]/.test(clean)) {
-    return clean; // bare-safe
-  }
-  if (!/[<>]/.test(clean)) {
-    return `<${clean}>`; // angle form tolerates spaces + parens
-  }
-  const enc = clean.replace(/</g, "%3C").replace(/>/g, "%3E");
-  return /[\s()]/.test(enc) ? `<${enc}>` : enc;
+  return encodeMarkdownDestination(url.replace(/[\r\n]/g, ""));
 }
 
 /** Length of the longest consecutive backtick run in `text` (0 when none) — the

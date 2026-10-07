@@ -41,10 +41,10 @@ export type DocumentMessageShape = EnvelopeShape & {
   canWrite: boolean;
   // Mirror of the wire DocumentEol (src/shared/protocol.ts DOCUMENT_EOLS).
   eol: "\n" | "\r\n";
-  // Exclusive pair enforced by the validator (see src/shared/protocol.ts);
-  // typed as independently optional to mirror the source.
-  externalEpoch?: number;
-  epochGeneration?: number;
+  // Both required — mirrors the source (see src/shared/protocol.ts).
+  externalEpoch: number;
+  epochGeneration: number;
+  settledEditId: number;
 };
 
 export type ReadyMessageShape = EnvelopeShape & {
@@ -55,6 +55,7 @@ export type EditMessageShape = EnvelopeShape & {
   type: "edit";
   content: string;
   baseDocVersion: number;
+  editId: number;
 };
 
 export type OpenExternalMessageShape = EnvelopeShape & {

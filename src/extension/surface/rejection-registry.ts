@@ -35,6 +35,15 @@
 export const REJECTION_BLOCKS_SWITCH_MESSAGE =
   "Quoll: can't switch to the text editor while a change can't be saved — resolve the highlighted problem first.";
 
+/** User-facing message shown when an AI context handoff (Claude Code ⌘⌥K /
+ *  Codex ⌘J) is refused because a write-gate rejection is pending. The rejected
+ *  draft lives only webview-side, so the document the handoff would reference is
+ *  NOT what the user sees — handing it off and reporting success would be a false
+ *  success. Sibling of REJECTION_BLOCKS_SWITCH_MESSAGE (the switch wording does
+ *  not fit: nothing is being switched). */
+export const REJECTION_BLOCKS_HANDOFF_MESSAGE =
+  "Quoll: can't hand off this file while a change can't be saved — resolve the highlighted problem first.";
+
 const pendingRejectionByUri = new Map<string, () => boolean>();
 
 /** Publish `isPending` for `uriKey`. The panel MUST call the returned

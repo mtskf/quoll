@@ -33,6 +33,9 @@ const validDocument = () =>
     themeKind: "light",
     canWrite: true,
     eol: "\n",
+    externalEpoch: 0,
+    epochGeneration: 1,
+    settledEditId: 0,
   }) as const;
 
 const validTheme = () =>
@@ -54,6 +57,7 @@ const validEdit = () =>
     type: "edit",
     content: "edited",
     baseDocVersion: 1,
+    editId: 1,
   }) as const;
 
 // String of exactly `len` UTF-16 code units (matches the validator's
@@ -155,6 +159,14 @@ describe("envelope rejections (both directions)", () => {
 // ---------- isHostToWebview / document ----------
 
 describe("isHostToWebview — document", () => {
+  it("document requires a non-negative safe-integer settledEditId", () => {
+    expect(isHostToWebview({ ...validDocument(), settledEditId: 0 })).toBe(true);
+    expect(isHostToWebview({ ...validDocument(), settledEditId: 7 })).toBe(true);
+    for (const settledEditId of [undefined, -1, 1.5, "0"]) {
+      expect(isHostToWebview({ ...validDocument(), settledEditId })).toBe(false);
+    }
+  });
+
   it("accepts a fully valid document", () => {
     expect(isHostToWebview(validDocument())).toBe(true);
   });
@@ -323,11 +335,6 @@ describe("isHostToWebview — document", () => {
 // ---------- isHostToWebview / document — externalEpoch + epochGeneration (S3a) ----------
 
 describe("isHostToWebview — document epoch identity pair (S3a)", () => {
-  // Absence is TOLERATED (old host → new webview skew): both omitted = valid.
-  it("accepts a document with NEITHER epoch field (pure-absent, today's behaviour)", () => {
-    expect(isHostToWebview(validDocument())).toBe(true);
-  });
-
   it("accepts a document carrying BOTH valid epoch fields", () => {
     expect(isHostToWebview({ ...validDocument(), externalEpoch: 0, epochGeneration: 12345 })).toBe(
       true
@@ -337,21 +344,19 @@ describe("isHostToWebview — document epoch identity pair (S3a)", () => {
     );
   });
 
-  // Partial pair = boundary-INVALID (the webview never sees a half-formed identity).
-  it("rejects a PARTIAL pair — externalEpoch present, epochGeneration absent", () => {
-    expect(isHostToWebview({ ...validDocument(), externalEpoch: 3 })).toBe(false);
+  it("rejects a document with NEITHER epoch field", () => {
+    const { externalEpoch: _e, epochGeneration: _g, ...rest } = validDocument();
+    expect(isHostToWebview(rest)).toBe(false);
   });
 
-  it("rejects a PARTIAL pair — epochGeneration present, externalEpoch absent", () => {
-    expect(isHostToWebview({ ...validDocument(), epochGeneration: 3 })).toBe(false);
+  it("rejects a document missing externalEpoch", () => {
+    const { externalEpoch: _omit, ...rest } = validDocument();
+    expect(isHostToWebview(rest)).toBe(false);
   });
 
-  // An explicit `undefined` for one half is treated as absent, so a value + an
-  // explicit-undefined is still a partial pair → invalid.
-  it("rejects externalEpoch present with epochGeneration explicitly undefined", () => {
-    expect(
-      isHostToWebview({ ...validDocument(), externalEpoch: 2, epochGeneration: undefined })
-    ).toBe(false);
+  it("rejects a document missing epochGeneration", () => {
+    const { epochGeneration: _omit, ...rest } = validDocument();
+    expect(isHostToWebview(rest)).toBe(false);
   });
 
   const badEpochComponents: Array<[string, unknown]> = [
@@ -423,6 +428,20 @@ describe("isWebviewToHost — ready", () => {
 // ---------- isWebviewToHost / edit ----------
 
 describe("isWebviewToHost — edit", () => {
+  it("edit requires a positive safe-integer editId", () => {
+    const ok = {
+      protocol: PROTOCOL_VERSION,
+      type: "edit",
+      content: "x",
+      baseDocVersion: 1,
+      editId: 1,
+    };
+    expect(isWebviewToHost(ok)).toBe(true);
+    for (const editId of [undefined, 0, -1, 1.5, "1", Number.MAX_SAFE_INTEGER + 1]) {
+      expect(isWebviewToHost({ ...ok, editId })).toBe(false);
+    }
+  });
+
   it("accepts a fully valid edit", () => {
     expect(isWebviewToHost(validEdit())).toBe(true);
   });

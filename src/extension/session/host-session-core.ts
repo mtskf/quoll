@@ -84,6 +84,18 @@ export interface HostSessionState {
   // not ordering). S3a plumbs them; the webview consumes them in S3b.
   readonly externalEpoch: number;
   readonly epochGeneration: number;
+  // The highest `EditMessage.editId` received (0 before the first Edit), stamped
+  // on every Document as `settledEditId`. ONE write site — the top of the `edit`
+  // arm — and deliberately not one per verdict arm: a Document is only ever
+  // emitted while the write lock is free, and with the lock free no received
+  // Edit is still waiting (it was judged on arrival, or stashed under the lock
+  // and then judged, dropped, or superseded by a newer stash before the
+  // settlement / recovery released it). So "highest received", read at a
+  // Document, IS "highest id the host is done with" — by construction.
+  // host-session-core.test.ts pins the premise ("a Document only ever leaves a
+  // lock-free state with nothing stashed"). `Math.max`, not assignment: a
+  // reloaded webview restarts its ids at 1 and must not lower the mark.
+  readonly lastEditId: number;
 }
 
 /** True while the host write lock is held — i.e. a flushed edit's
@@ -113,6 +125,7 @@ export type HostSessionEvent =
   | {
       readonly type: "edit";
       readonly baseDocVersion: number;
+      readonly editId: number;
       readonly content: string;
       readonly documentVersion: number;
       readonly canWrite: boolean;
@@ -290,6 +303,7 @@ export type HostSessionEffect =
       // re-reads reducer state for them.
       readonly externalEpoch: number;
       readonly epochGeneration: number;
+      readonly settledEditId: number;
     }
   | {
       readonly type: "postRejectedDraft";
@@ -298,6 +312,7 @@ export type HostSessionEffect =
       readonly docVersion: number;
       readonly externalEpoch: number;
       readonly epochGeneration: number;
+      readonly settledEditId: number;
       // The freshly re-stamped delivery id (Codex N6). The executor delivers
       // the replayed banner failure-aware via `sendEditRejected(error, id)`, so
       // a failed replay delivery re-enters as `editRejectedDeliveryFailed(id)`
@@ -405,6 +420,7 @@ const postDoc = (s: HostSessionState, docVersion: number): HostSessionEffect => 
   docVersion,
   externalEpoch: s.externalEpoch,
   epochGeneration: s.epochGeneration,
+  settledEditId: s.lastEditId,
 });
 
 // The withhold pair — what a settlement, or the `settlementTransitionFailed`
@@ -587,6 +603,7 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
       inFlightContent: null,
       externalEpoch: 0,
       epochGeneration: mintEpochGeneration(),
+      lastEditId: 0,
     };
   }
 
@@ -659,6 +676,7 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
                 docVersion: state.lastAppliedDocVersion,
                 externalEpoch: state.externalEpoch,
                 epochGeneration: state.epochGeneration,
+                settledEditId: state.lastEditId,
                 id,
               },
             ],
@@ -696,11 +714,10 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // the resync would swallow the advance (the later debounced
         // `documentChanged` no-ops on the version-identical check) and finding
         // #4 recurs through the front door.
-        const resynced = resyncLiveVersion(
-          state,
-          event.documentVersion,
-          event.lineageSince !== null
-        );
+        const resynced: HostSessionState = {
+          ...resyncLiveVersion(state, event.documentVersion, event.lineageSince !== null),
+          lastEditId: Math.max(state.lastEditId, event.editId),
+        };
         if (resynced.pendingApplyBaseVersion !== null) {
           // Host write lock held: STASH the latest edit intent instead of
           // dropping it. The webview only force-posts while in-flight on
@@ -1301,6 +1318,7 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
                       docVersion: settled.lastAppliedDocVersion,
                       externalEpoch: settled.externalEpoch,
                       epochGeneration: settled.epochGeneration,
+                      settledEditId: settled.lastEditId,
                       id,
                     },
                     { type: "showError", message: `Cannot save: ${verdict.error.message}` },

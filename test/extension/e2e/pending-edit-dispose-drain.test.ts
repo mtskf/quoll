@@ -61,20 +61,27 @@ describe("pending-edit-dispose-drain", function () {
     // its SETTLEMENT open until the gate resolves, so the write lock stays held
     // while edit #2 arrives and the panel is disposed. Route the SECOND apply
     // (the drain) through the real workspace.applyEdit so its bytes land.
+    //
+    // The drain's Thenable is captured and returned AS IS — awaiting or chaining
+    // it here would put a continuation between the real apply and the host and
+    // could reorder the settlement this test exists to observe.
     const gate = deferred<boolean>();
     let calls = 0;
+    let drainApply: Thenable<boolean> | undefined;
     harness.applyEditOverride = (edit) => {
       calls += 1;
       if (calls === 1) {
         return vscode.workspace.applyEdit(edit).then((ok) => gate.promise.then(() => ok));
       }
-      return vscode.workspace.applyEdit(edit);
+      drainApply = vscode.workspace.applyEdit(edit);
+      return drainApply;
     };
 
     // Edit #1 enters the accept arm, applies for real, and holds the lock.
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 1,
       content: "first",
       baseDocVersion: seed.message.docVersion,
     });
@@ -93,6 +100,7 @@ describe("pending-edit-dispose-drain", function () {
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 2,
       content: drained,
       baseDocVersion: seed.message.docVersion,
     });
@@ -111,7 +119,12 @@ describe("pending-edit-dispose-drain", function () {
       await tick(20);
     }
     assert.strictEqual(calls, 2, "the stashed edit must drain via a real applyEdit after dispose");
-    await tick(50); // let the drain's real applyEdit land on the document
+
+    // A call count proves neither acceptance nor completion, so wait on the
+    // drain's own result instead of a settle window: a refused apply fails here
+    // as a refusal, not as stale bytes two lines down.
+    assert.ok(drainApply, "the drain's applyEdit Thenable must have been captured");
+    assert.strictEqual(await drainApply, true, "the drain's real applyEdit must be accepted");
 
     assert.strictEqual(doc.getText(), drained, "stashed edit #2 bytes must reach the TextDocument");
     assert.ok(doc.isDirty, "the drained write must leave the document dirty (unsaved)");

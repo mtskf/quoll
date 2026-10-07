@@ -66,6 +66,7 @@ describe("dirty-doc-disk-conflict", function () {
     harness.activePanel?.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 1,
       baseDocVersion: baseVersion,
       content: bodyEdit,
     });

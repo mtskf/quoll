@@ -86,6 +86,7 @@ describe("handoff edit-applied barrier", function () {
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 1,
       content: FORTY_LINES,
       baseDocVersion: seed.message.docVersion,
     });
@@ -165,6 +166,7 @@ describe("handoff edit-applied barrier", function () {
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
+      editId: 2,
       content: FORTY_LINES,
       baseDocVersion: seed.message.docVersion,
     });
