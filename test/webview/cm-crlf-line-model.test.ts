@@ -464,11 +464,8 @@ describe("boundary cases", () => {
 });
 
 // The pins that hold the arrangement in place. The first names the single
-// CAUSE the suite above exists for; the rest observe what leaves the editor —
-// the clipboard (always LF) and the wire (the document's EOL), which no other
-// test in the repo reaches
-// (test/extension/e2e/crlf-roundtrip.test.ts injects a hand-built `edit` message
-// and never runs the webview serializer).
+// CAUSE the suite above exists for; the rest observe what leaves the editor:
+// the clipboard (always LF) and the wire (the document's EOL).
 describe("editor — the document EOL lives in state, not in CodeMirror's splitter", () => {
   it("the mounted editor never installs a literal-EOL splitter (the root cause)", () => {
     const { handle, view } = mount();
