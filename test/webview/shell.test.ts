@@ -1212,6 +1212,29 @@ describe("shell — own-lineage Documents never rewind un-acked bytes", () => {
       expect(viewText()).toBe("sxy");
       expect(host.disk()).toBe("sxy");
       expect(views.slice(1).every((v) => v === "sxy")).toBe(true);
+      expect(noticeCount()).toBe(0); // the newer bytes went out: nothing is left un-saved
+    });
+
+    it("a force-post drained from the stash and then REFUSED is not read as a foreign write", async () => {
+      // The first Document the webview sees after posting E1 and E2 shows E1's
+      // bytes with a mark that already covers E2. Those bytes are ours — E1 is
+      // still in the sent list — so E2 is replayed, not discarded.
+      const host = await start("s");
+      typeAtEnd("x");
+      vi.advanceTimersByTime(300); // E1 "sx"
+      typeAtEnd("y");
+      window.dispatchEvent(new Event("pagehide")); // E2 "sxy", force-posted
+      host.receive(); // E1 accepted, lock held
+      host.receive(); // E2 stashed
+      host.settle(); // E1 applied; the stash drains — no Document for E1
+      host.settle("refused"); // first Document: (v2, "sx", settledEditId 2)
+      host.pump();
+      expect(viewText()).toBe("sxy");
+      expect(noticeCount(".quoll-notice-discard")).toBe(0);
+      host.quiesce();
+      expect(host.disk()).toBe("sxy");
+      expect(viewText()).toBe("sxy");
+      expect(neverShrank()).toBe(true);
     });
 
     it("a REFUSED Edit with nothing newer keeps its bytes on screen, is not re-posted in a loop, and retries on blur", async () => {
@@ -1223,6 +1246,7 @@ describe("shell — own-lineage Documents never rewind un-acked bytes", () => {
       host.pump();
       expect(host.unread()).toBe(0); // no automatic identical retry
       expect(viewText()).toBe("sx");
+      expect(noticeCount(".quoll-notice-unsaved")).toBe(1);
       host.visible(); // an unsolicited identical repost: still no loop
       host.pump();
       expect(host.unread()).toBe(0);
