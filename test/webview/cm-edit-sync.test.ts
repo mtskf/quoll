@@ -1160,6 +1160,61 @@ describe("cm edit-sync — Edit id", () => {
     expect(onLocalEditDiscarded).not.toHaveBeenCalled();
     expect(onEditRefused).toHaveBeenCalledTimes(1);
   });
+
+  it("a host-counted foreign write after an uncounted one still supersedes held bytes", () => {
+    const onLocalEditDiscarded = vi.fn();
+    const s = setup({ onLocalEditDiscarded });
+    seed(s);
+    s.sync.onHostSnapshot(2, true, 0, 1, "X"); // uncounted foreign write, nothing held
+    s.setDoc("X");
+    s.sync.onReducerCommit(false);
+    expect(s.sync.recordedIdentity()).toEqual({ epoch: 1, generation: 1 });
+    s.type("Xa"); // in flight, stamped (1, 1)
+    const id = s.postedIds.at(-1) as number;
+    // The host COUNTED this one: wire epoch 0 -> 1.
+    expect(s.sync.real.viewHoldsUnackedEdit("Xa", hostDoc(3, "Y", id, 1, 1))).toBe(false);
+    s.sync.onHostSnapshot(3, true, 1, 1, "Y", id);
+    s.setDoc("Y");
+    s.sync.onReducerCommit(false);
+    expect(s.sync.recordedIdentity()).toEqual({ epoch: 2, generation: 1 });
+    expect(onLocalEditDiscarded).toHaveBeenCalledTimes(1);
+    expect(s.posted.length).toBe(1);
+  });
+
+  it("an own ack at the unchanged wire epoch does not regress the epoch after an uncounted foreign write", () => {
+    const s = setup();
+    seed(s);
+    s.sync.onHostSnapshot(2, true, 0, 1, "X");
+    s.setDoc("X");
+    s.sync.onReducerCommit(false);
+    s.type("Xa");
+    const id = s.postedIds.at(-1) as number;
+    s.sync.onHostSnapshot(3, true, 0, 1, "Xa", id); // our ack, wire epoch still 0
+    s.sync.onReducerCommit(false);
+    expect(s.sync.recordedIdentity()).toEqual({ epoch: 1, generation: 1 });
+  });
+
+  it("a THROWING onEditRefused does not escape onHostSnapshot, and the refusal is still held", () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const s = setup({
+        onEditRefused: () => {
+          throw new Error("notice failed");
+        },
+      });
+      seed(s);
+      s.type("a");
+      expect(() => s.sync.onHostSnapshot(1, true, 0, 1, "hello", 1)).not.toThrow();
+      s.sync.onReducerCommit(false);
+      expect(s.posted.length).toBe(1); // still held at the refused version
+      expect(error).toHaveBeenCalledWith("[quoll] onEditRefused threw", expect.any(Error));
+      s.sync.onHostSnapshot(2, true, 0, 1, "hello", 1); // the version moves: released
+      s.sync.onReducerCommit(false);
+      expect(s.posted.at(-1)).toEqual({ content: "a", baseDocVersion: 2 });
+    } finally {
+      error.mockRestore();
+    }
+  });
 });
 
 describe("cm edit-sync — showHeld brings the view forward before a replay", () => {
