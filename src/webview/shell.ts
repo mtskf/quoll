@@ -198,11 +198,11 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   // the hold for its readonly episode — so one that was SHOWN and then replaced
   // is not drawn again within that span: "the storm notice disappeared" (or the
   // hold notice did) is expected behaviour, not a bug to chase. Unsaved is not
-  // latched: a later refusal draws it again. A DECLINED storm or hold
-  // differs by kind: the storm's latch is spent either way, while the hold
-  // reports the decline (showNotice's return) and edit-sync offers it again on
-  // the next flush — the hold is the only signal those specific edits get, and
-  // the discard in its way may be about an unrelated, earlier loss.
+  // latched: a later refusal draws it again. A DECLINED storm or hold differs
+  // by kind: the storm's latch is spent either way, while the hold reports the
+  // decline (showNotice's return) and edit-sync offers it again on the next
+  // flush — the hold is the only signal those specific edits get, and the
+  // discard in its way may be about an unrelated, earlier loss.
   //
   // The hold text promises a RETRY, not durability: on a re-grant edit-sync's
   // drain brings the view forward to the held bytes and replays them, but until
@@ -242,15 +242,14 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
     }
     // Choke point for NOTICE_PRIORITY: every writer (showDiscardNotice,
     // showHoldNotice, showStormNotice's deferred render, the onEditRefused
-    // wiring, and any future notice producer) calls
-    // through here, so this is the one place the ranking has to be checked for
-    // it to actually govern who may claim the slot — re-deriving the check at
-    // each call site would let a future call site forget it (and, as happened
-    // once, shadow this one — see the NOTICE_PRIORITY comment above). Today
-    // this declines a storm under discard / hold / unsaved, an unsaved under
-    // discard / hold, and a hold under a discard — shell.test.ts pins the
-    // storm-under-discard case as "never inserts the storm notice … when a
-    // discard coincides".
+    // wiring, and any future notice producer) calls through here, so this is
+    // the one place the ranking has to be checked for it to actually govern who
+    // may claim the slot — re-deriving the check at each call site would let a
+    // future call site forget it (and, as happened once, shadow this one — see
+    // the NOTICE_PRIORITY comment above). Today this declines a storm under
+    // discard / hold / unsaved, an unsaved under discard / hold, and a hold
+    // under a discard — shell.test.ts pins the storm-under-discard case as
+    // "never inserts the storm notice … when a discard coincides".
     // showDiscardNotice itself is never declined here: discard is already the
     // max priority in the current kind set, so no noticeKind can outrank it —
     // this guard exists so the next kind added above discard is protected by
