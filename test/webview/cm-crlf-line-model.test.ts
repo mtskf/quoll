@@ -463,9 +463,10 @@ describe("boundary cases", () => {
   });
 });
 
-// The three pins that hold the arrangement in place. The first names the single
-// CAUSE the suite above exists for; the second and third observe the OUTBOUND
-// path, which no other test in the repo reaches
+// The pins that hold the arrangement in place. The first names the single
+// CAUSE the suite above exists for; the rest observe what leaves the editor —
+// the clipboard (always LF) and the wire (the document's EOL), which no other
+// test in the repo reaches
 // (test/extension/e2e/crlf-roundtrip.test.ts injects a hand-built `edit` message
 // and never runs the webview serializer).
 describe("editor — the document EOL lives in state, not in CodeMirror's splitter", () => {
@@ -491,9 +492,10 @@ describe("editor — the document EOL lives in state, not in CodeMirror's splitt
 
   it("copy puts LF on the clipboard whatever the document's EOL", () => {
     // The clipboard is NOT an outbound path for the document's EOL: only the
-    // wire is (next test). CM compares a paste against the exact string it
-    // copied, LF-normalised, to recognise a linewise copy, so a CRLF clipboard
-    // broke that recognition (the two tests below). (copyViaEvent focuses the
+    // wire is ("a CRLF document's Edit reaches the wire as CRLF"). CM compares a
+    // paste against the exact string it copied, LF-normalised, to recognise a
+    // linewise copy, so a CRLF clipboard broke that recognition (the multi-cursor
+    // round-trip tests below). (copyViaEvent focuses the
     // view itself — CM's copy handler bails on hasSelection() in an unfocused
     // happy-dom view.)
     const { handle, view } = mount();
@@ -511,11 +513,13 @@ describe("editor — the document EOL lives in state, not in CodeMirror's splitt
     expect(copyViaEvent(view)).toBe("a\nb");
   });
 
-  // Both tests feed the paste exactly what the copy wrote, so they observe the
-  // round trip rather than a hand-picked clipboard string.
-  // Revert-check: re-add a clipboardOutputFilter that renders the document's
-  // EOL → CM no longer recognises its own linewise copy and the paste lands
-  // inline ("aabb" / "ccdd", and "ab" / "cdef").
+  // The three round-trip tests below feed the paste exactly what the copy wrote,
+  // so they observe the round trip rather than a hand-picked clipboard string.
+  // Revert-check (the two multi-cursor tests): re-add a clipboardOutputFilter
+  // that renders the document's EOL → CM no longer recognises its own linewise
+  // copy and the paste lands inline ("aabb" / "ccdd", and "eab" / "cdf"). The
+  // single-cursor test is a regression guard, not a repro: a one-line copy has
+  // no "\n", so it reads the same with or without the filter.
   it("a multi-cursor linewise copy pastes back as whole lines in a CRLF document", () => {
     const { handle, view } = mount();
     handle.applyDocument({
