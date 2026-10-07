@@ -231,7 +231,7 @@ describe("computeReseedChange — minimal single-span reseed change", () => {
     // `Text.of(["a\nb"])` is ONE line whose text contains a newline — a malformed
     // Text (well-formed input is one array element per line). The old string
     // oracle agrees with `next` because only the characters are compared; the
-    // real-Text oracle disagrees (3 lines vs 4) because the line model differs.
+    // real-Text oracle disagrees (2 lines vs 3) because the line model differs.
     const old = splitToCmText("x\ny");
     const next = splitToCmText("a\nb\ny");
     const change = { from: 0, to: 1, insert: Text.of(["a\nb"]) };
