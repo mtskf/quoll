@@ -56,7 +56,14 @@ vi.mock("../../src/webview/host.js", () => ({
 }));
 
 // The identity pair for fixtures that stay on one host lineage throughout.
-const PAIR = { externalEpoch: 0, epochGeneration: 1 } as const;
+const PAIR = {
+  externalEpoch: 0,
+  epochGeneration: 1,
+  // A host that has received every Edit posted so far.
+  get settledEditId(): number {
+    return Math.max(0, ...editPosts().map((m) => (m as { editId: number }).editId));
+  },
+};
 const mounted: EditorHandle[] = [];
 let container: HTMLElement | null = null;
 
@@ -581,6 +588,7 @@ describe("editor — a no-newline CRLF document's first Enter folds its ack", ()
       docVersion: 1,
       externalEpoch: 0,
       epochGeneration: G,
+      settledEditId: PAIR.settledEditId,
     });
     // Enter: a "\n" insert (CodeMirror's default splitter keeps it ONE break).
     view.dispatch({ changes: { from: view.state.doc.length, insert: "\n" } });
@@ -601,6 +609,7 @@ describe("editor — a no-newline CRLF document's first Enter folds its ack", ()
       docVersion: 2,
       externalEpoch: 0,
       epochGeneration: G,
+      settledEditId: PAIR.settledEditId,
     });
     // Folded, not reseeded: a reseed would install "a\n" and drop the "b".
     expect(view.state.doc.toString()).toBe("a\nb");

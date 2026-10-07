@@ -52,6 +52,7 @@ function mount(doc: string, canWrite: boolean) {
     docVersion: 1,
     externalEpoch: 0,
     epochGeneration: 1,
+    settledEditId: 0,
   });
   const view = EditorView.findFromDOM(
     parent.querySelector(".cm-editor") as HTMLElement

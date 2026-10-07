@@ -127,12 +127,13 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   bannerHost.className = "quoll-banner-host";
   main.appendChild(bannerHost);
 
-  // ONE notice slot shared by the three edit-sync lifecycle signals — the S3b
+  // ONE notice slot shared by the four edit-sync lifecycle signals — the S3b
   // clustering tripwire (onResyncStorm), discarded un-acked local bytes from
   // EITHER holder, the pre-ack replay buffer or an Edit still awaiting its ack
-  // (onLocalEditDiscarded), and un-posted edits held under a readonly document
-  // (onReadonlyHold). It lives OUTSIDE bannerHost so the reducer-driven
-  // renderBanners (replaceChildren) never clobbers it, and it is NOT reducer
+  // (onLocalEditDiscarded), un-posted edits held under a readonly document
+  // (onReadonlyHold), and an Edit the host refused (onEditRefused). It lives
+  // OUTSIDE bannerHost so the reducer-driven renderBanners (replaceChildren)
+  // never clobbers it, and it is NOT reducer
   // state — none of the signals is a document error.
   //
   // The CONTAINER is created here, at mount, and is never removed — only
@@ -160,7 +161,7 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   // Notice slot behaviour. Declared AFTER `shellDisposed` because the deferred
   // storm render reads it.
   //
-  // Three classes, THREE texts, deliberately not merged into one sentence: a
+  // Four classes, FOUR texts, deliberately not merged into one sentence: a
   // storm can fire with no input and no discard at all (pinned in shell.test.ts),
   // so a shared wording would either soften a near-certain loss to "may", or
   // assert a loss the storm case cannot prove; and a hold is not a loss at all
@@ -182,21 +183,26 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   // re-rendering an identical notice reads as a new, second loss. Hold has NO
   // display-side latch: edit-sync stops firing it for the readonly episode once
   // showHoldNotice reports it shown, which is also why a dismissed hold notice
-  // stays dismissed.
+  // stays dismissed. Unsaved (a refused Edit) is NOT latched either: each
+  // refusal is an event, and showNotice already aggregates a repeat while it is
+  // on screen. It deliberately outlives a successful retry: the text reports
+  // the refusal, not a present state a later save could falsify.
   //
   // Consequence of the shared slot: a stronger claim REPLACES a weaker one
   // (showNotice's replaceChildren) and a weaker one is declined — discard over
-  // hold over storm. The discard states a certain loss; it is also what a hold
-  // turns into when foreign bytes land during the readonly window. The hold
-  // names specific edits at risk, where the storm only says some may be. Both
-  // weaker kinds are latched at their source — the storm for the session, the
-  // hold for its readonly episode — so one that was SHOWN and then replaced is
-  // not drawn again within that span: "the storm notice disappeared" (or the
-  // hold notice did) is expected behaviour, not a bug to chase. A DECLINED one
-  // differs by kind: the storm's latch is spent either way, while the hold
-  // reports the decline (showNotice's return) and edit-sync offers it again on
-  // the next flush — the hold is the only signal those specific edits get, and
-  // the discard in its way may be about an unrelated, earlier loss.
+  // hold over unsaved over storm. The discard states a certain loss; it is also
+  // what a hold turns into when foreign bytes land during the readonly window.
+  // The hold names specific edits at risk; the unsaved names an edit too, but
+  // one that stays on screen and is retried, where the storm only says some may
+  // be. Storm and hold are latched at their source — the storm for the session,
+  // the hold for its readonly episode — so one that was SHOWN and then replaced
+  // is not drawn again within that span: "the storm notice disappeared" (or the
+  // hold notice did) is expected behaviour, not a bug to chase. Unsaved is not
+  // latched: a later refusal draws it again. A DECLINED storm or hold differs
+  // by kind: the storm's latch is spent either way, while the hold reports the
+  // decline (showNotice's return) and edit-sync offers it again on the next
+  // flush — the hold is the only signal those specific edits get, and the
+  // discard in its way may be about an unrelated, earlier loss.
   //
   // The hold text promises a RETRY, not durability: on a re-grant edit-sync's
   // drain brings the view forward to the held bytes and replays them, but until
@@ -210,6 +216,8 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
     discard:
       "Quoll discarded pending edits while syncing this document. Review your recent changes and reapply anything missing; Undo cannot restore discarded edits.",
     hold: "This document became read-only before Quoll could save your latest edits. They are lost if this editor closes; Quoll will retry if the document becomes writable again. Review your recent changes.",
+    unsaved:
+      "Quoll could not save an edit. Your text is still in this editor; Quoll will try again when you keep typing or leave the editor.",
     storm:
       "Quoll has repeatedly re-synced this document. Review your recent changes; some may not have been saved.",
   } as const;
@@ -223,7 +231,7 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   // copy of the check. A second copy at a call site isn't merely redundant:
   // it can shadow the real one and make it permanently unreachable, which is
   // exactly what happened here before this comment was corrected.
-  const NOTICE_PRIORITY: Record<NoticeKind, number> = { discard: 3, hold: 2, storm: 1 };
+  const NOTICE_PRIORITY: Record<NoticeKind, number> = { discard: 4, hold: 3, unsaved: 2, storm: 1 };
   let noticeKind: NoticeKind | null = null;
   let stormNoticeShown = false;
   // Returns whether the slot now carries `kind`: false only for the priority
@@ -233,16 +241,15 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
       return true; // aggregate: the slot already says exactly this
     }
     // Choke point for NOTICE_PRIORITY: every writer (showDiscardNotice,
-    // showHoldNotice, showStormNotice's deferred render, and any future notice
-    // producer) calls
-    // through here, so this is the one place the ranking has to be checked for
-    // it to actually govern who may claim the slot — re-deriving the check at
-    // each call site would let a future call site forget it (and, as happened
-    // once, shadow this one — see the NOTICE_PRIORITY comment above). Today
-    // this declines a storm whenever a discard or a hold already holds the
-    // slot, and a hold whenever a discard does — shell.test.ts pins the
-    // storm-under-discard case as "never inserts the storm notice … when a
-    // discard coincides".
+    // showHoldNotice, showStormNotice's deferred render, the onEditRefused
+    // wiring, and any future notice producer) calls through here, so this is
+    // the one place the ranking has to be checked for it to actually govern who
+    // may claim the slot — re-deriving the check at each call site would let a
+    // future call site forget it (and, as happened once, shadow this one — see
+    // the NOTICE_PRIORITY comment above). Today this declines a storm under
+    // discard / hold / unsaved, an unsaved under discard / hold, and a hold
+    // under a discard — shell.test.ts pins the storm-under-discard case as
+    // "never inserts the storm notice … when a discard coincides".
     // showDiscardNotice itself is never declined here: discard is already the
     // max priority in the current kind set, so no noticeKind can outrank it —
     // this guard exists so the next kind added above discard is protected by
@@ -292,8 +299,8 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
       }
       try {
         // showNotice's own priority choke point is what may decline this call
-        // (a stronger claim, "discard" or "hold", already holds the slot) — that
-        // check is NOT re-derived here.
+        // (a stronger claim — "discard", "hold" or "unsaved" — already holds the
+        // slot) — that check is NOT re-derived here.
         showNotice("storm");
       } catch (err) {
         // An unattributed uncaught error in a microtask is indistinguishable
@@ -409,6 +416,9 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
     onResyncStorm: showStormNotice,
     onLocalEditDiscarded: showDiscardNotice,
     onReadonlyHold: showHoldNotice,
+    onEditRefused: () => {
+      showNotice("unsaved");
+    },
   });
 
   const unsubscribe = subscribeToHost((message) => {
@@ -495,7 +505,7 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
           return;
         }
         const applyStart = QUOLL_PERF ? perfNow() : 0;
-        editor.applyDocument(message);
+        const editPending = editor.applyDocument(message);
         if (QUOLL_PERF) {
           const settled = perfNow();
           perfRecord("webview:doc-apply", settled - applyStart);
@@ -519,6 +529,7 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
           canWrite: message.canWrite,
           themeKind: message.themeKind,
           adopt: isTransition,
+          editPending,
         });
         return;
       }

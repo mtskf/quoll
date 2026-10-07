@@ -152,21 +152,33 @@ export type EditorOptions = {
    *  asks for a retry. Pass-through — the rule lives on
    *  `EditSyncOptions.onReadonlyHold` (cm/edit-sync.ts). */
   onReadonlyHold?: () => boolean;
+  /** Fired when the host refused an Edit and nothing newer is held: the bytes
+   *  stay on screen, un-saved. The shell wires it to a user-visible notice.
+   *  Pass-through — the rule lives on `EditSyncOptions.onEditRefused`. */
+  onEditRefused?: () => void;
 };
 
 /** The part of a host `DocumentMessage` the editor consumes. An object, not
- *  positional arguments: three same-typed `number` fields would be swappable
+ *  positional arguments: its same-typed `number` fields would be swappable
  *  without a type error, and the shell already holds exactly this shape.
  *  `eol` is required — the editor never infers the document EOL from
  *  `content` (see `DocumentMessage` in shared/protocol.ts). */
 export type HostSnapshot = Pick<
   DocumentMessage,
-  "content" | "eol" | "canWrite" | "docVersion" | "externalEpoch" | "epochGeneration"
+  | "content"
+  | "eol"
+  | "canWrite"
+  | "docVersion"
+  | "externalEpoch"
+  | "epochGeneration"
+  | "settledEditId"
 >;
 
 export type EditorHandle = {
-  /** Replace the editor's document from a host snapshot. */
-  applyDocument(snapshot: HostSnapshot): void;
+  /** Replace the editor's document from a host snapshot. Returns whether the
+   *  in-flight Edit is still awaiting the host's verdict (edit-sync's
+   *  `onHostSnapshot`) — the reducer's `editPending`. */
+  applyDocument(snapshot: HostSnapshot): boolean;
   /** Fired by the shell after every state-changing dispatch — the SOLE
    *  drain entry point. */
   onReducerCommit(editInFlight: boolean): void;
@@ -365,6 +377,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     onResyncStorm: opts.onResyncStorm,
     onLocalEditDiscarded: opts.onLocalEditDiscarded,
     onReadonlyHold: opts.onReadonlyHold,
+    onEditRefused: opts.onEditRefused,
     // Bring the view forward to bytes edit-sync still holds un-acked, through
     // the SAME reseed transaction a host Document uses (non-history, annotated
     // `hostDocumentReseed`, `seeding`-guarded so it is not read back as a local
@@ -1132,7 +1145,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
 
   return {
     applyDocument(snapshot) {
-      const { content, eol, canWrite, docVersion, externalEpoch, epochGeneration } = snapshot;
+      const { content, eol, canWrite } = snapshot;
       // Cancel a scheduled flush BEFORE writing the snapshot so a pending
       // debounced Edit cannot post the host's own bytes back — this also
       // captures an in-window keystroke into the buffer so it survives
@@ -1147,8 +1160,8 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       // ok-ack fold (update-loop guard — ARCHITECTURE.md §3/§5/§7). A host
       // Document that differs from the view is NOT necessarily a divergence: it
       // may be the ack of an Edit the user has since typed past, a stale repost,
-      // or a refusal of the Edit in flight — a Document carries no correlation
-      // to an Edit, so the three look alike. Reseeding on any of them would
+      // a refusal of the Edit in flight, or a Document produced before the host
+      // judged it. Reseeding on any of them would
       // visibly REWIND the newer keystrokes, and a keystroke typed from the
       // rewound view would fork off bytes edit-sync still holds and lose them.
       // So the question asked is about the VIEW: while it shows the newest bytes
@@ -1161,7 +1174,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       // replays it.
       //
       // `viewHoldsUnackedEdit` answers view-shows-held-bytes AND identity-lineage
-      // continuity in ONE call, with the incoming pair BEFORE it is recorded
+      // continuity in ONE call, with the incoming Document BEFORE it is recorded
       // (hence the call sits above `onHostSnapshot`). Both halves are
       // load-bearing: holding bytes alone does not make them still ours to
       // carry — when another writer lands, the host reports a foreign epoch
@@ -1171,12 +1184,9 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       // they look saved, are not, and resurface on the next keystroke as bytes
       // the host already superseded. Display and replay must obey one rule — see
       // `supersedesIdentity` in cm/edit-sync.ts. (Foreign bytes that arrive
-      // WITHOUT an epoch advance are not recognisable here; edit-sync's drain
-      // comment states that residual.)
-      const foldsOkAck =
-        aheadOfHost &&
-        canWrite &&
-        sync.viewHoldsUnackedEdit(liveDoc, externalEpoch, epochGeneration);
+      // WITHOUT an epoch advance are recognised there by content; the drain
+      // comment states what that cannot see.)
+      const foldsOkAck = aheadOfHost && canWrite && sync.viewHoldsUnackedEdit(liveDoc, snapshot);
       const needsReseed = aheadOfHost && !foldsOkAck;
       // Decide HERE whether the text is replaced at all; `replaceViewText` owns
       // how. `null` (the fold and the not-ahead arms) leaves the text alone, and
@@ -1184,6 +1194,11 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       // splitToCmText, not `content` itself: CM positions are LF-internal UTF-16
       // code units (see cm/seed.ts for the byte rationale).
       const insertText = needsReseed ? splitToCmText(content) : null;
+      // Assigned by the callback below, which `replaceViewText` runs on every
+      // arm. The initial value is never returned: a throwing dispatch (or a
+      // throwing callback) propagates out of applyDocument, so the shell never
+      // dispatches the `document` action and `editInFlight` is left as it was.
+      let editPending = false;
       replaceViewText(
         insertText,
         [
@@ -1199,13 +1214,14 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         ],
         () => {
           // Runs on EVERY arm, after the dispatch released `seeding` and before
-          // the fold reconcile: edit-sync records the pair (and may demote an
-          // un-acked in-flight Edit against `content`), then the readonly class
+          // the fold reconcile: edit-sync records the pair and judges the
+          // in-flight Edit against the Document, then the readonly class
           // follows the capability the dispatch just installed.
-          sync.onHostSnapshot(docVersion, canWrite, externalEpoch, epochGeneration, content);
+          editPending = sync.onHostSnapshot(snapshot);
           setReadOnlyClass(canWrite);
         }
       );
+      return editPending;
     },
     isIdentityTransition(externalEpoch, epochGeneration) {
       return sync.isIdentityTransition(externalEpoch, epochGeneration);

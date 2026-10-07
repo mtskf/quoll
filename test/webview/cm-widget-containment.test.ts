@@ -33,7 +33,7 @@ vi.mock("../../src/webview/host.js", () => ({
 
 let container: HTMLElement | null = null;
 // The identity pair for fixtures that stay on one host lineage throughout.
-const PAIR = { externalEpoch: 0, epochGeneration: 1 } as const;
+const PAIR = { externalEpoch: 0, epochGeneration: 1, settledEditId: 0 } as const;
 const mounted: EditorHandle[] = [];
 
 function makeState(overrides: Partial<WebviewState> = {}): WebviewState {

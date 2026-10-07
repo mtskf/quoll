@@ -59,6 +59,7 @@ describe("outline navigation integration", () => {
       docVersion: 1,
       externalEpoch: 0,
       epochGeneration: 1,
+      settledEditId: 0,
     });
 
     const mountEl = container?.querySelector(".quoll-editor") as HTMLElement;

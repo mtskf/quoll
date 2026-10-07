@@ -20,7 +20,8 @@ and the webview (`src/webview/`).
   snapshot.
 - **Edit id.** Every `Edit` carries a webview-minted, strictly increasing
   `editId`; every `Document` carries `settledEditId`, the highest `editId` the
-  host has received (0 before the first). The webview does not read it yet.
+  host has received (0 before the first). The webview reads it to tell whether
+  a Document was produced before or after the host judged its in-flight Edit.
 
 ## Why hand-rolled validators
 
