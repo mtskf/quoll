@@ -204,12 +204,13 @@ describe("htmlToMarkdown — inline constructs", () => {
     expect(md).not.toBeNull();
     expect(formsGfmTable(md as string)).toBe(false);
   });
-  it("percent-encodes a link destination containing angle brackets", () => {
+  it("writes angle brackets in a link destination as character references", () => {
     // isAllowedUrl accepts the raw href (scheme-only check, no normalisation), so a
-    // `<`/`>`-bearing allowed URL reaches markdownDestination's encode branch; the
-    // bytes must be percent-encoded so they cannot terminate the destination early.
+    // `<`/`>`-bearing allowed URL reaches the destination encoder; a raw bracket
+    // would terminate the destination early, and percent-encoding would change the
+    // href the link opens.
     const md = convert('<p><a href="https://x.com/a<b>c">t</a></p>');
-    expect(md).toBe("[t](https://x.com/a%3Cb%3Ec)");
+    expect(md).toBe("[t](https://x.com/a&lt;b&gt;c)");
     expect(validateMarkdownForWrite(`${md}\n`).ok).toBe(true);
   });
   it("angle-brackets a link destination containing a space", () => {
@@ -217,12 +218,20 @@ describe("htmlToMarkdown — inline constructs", () => {
     expect(md).toBe("[t](<https://x.com/a b>)");
     expect(validateMarkdownForWrite(`${md}\n`).ok).toBe(true);
   });
-  it("percent-encodes AND angle-wraps a destination with both a space and angle brackets", () => {
-    // The combined case: `<`/`>` are percent-encoded, then the residual space
-    // still forces the angle-bracket form — exercises markdownDestination's
-    // `<${enc}>` sub-branch (distinct from the bare-encoded and no-encode paths).
+  it("angle-wraps a destination with both a space and angle brackets", () => {
     const md = convert('<p><a href="https://x.com/a b<c>d">t</a></p>');
-    expect(md).toBe("[t](<https://x.com/a b%3Cc%3Ed>)");
+    expect(md).toBe("[t](<https://x.com/a b&lt;c&gt;d>)");
+    expect(validateMarkdownForWrite(`${md}\n`).ok).toBe(true);
+  });
+  it("keeps a literal entity, a backslash, and a numeric reference in an href intact", () => {
+    // The href ATTRIBUTE value below is what the DOM hands the converter after its
+    // own entity decode: `&amp;amp;` in markup is the literal text `&amp;` in the URL.
+    // Markdown would decode that text a second time unless the destination escapes it.
+    const md = convert(
+      '<p><a href="https://x.com/?a=1&amp;amp;b=2&amp;copy;&amp;#58;\\_c">t</a></p>'
+    );
+    expect(md).toBe("[t](https://x.com/?a=1&amp;amp;b=2&amp;copy;&amp;#58;\\\\_c)");
+    // `&copy;` unescaped decodes to the NUL substitute and the write is refused.
     expect(validateMarkdownForWrite(`${md}\n`).ok).toBe(true);
   });
   it("escapes a blockquote `>` marker at a line start", () => {

@@ -76,6 +76,7 @@
 //    ANY thrown value, so the handler always has a safe defer-to-plain-paste path.
 
 import { isAllowedUrl } from "../../../markdown/url-allowlist.js";
+import { encodeMarkdownDestination } from "../../../markdown/url-decode.js";
 import { MAX_LIST_NUMBER } from "../list/list-transform.js";
 import { SKIP_TAGS, tableElementToGfm } from "./html-table-to-gfm.js";
 
@@ -274,21 +275,11 @@ function skipTagsText(el: Element): string {
 }
 
 /** Write `url` (already `isAllowedUrl`-approved) as a CommonMark link destination
- *  that cannot terminate early. Angle-bracket form tolerates spaces and parens
- *  but not `<`/`>`/newlines; bare form is used when the URL has none of
- *  ` ()<>`; otherwise `<`/`>` are percent-encoded and the safest form chosen.
- *  Newlines are stripped (isAllowedUrl already rejects control bytes; belt-and-
+ *  that decodes back to the same URL. Newlines are stripped first — the encoder
+ *  cannot carry them (isAllowedUrl already rejects control bytes; belt-and-
  *  braces). */
 function markdownDestination(url: string): string {
-  const clean = url.replace(/[\r\n]/g, "");
-  if (!/[\s()<>]/.test(clean)) {
-    return clean; // bare-safe
-  }
-  if (!/[<>]/.test(clean)) {
-    return `<${clean}>`; // angle form tolerates spaces + parens
-  }
-  const enc = clean.replace(/</g, "%3C").replace(/>/g, "%3E");
-  return /[\s()]/.test(enc) ? `<${enc}>` : enc;
+  return encodeMarkdownDestination(url.replace(/[\r\n]/g, ""));
 }
 
 /** Length of the longest consecutive backtick run in `text` (0 when none) — the
