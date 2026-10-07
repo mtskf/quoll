@@ -101,9 +101,7 @@ describe("buildDocumentMessage", () => {
   });
 
   it("emits a message the webview-side boundary validator accepts", () => {
-    // This file is transpile-only (no tsconfig includes test/extension/session),
-    // so a field missing from the builder output would not fail tsc here — the
-    // runtime validator is the check that the emitted shape is wire-valid.
+    // The runtime validator is the check that the emitted shape is wire-valid.
     for (const eol of ["\n", "\r\n"] as const) {
       const msg = buildDocumentMessage({
         content: "a",

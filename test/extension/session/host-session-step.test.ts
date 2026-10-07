@@ -9,10 +9,9 @@
 // the settle unconditional; this file pins that, the applied/failed verdict it
 // carries, and the exception ordering that keeps the effect error visible.
 //
-// ⚠️ `test/extension/session/` is in NO tsconfig, so vitest transpiles it
-// without type-checking — every assertion here must be BEHAVIOURAL. The
-// exhaustiveness guard over `ApplyEditOutcome` is compile-time and lives in
-// src/, where `tsc -p ./` does check it.
+// Every assertion here is BEHAVIOURAL. The exhaustiveness guard over
+// `ApplyEditOutcome` is compile-time and lives in src/, where `tsc -p ./`
+// checks it.
 
 import { readFileSync } from "node:fs";
 

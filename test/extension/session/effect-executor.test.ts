@@ -13,8 +13,6 @@ const themeMsg: HostToWebview = { protocol: PROTOCOL_VERSION, type: "theme", the
 // forwards the seam to `executeDocumentWrite`, which hands `build`'s output
 // straight to `apply` — so an opaque marker stands in for production's
 // `WorkspaceEdit`.
-// ⚠️ NOT a compile-time guard: this file is in no `pnpm compile` tsc program
-// and vitest is transpile-only, so this annotation documents intent only.
 // The build→apply linkage is pinned in test/extension/types-equality.test.ts.
 type FakeEdit = { readonly fake: "edit" };
 const fakeEdit: FakeEdit = { fake: "edit" };

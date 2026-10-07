@@ -313,9 +313,11 @@ describe("list-nested table detection (real Lezer language)", () => {
 });
 
 // Local copy of the identity check used by test/extension/types-equality.test.ts's
-// "table model type pins" describe block. NOT re-exported from there: importing
-// TableModel into that file would pull @codemirror/* into the host-side unit
-// program (test/extension/tsconfig.unit.json).
+// "table model type pins" describe block. NOT re-exported from there: when this
+// was written, importing TableModel into that file would have pulled
+// @codemirror/* into the host-side unit program
+// (test/extension/tsconfig.unit.json). That program reaches @codemirror/* through
+// other suites now; the copy stays local.
 type AssertEqual<X, Y> =
   (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? true : false;
 

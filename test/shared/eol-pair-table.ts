@@ -12,9 +12,9 @@
 // added here is a row both sides must satisfy — a row cannot be added to one
 // side only.
 //
-// Type-checked by test/webview/tsconfig.json, which names this file explicitly:
-// both consumers are themselves transpile-only, so nothing else gives it a
-// program and the `readonly`/`EolPair` contract below would be decorative.
+// Type-checked by test/webview/tsconfig.json, which names this file explicitly,
+// and by test/extension/tsconfig.unit.json, which holds both consumers; without
+// a program the `readonly`/`EolPair` contract below would be decorative.
 //
 // NOT a test file: vitest collects `test/**/*.test.ts`, and importing a test file
 // would re-register its suites inside the importing file.

@@ -157,9 +157,10 @@ describe("table model type pins", () => {
     // it returned. `readonly` throughout is what makes that hold, and these
     // assertions are what keep it from being dropped silently.
     //
-    // Lives here for the reason the status-bar pin spells out: no tsconfig
-    // type-checks test/markdown, so the same assertion next to the model's own
-    // unit test would be erased by vitest's transpile-only path and never fail.
+    // Lives here because no tsconfig type-checked test/markdown when it was
+    // written, so the same assertion next to the model's own unit test was
+    // erased by vitest's transpile-only path and could never fail. That
+    // directory is in the unit program now; the pin has not moved.
     //
     // `Readonly<T>` is homomorphic, so `AssertEqual<T, Readonly<T>>` holds only
     // when EVERY field of T is already readonly — including fields added later,
@@ -193,10 +194,11 @@ describe("table model type pins", () => {
 describe("status-bar type pins", () => {
   it("EndOfLineValue stays the two-valued union and nothing wider", () => {
     // Lives here (not in src/extension/status-bar.ts) because this file is
-    // the repo's dedicated home for tsc-enforced type-level pins: unlike a
-    // test-file `@ts-expect-error`, which would be vacuous under the unit
-    // tsconfig's narrow include, this file's AssertEqual check is itself
-    // type-checked by `pnpm compile`. Revert-check: widen EndOfLineValue to
+    // the repo's dedicated home for tsc-enforced type-level pins: when this
+    // was written the unit tsconfig's include named no other test file under
+    // test/extension, so a `@ts-expect-error` in one of them was vacuous, while
+    // this file's AssertEqual check was — and is — type-checked by
+    // `pnpm compile`. Revert-check: widen EndOfLineValue to
     // `number` and this assertion evaluates to `false` — the `= true`
     // assignment fails to typecheck and `pnpm compile` goes red.
     const _check: AssertEqual<EndOfLineValue, 1 | 2> = true;
@@ -212,10 +214,11 @@ describe("host-session step type pins", () => {
     // site forget the wiring and keep the stranded-lock bug with every test
     // green" — and until this pin, nothing enforced it. Adding `?` plus a
     // `?? (() => [])` default compiles clean, and because
-    // `test/extension/session/` is in NO tsconfig (vitest is transpile-only
-    // there), a harness that omits the dep raises a runtime `TypeError` that
-    // `recoverStrandedWriteLock`'s own `try` funnels into `onSettleError` — the
-    // test still PASSES while measuring no recovery at all.
+    // `test/extension/session/` was in NO tsconfig when this pin was written
+    // (vitest is transpile-only), a harness that omitted the dep raised a
+    // runtime `TypeError` that `recoverStrandedWriteLock`'s own `try` funnelled
+    // into `onSettleError` — the test still PASSED while measuring no recovery
+    // at all. That directory is in the unit program now.
     //
     // Lives here for the reason the status-bar and table-model pins spell out:
     // this file is type-checked by `pnpm compile`, so the assertion is
