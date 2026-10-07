@@ -156,6 +156,16 @@ describe("encodeMarkdownDestination", () => {
     // kinds, parens, whitespace, non-ASCII. CR/LF are excluded — the one documented
     // gap (no single-line destination form can carry them).
     const atoms = [
+      // Whole references: three independent draws in the right order almost never
+      // happen, so the shapes the decoder consumes go in as single atoms.
+      "&amp;",
+      "&lt;",
+      "&copy;",
+      "&colon;",
+      "&#58;",
+      "&#58",
+      "&#x3A;",
+      "&#X3a",
       "&",
       "&",
       "#",
@@ -203,6 +213,7 @@ describe("encodeMarkdownDestination", () => {
       "\u00a0",
     ];
     const rand = mulberry32(0x5eed);
+    let withReference = 0;
     for (let i = 0; i < 20000; i++) {
       const len = Math.floor(rand() * 12);
       let href = "";
@@ -210,6 +221,10 @@ describe("encodeMarkdownDestination", () => {
         href += atoms[Math.floor(rand() * atoms.length)];
       }
       const enc = encodeMarkdownDestination(href);
+      // The encoder writes `&amp;` only when it escapes a reference.
+      if (enc.includes("&amp;")) {
+        withReference++;
+      }
       const decoded = decodeMarkdownDestination(enc);
       const parsed = parsedDestination(enc);
       if (decoded !== href || parsed !== href) {
@@ -222,5 +237,9 @@ describe("encodeMarkdownDestination", () => {
         });
       }
     }
+    // Pin the distribution, not just the round-trip: without the whole-reference
+    // atoms this seed escapes a reference in 48 samples, with them in 10595. An
+    // atom or seed change that starves the reference axis must go red here.
+    expect(withReference).toBeGreaterThan(5000);
   });
 });

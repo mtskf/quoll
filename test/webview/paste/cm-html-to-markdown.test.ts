@@ -206,9 +206,10 @@ describe("htmlToMarkdown — inline constructs", () => {
   });
   it("writes angle brackets in a link destination as character references", () => {
     // isAllowedUrl accepts the raw href (scheme-only check, no normalisation), so a
-    // `<`/`>`-bearing allowed URL reaches the destination encoder; a raw bracket
-    // would terminate the destination early, and percent-encoding would change the
-    // href the link opens.
+    // `<`/`>`-bearing allowed URL reaches the destination encoder. The angle form
+    // cannot hold a raw bracket (`>` ends it, `<` voids it), so the encoder writes
+    // both as references in either form — this href stays bare, where a raw bracket
+    // would have parsed. Percent-encoding would change the href the link opens.
     const md = convert('<p><a href="https://x.com/a<b>c">t</a></p>');
     expect(md).toBe("[t](https://x.com/a&lt;b&gt;c)");
     expect(validateMarkdownForWrite(`${md}\n`).ok).toBe(true);
