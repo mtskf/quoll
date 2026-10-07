@@ -3,8 +3,9 @@
 # regardless of the grouping below.
 #
 # Goal: keep dependencies visible without daily churn. Routine minor+patch
-# bumps arrive as ONE grouped PR per ecosystem per week; majors still open
-# individually because they usually need a manual look.
+# bumps arrive grouped by how they have to be verified (see the npm groups
+# below); majors still open individually because they usually need a manual
+# look.
 version: 2
 updates:
   # pnpm dependency graph (Dependabot reads pnpm-lock.yaml under the `npm`
@@ -13,14 +14,50 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
+    # A dependency joins the FIRST group it matches, so the catch-all stays
+    # last. One catch-all group used to carry everything: a single red lint
+    # step then skipped every later CI step for the runtime bumps riding the
+    # same PR, and vitest moved without its exact-peer siblings (#432, #404).
     groups:
+      # The only runtime dependencies — they ship to users, and the editor
+      # leans on CodeMirror/Lezer internals — so they get their own PR and
+      # their own editor smoke, never a ride on a tooling bump.
+      codemirror-lezer:
+        patterns:
+          - "@codemirror/*"
+          - "@lezer/*"
+        update-types:
+          - minor
+          - patch
+      # @vitest/* peer on vitest by EXACT version; a lone vitest bump resolves
+      # a mismatched pair. No update-types: a major has to move together too.
+      vitest:
+        patterns:
+          - "vitest"
+          - "@vitest/*"
       npm-minor-and-patch:
         patterns:
           - "*"
+        # Each of these changes what gets verified, so it opens alone:
+        # esbuild 0.x minors may break and change the shipped bytes, a Biome
+        # bump needs its own reformat commit, and ovsx runs only on the
+        # publish path, which PR CI never exercises.
+        exclude-patterns:
+          - "esbuild"
+          - "@biomejs/biome"
+          - "ovsx"
         update-types:
           - minor
           - patch
     ignore:
+      # mocha 12 is ESM-only and requires Node ^20.19 || >=22.12. The E2E suite
+      # runs inside the extension host of the pinned VS Code (1.94 -> Node
+      # 20.16), which cannot load it, and no change to the runner fixes that
+      # (#427). Drop this entry when engines.vscode moves to a release whose
+      # Electron ships Node >= 20.19.
+      - dependency-name: "mocha"
+        update-types:
+          - "version-update:semver-major"
       # engines.vscode <-> @types/vscode <-> @types/node are exact-version pins
       # bumped together by hand on a matching VS Code Electron-Node release
       # (CLAUDE.md "Dependency pins"). Silence only their routine VERSION updates
