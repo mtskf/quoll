@@ -131,8 +131,9 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   // clustering tripwire (onResyncStorm), discarded un-acked local bytes from
   // EITHER holder, the pre-ack replay buffer or an Edit still awaiting its ack
   // (onLocalEditDiscarded), un-posted edits held under a readonly document
-  // (onReadonlyHold), and an Edit the host refused (onEditRefused). It lives OUTSIDE bannerHost so the reducer-driven
-  // renderBanners (replaceChildren) never clobbers it, and it is NOT reducer
+  // (onReadonlyHold), and an Edit the host refused (onEditRefused). It lives
+  // OUTSIDE bannerHost so the reducer-driven renderBanners (replaceChildren)
+  // never clobbers it, and it is NOT reducer
   // state — none of the signals is a document error.
   //
   // The CONTAINER is created here, at mount, and is never removed — only
