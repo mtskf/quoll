@@ -1,7 +1,7 @@
 // The model's `readonly` contract is pinned in
-// test/extension/types-equality.test.ts ("table model type pins"), not here:
-// no tsconfig type-checks test/markdown, so a type-level assertion in this
-// file would be erased by vitest's transpile-only path and never fail.
+// test/extension/types-equality.test.ts ("table model type pins"), not here.
+// It was put there when no tsconfig type-checked test/markdown; this file is in
+// test/extension/tsconfig.unit.json's program now, and the pin has not moved.
 import { describe, expect, it } from "vitest";
 import type { CellRaw, DelimiterRow, Row } from "../../../src/markdown/table/model.js";
 import { makeTable } from "../../../src/markdown/table/model.js";

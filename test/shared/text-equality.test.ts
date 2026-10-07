@@ -2,9 +2,7 @@ import { describe, expect, it } from "vitest";
 import { sameTextIgnoringEol } from "../../src/shared/text-equality.js";
 import { EOL_PAIRS } from "./eol-pair-table.js";
 
-// BEHAVIOUR ONLY. test/shared is in no tsconfig and vitest is transpile-only, so
-// a type-level assertion placed here would be permanently vacuous (.claude/CLAUDE.md
-// "Before finishing ANY change"). Nothing below is a type assertion.
+// BEHAVIOUR ONLY. Nothing below is a type assertion.
 describe("sameTextIgnoringEol", () => {
   for (const { label, a, b, expected } of EOL_PAIRS) {
     it(`${label}: ${expected ? "equal" : "different"}`, () => {

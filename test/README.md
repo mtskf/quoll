@@ -32,10 +32,15 @@ the cascade that composes those predicates, not the predicates themselves.
 
 Every module here MUST be in some tsconfig `include` (see the "permanently
 vacuous" hazard in `.claude/CLAUDE.md`), otherwise its type-level content is
-never checked. `test/webview/tsconfig.json` includes `../fixtures/**/*.ts`
-today; note that program is typed `["vscode-webview", "node"]`, so a future
-host-only fixture importing `vscode` types will not resolve under it and
-`test/fixtures/` will need its own tsconfig.
+never checked. Two programs include `../fixtures/**/*.ts` today:
+`test/webview/tsconfig.json` (typed `["vscode-webview", "node"]`) and
+`test/extension/tsconfig.unit.json` (typed `["node", "vscode"]`). `pnpm compile`
+runs both, so every fixture must type-check under BOTH compiler views. A
+`vscode` module import is fine in either (module resolution finds
+`@types/vscode` regardless of `types`), but a `vscode-webview` ambient global
+such as `acquireVsCodeApi` is TS2304 under the unit program, so such a fixture
+must declare it locally or live outside `test/fixtures/` (next to the webview
+suite that uses it).
 
 - [open-link-destinations.ts](fixtures/open-link-destinations.ts) — the
   `open-link` structural cascade, consumed by both

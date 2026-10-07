@@ -174,7 +174,7 @@ describe("createImageWriteWiring", () => {
     // Distinct payloads so each content-addresses to a new file (a real paste
     // batch), all far under the 512 MiB default.
     for (let i = 0; i < 5; i++) {
-      const bytes = Buffer.concat([PNG_BYTES, Buffer.from([i])]);
+      const bytes = Buffer.from([...PNG_BYTES, i]);
       wiring.handle(`req-${i}`, bytes.toString("base64"));
     }
     await flush();

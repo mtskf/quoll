@@ -7,10 +7,9 @@
   // resolution + DOM lib + vscode-webview types) so the tests see the exact
   // types the code they exercise is built with.
   //
-  // Scope is test/webview ONLY. The wider unit suite has long-standing
-  // type drift outside this directory (vscode-stub TextLine shape in
-  // test/extension/session/document-message.test.ts) that is a separate follow-up;
-  // a test/webview-rooted include never pulls it in.
+  // Scope is test/webview plus the two cross-suite inputs named in `include`
+  // (test/fixtures, test/shared/eol-pair-table.ts). The host-side unit suites
+  // are type-checked by test/extension/tsconfig.unit.json, not here.
   //
   // noEmit (inherited): this is a CI gate, not a build step — vitest still
   // runs through its own transpiler. rootDir is the repo root so the
@@ -33,14 +32,14 @@
   },
   "include": [
     "**/*.ts",
-    // test/fixtures/ is CROSS-SUITE and sits in no other tsconfig: it is reached
-    // today only because a suite in this directory imports it. Included
-    // explicitly so a fixture consumed by the host/markdown/shared suites alone
-    // still gets a program instead of being silently transpile-only.
+    // test/fixtures/ is CROSS-SUITE. Included explicitly so a fixture is in this
+    // program whether or not a suite in this directory imports it.
+    // test/extension/tsconfig.unit.json includes the directory too.
     "../fixtures/**/*.ts",
-    // Same reason: the EOL pair table is consumed only by suites that are
-    // themselves transpile-only (test/shared/ and test/extension/session/ are in
-    // no tsconfig), so nothing else gives it a program.
+    // The EOL pair table is consumed by test/shared/ and
+    // test/extension/session/. Both were in no tsconfig when this entry was
+    // added, so nothing else gave it a program; test/extension/tsconfig.unit.json
+    // holds all three now.
     "../shared/eol-pair-table.ts",
     "../../src/webview/**/*.ts",
     "../../src/markdown/**/*.ts",

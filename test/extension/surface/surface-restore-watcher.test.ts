@@ -18,8 +18,8 @@ import {
 // resolves both paths to the same vscode-stub.ts module instance, so the
 // listener the watcher registers via its "vscode" import is the one
 // fireTabChange drives — but @types/vscode has no such exports, so importing
-// them from "vscode" would flag in the editor today and become a hard error the
-// day tsconfig.unit.json's narrow include is widened. TabInputCustom /
+// them from "vscode" is a TS2305 under tsconfig.unit.json, which type-checks
+// this file. TabInputCustom /
 // TabInputText stay on "vscode" (they DO exist in @types/vscode).
 import { fireTabChange, resetStubTabListeners } from "../vscode-stub.js";
 
