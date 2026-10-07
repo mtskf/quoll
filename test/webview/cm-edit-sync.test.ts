@@ -1,7 +1,83 @@
-import { describe, expect, it, type MockInstance, vi } from "vitest";
-import { createEditSync } from "../../src/webview/cm/edit-sync.js";
+import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
+import {
+  createEditSync as createRealEditSync,
+  type EditSyncOptions,
+  type HostDocument,
+} from "../../src/webview/cm/edit-sync.js";
 
 type Posted = { content: string; baseDocVersion: number };
+
+// The module under test behind the positional call shape these tests script
+// Documents in. Unless a test passes a `settledEditId`, the harness models a
+// host that has received every Edit posted so far. `real` is the unwrapped
+// module, for the tests that need to hand it a whole Document.
+function createEditSync(opts: EditSyncOptions) {
+  let lastId = 0;
+  let version = 0;
+  let generation: number | null = null;
+  const real = createRealEditSync({
+    ...opts,
+    post: (content, baseDocVersion, editId) => {
+      const ok = opts.post(content, baseDocVersion, editId);
+      if (ok) {
+        lastId = editId;
+      }
+      return ok;
+    },
+  });
+  return {
+    ...real,
+    real,
+    onHostSnapshot: (
+      v: number,
+      canWrite: boolean,
+      epoch: number,
+      gen: number,
+      content: string,
+      settledEditId = lastId
+    ) => {
+      // Track the version the way production adopts it: any version on a new
+      // generation, never a lower one within the same generation.
+      if (gen !== generation || v >= version) {
+        version = v;
+        generation = gen;
+      }
+      return real.onHostSnapshot({
+        docVersion: v,
+        canWrite,
+        externalEpoch: epoch,
+        epochGeneration: gen,
+        settledEditId,
+        content,
+      });
+    },
+    // Identity-only question: asked at the current version, so never "foreign".
+    viewHoldsUnackedEdit: (liveDoc: string, epoch: number, gen: number) =>
+      real.viewHoldsUnackedEdit(liveDoc, {
+        docVersion: version,
+        canWrite: true,
+        externalEpoch: epoch,
+        epochGeneration: gen,
+        settledEditId: lastId,
+        content: liveDoc,
+      }),
+  };
+}
+
+const hostDoc = (
+  docVersion: number,
+  content: string,
+  settledEditId: number,
+  externalEpoch = 0,
+  epochGeneration = 1
+): HostDocument => ({
+  docVersion,
+  canWrite: true,
+  externalEpoch,
+  epochGeneration,
+  settledEditId,
+  content,
+});
 
 function setup(opts?: {
   blockPost?: () => boolean;
@@ -10,10 +86,12 @@ function setup(opts?: {
   onResyncStorm?: () => void;
   onLocalEditDiscarded?: () => void;
   onReadonlyHold?: () => boolean;
+  onEditRefused?: () => void;
   showHeld?: (content: string) => void;
 }) {
   let doc = "hello";
   const posted: Posted[] = [];
+  const postedIds: number[] = [];
   let postOk = !opts?.failPost;
   const sync = createEditSync({
     getDoc: () => doc,
@@ -21,11 +99,12 @@ function setup(opts?: {
     // save-policy gate. Default: unblocked. blockPost() returns true
     // when posting should be BLOCKED, so canPost inverts it.
     canPost: () => (opts?.blockPost ? !opts.blockPost() : true),
-    post: (content, baseDocVersion) => {
+    post: (content, baseDocVersion, editId) => {
       if (!postOk) {
         return false; // postMessage threw
       }
       posted.push({ content, baseDocVersion });
+      postedIds.push(editId);
       return true;
     },
     // Synchronous flush so tests need no fake timers.
@@ -34,11 +113,13 @@ function setup(opts?: {
     onResyncStorm: opts?.onResyncStorm,
     onLocalEditDiscarded: opts?.onLocalEditDiscarded,
     onReadonlyHold: opts?.onReadonlyHold,
+    onEditRefused: opts?.onEditRefused,
     showHeld: opts?.showHeld,
   });
   return {
     sync,
     posted,
+    postedIds,
     type: (next: string) => {
       doc = next;
       sync.onLocalChange();
@@ -62,7 +143,8 @@ describe("cm edit-sync", () => {
   // path makes, so a missed-trigger bug cannot hide behind a hand-rolled
   // drain.
   const ack = (s: ReturnType<typeof setup>, v: number, canWrite = true) => {
-    s.sync.onHostSnapshot(v, canWrite, 0, 1, s.getDoc());
+    // An ack carries what was acked: the last posted content.
+    s.sync.onHostSnapshot(v, canWrite, 0, 1, s.posted.at(-1)?.content ?? s.getDoc());
     s.sync.onReducerCommit(false); // reducer's document arm cleared editInFlight
   };
   // A consent flip / serialize-error clear: reducer state changed, NOT
@@ -200,7 +282,9 @@ describe("cm edit-sync", () => {
     s.type("x"); // post returns false → buffer retained, not in flight
     expect(s.posted).toEqual([]);
     s.setPostOk(true);
-    ack(s, 2); // next commit drains and retries the retained buffer
+    // The host never received "x", so its next Document still shows "hello".
+    s.sync.onHostSnapshot(2, true, 0, 1, "hello");
+    s.sync.onReducerCommit(false); // next commit drains and retries the retained buffer
     expect(s.posted).toEqual([{ content: "x", baseDocVersion: 2 }]);
   });
 
@@ -277,7 +361,7 @@ describe("cm edit-sync", () => {
     // it fires. Production ordering (Task 4.3): applyDocument calls
     // cancelPendingFlush() WHILE the CM doc still holds the user's text,
     // THEN reseeds to the host bytes. So cancelPendingFlush's getDoc() sees
-    // "typed" (preserved), never "host-snapshot" (no echo).
+    // "typed" (preserved), never the host's "hello" (no echo).
     let doc = "hello";
     const posted: Posted[] = [];
     const sync = createEditSync({
@@ -292,12 +376,14 @@ describe("cm edit-sync", () => {
     doc = "typed";
     sync.onLocalChange(); // schedules a real-timer flush (not yet buffered)
     // Reseed path, in production order: capture-then-cancel happens while
-    // doc is still "typed"; the host reseed to "host-snapshot" follows.
+    // doc is still "typed"; the host reseed to its own "hello" follows (a
+    // Document on our lineage that advances the version without an Edit of ours
+    // carries the text the host already had).
     sync.cancelPendingFlush(); // buffers "typed" + clears timer
-    doc = "host-snapshot"; // the CM reseed lands AFTER the capture
+    doc = "hello"; // the CM reseed lands AFTER the capture
     expect(posted).toEqual([]); // nothing posted yet (no echo of host bytes)
     // The reducer commit drains the captured keystroke — "typed" survived the
-    // reseed, and "host-snapshot" was never echoed.
+    // reseed, and "hello" was never echoed.
     sync.onHostSnapshot(2, true, 0, 1, doc);
     sync.onReducerCommit(false);
     expect(posted).toEqual([{ content: "typed", baseDocVersion: 2 }]);
@@ -330,7 +416,7 @@ describe("cm edit-sync", () => {
     doc = "seed!"; // user typed one char inside the window
     sync.onLocalChange(); // debounced, NOT yet buffered, editInFlight false
     sync.cancelPendingFlush(); // Document interrupts mid-window → captures "seed!"
-    doc = "host snapshot"; // host reseed lands after capture
+    doc = "seed"; // host reseed (its own text, version moved) lands after capture
     sync.onHostSnapshot(2, true, 0, 1, doc); // docVersion 1→2, editInFlight still false
     sync.onReducerCommit(false); // ONLY trigger is the docVersion change
     expect(posted).toEqual([{ content: "seed!", baseDocVersion: 2 }]);
@@ -385,9 +471,9 @@ describe("cm edit-sync", () => {
       // First Document: snapshot updates to v2 (does NOT clear in-flight
       // — the host re-sent because the write-lock dropped our previous
       // Edit; only the reducer's ack via onReducerCommit clears the flag).
-      sync.onHostSnapshot(2, true, 0, 1, doc);
+      sync.onHostSnapshot(2, true, 0, 1, "a");
       // Second Document arrives before any commit:
-      sync.onHostSnapshot(3, true, 0, 1, doc);
+      sync.onHostSnapshot(3, true, 0, 1, "a");
       // Now the reducer commits the ack (editInFlight=false). The
       // buffered "ab" must replay at v3, NOT v1 or v2.
       sync.onReducerCommit(false);
@@ -402,7 +488,8 @@ describe("cm edit-sync", () => {
 
 describe("cm edit-sync — viewHoldsUnackedEdit", () => {
   const ack = (s: ReturnType<typeof setup>, v: number, canWrite = true) => {
-    s.sync.onHostSnapshot(v, canWrite, 0, 1, s.getDoc());
+    // An ack carries what was acked: the last posted content.
+    s.sync.onHostSnapshot(v, canWrite, 0, 1, s.posted.at(-1)?.content ?? s.getDoc());
     s.sync.onReducerCommit(false);
   };
 
@@ -515,7 +602,7 @@ describe("cm edit-sync — viewHoldsUnackedEdit", () => {
     same.type("a");
     same.type("ab");
     expect(same.sync.viewHoldsUnackedEdit(same.getDoc(), 0, 11)).toBe(true);
-    same.sync.onHostSnapshot(2, true, 0, 11, same.getDoc());
+    same.sync.onHostSnapshot(2, true, 0, 11, "a"); // the ack of the in-flight Edit
     same.sync.onReducerCommit(false);
     expect(same.posted.map((p) => p.content)).toEqual(["a", "ab"]); // replayed
   });
@@ -546,7 +633,8 @@ describe("cm edit-sync — viewHoldsUnackedEdit", () => {
 
 describe("cm edit-sync — discardBuffer", () => {
   const ack = (s: ReturnType<typeof setup>, v: number, canWrite = true) => {
-    s.sync.onHostSnapshot(v, canWrite, 0, 1, s.getDoc());
+    // An ack carries what was acked: the last posted content.
+    s.sync.onHostSnapshot(v, canWrite, 0, 1, s.posted.at(-1)?.content ?? s.getDoc());
     s.sync.onReducerCommit(false);
   };
 
@@ -594,7 +682,7 @@ describe("cm edit-sync — discardBuffer", () => {
   });
 });
 
-describe("cm edit-sync — un-acked bytes keep a carrier (demotion + post dedupe)", () => {
+describe("cm edit-sync — un-acked bytes keep a carrier (demotion + refusal hold)", () => {
   // Every case starts the same way: seeded "s" at v1 on (epoch 0, generation
   // 1), then the user types "x" and "sx" is posted at base 1.
   const postedSx = (opts?: Parameters<typeof setup>[0]) => {
@@ -607,13 +695,13 @@ describe("cm edit-sync — un-acked bytes keep a carrier (demotion + post dedupe
   };
 
   it("holds an in-flight Edit the Document did not carry, and re-posts it only once the version moves", () => {
-    // A refusal and a stale repost look the same: our lineage, our base, not
-    // our bytes. The commit that follows clears the in-flight holder, so the
-    // bytes are DEMOTED into the buffer first; the dedupe then keeps the drain
-    // from sending the identical (content, base) pair straight back.
+    // A refusal: our lineage, our base, judged, not our bytes. The commit that
+    // follows clears the in-flight holder, so the bytes are DEMOTED into the
+    // buffer first; `refusedAt` then keeps the drain from sending them straight
+    // back at the version they were refused at.
     // [revert: remove the demotion in onHostSnapshot → the FINAL post never
     // appears, the bytes have no carrier]
-    // [revert: remove the `lastPost` dedupe in replayIfNeeded → a second post
+    // [revert: remove the `refusedAt` return in replayIfNeeded → a second post
     // ("sx", 1) appears at the UNCHANGED base]
     const s = postedSx();
     s.sync.onHostSnapshot(1, true, 0, 1, "s");
@@ -628,8 +716,8 @@ describe("cm edit-sync — un-acked bytes keep a carrier (demotion + post dedupe
   });
 
   it("does NOT demote an in-flight Edit the Document echoes", () => {
-    // The ack ADVANCES the version on purpose: at an unchanged base the dedupe
-    // would swallow a wrongly demoted buffer and hide the revert.
+    // The ack ADVANCES the version on purpose: at an unchanged base a wrongly
+    // demoted buffer would be marked refused and held back, hiding the revert.
     // [revert: drop the demotion's content conjunct
     // (`!sameTextIgnoringEol(inFlight.content, content)`) → a second post
     // ("sx", 2) appears]
@@ -697,11 +785,12 @@ describe("cm edit-sync — un-acked bytes keep a carrier (demotion + post dedupe
   });
 
   it("a REFUSED replay is not re-posted at the unchanged base", () => {
-    // The replay is the third posting site, and its answer is remembered like
-    // the other two: each refusal demotes "sxy" back into the buffer, and the
-    // drain must not send the identical (content, base) pair straight back.
-    // [revert: remove `notePost(content)` in replayIfNeeded → ("sxy", 2) is
-    // re-posted once per refusal]
+    // The replay is the third posting site, and a refusal of it is held like a
+    // refusal of the other two: "sxy" is demoted back into the buffer marked
+    // with the version it was refused at, and the mark outlives the Documents
+    // that repeat the same answer.
+    // [revert: build the demoted buffer without `refusedAt` → ("sxy", 2) is
+    // re-posted after the first refusal]
     const s = postedSx();
     s.type("sxy"); // buffered behind the in-flight "sx"
     s.sync.onHostSnapshot(2, true, 0, 1, "sx"); // ack of "sx"
@@ -720,13 +809,11 @@ describe("cm edit-sync — un-acked bytes keep a carrier (demotion + post dedupe
     expect(s.posted.at(-1)).toEqual({ content: "sxy", baseDocVersion: 3 });
   });
 
-  describe("only a post that SUCCEEDED is remembered", () => {
+  describe("a post that FAILED is retried", () => {
     // `post` RETURNING false is the contract (editor.ts's postEditMessage turns
-    // a postMessage throw into it). A post that never left must not make its
-    // own retry look like a repeat.
+    // a postMessage throw into it). A post that never left has no host verdict,
+    // so nothing holds its retry back.
     it("a failed keystroke post is retried by the next drain at the same base", () => {
-      // [revert: in trySend, call notePost(content) before the `if (ok)` check
-      // → the retry is deduped away]
       const s = setup();
       s.setDoc("s");
       s.sync.onHostSnapshot(1, true, 0, 1, "s");
@@ -739,8 +826,6 @@ describe("cm edit-sync — un-acked bytes keep a carrier (demotion + post dedupe
     });
 
     it("a failed replay is retried by the next drain at the same base", () => {
-      // [revert: in replayIfNeeded, call notePost(content) before the `if (ok)`
-      // check → the retry is deduped away]
       const s = postedSx();
       s.type("sxy"); // buffered behind the in-flight "sx"
       s.setPostOk(false);
@@ -754,8 +839,6 @@ describe("cm edit-sync — un-acked bytes keep a carrier (demotion + post dedupe
     });
 
     it("a failed teardown force-post is retried by the next drain at the same base", () => {
-      // [revert: in flush, call notePost(content) before the `if (ok)` check →
-      // the retry is deduped away]
       const s = setup();
       s.setDoc("s");
       s.sync.onHostSnapshot(1, true, 0, 1, "s");
@@ -769,25 +852,7 @@ describe("cm edit-sync — un-acked bytes keep a carrier (demotion + post dedupe
     });
   });
 
-  describe("the remembered post is forgotten when its verdict stops applying", () => {
-    it("write re-granted: held bytes go out again at the SAME base", () => {
-      // A post made before a readonly episode may have been turned away by it.
-      // [revert: remove the `nextCanWrite && !canWrite` reset of lastPost in
-      // onHostSnapshot → the held bytes are never re-posted]
-      const s = postedSx();
-      s.sync.onHostSnapshot(1, true, 0, 1, "s");
-      s.sync.onReducerCommit(false); // held by the dedupe
-      s.sync.onHostSnapshot(1, false, 0, 1, "s");
-      s.sync.onReducerCommit(false); // readonly: still held
-      expect(s.posted.length).toBe(1);
-      s.sync.onHostSnapshot(1, true, 0, 1, "s");
-      s.sync.onReducerCommit(false);
-      expect(s.posted).toEqual([
-        { content: "sx", baseDocVersion: 1 },
-        { content: "sx", baseDocVersion: 1 },
-      ]);
-    });
-
+  describe("a refusal does not outlive the lineage it was given on", () => {
     it.each([
       { name: "a new generation", epoch: 0, generation: 2 },
       { name: "a foreign epoch advance", epoch: 1, generation: 1 },
@@ -797,10 +862,9 @@ describe("cm edit-sync — un-acked bytes keep a carrier (demotion + post dedupe
     }) => {
       // The new lineage restarts at the SAME version with the SAME text, and the
       // user types the same character again — captured while the gate is shut so
-      // that it reaches the wire through the drain (a keystroke post is never
-      // deduped and would not exercise the reset).
-      // [revert: remove the `supersedesIdentity({ from: recorded, to: incoming })`
-      // reset of lastPost in onHostSnapshot → the drain dedupes it away]
+      // that it reaches the wire through the drain. Nothing remembers how the
+      // old lineage answered those bytes: the only memory is the mark on a
+      // demoted buffer, and a new capture replaces the buffer whole.
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       const info = vi.spyOn(console, "info").mockImplementation(() => {});
       try {
@@ -823,6 +887,278 @@ describe("cm edit-sync — un-acked bytes keep a carrier (demotion + post dedupe
         info.mockRestore();
       }
     });
+  });
+});
+
+describe("cm edit-sync — Edit id", () => {
+  // setup()'s doc starts as "hello"; the seed is (v1, epoch 0, generation 1).
+  // Each `type` below posts with the next id, starting at 1.
+  const seed = (s: ReturnType<typeof setup>) => s.sync.onHostSnapshot(1, true, 0, 1, "hello");
+  // In-flight "a" (id 1, base 1), then the Document that REFUSES it: judged,
+  // at its own base, not showing it.
+  const refusedA = (opts?: Parameters<typeof setup>[0]) => {
+    const s = setup(opts);
+    seed(s);
+    s.type("a");
+    s.sync.onHostSnapshot(1, true, 0, 1, "hello", 1);
+    s.sync.onReducerCommit(false);
+    return s;
+  };
+  // Post "a" (id 1), force-post "a!" behind it (id 2, retained), then the
+  // Document behind a rejected draft — it shows the draft "a!" while the host
+  // holds "a" — and the `edit-rejected` handling that follows it.
+  const rejectedDraft = (opts?: Parameters<typeof setup>[0]) => {
+    const s = setup(opts);
+    seed(s);
+    s.type("a");
+    s.type("a!");
+    s.sync.flush();
+    s.sync.onHostSnapshot(2, true, 0, 1, "a!", 2);
+    s.sync.onReducerCommit(false);
+    s.sync.discardBuffer();
+    s.sync.onReducerCommit(false);
+    return s;
+  };
+
+  let warn: MockInstance;
+  let info: MockInstance;
+  beforeEach(() => {
+    warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    info = vi.spyOn(console, "info").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    warn.mockRestore();
+    info.mockRestore();
+  });
+
+  it("pending: a Document produced before the host judged the Edit leaves it in flight", () => {
+    const s = setup();
+    seed(s);
+    s.type("a");
+    expect(s.sync.onHostSnapshot(1, true, 0, 1, "hello", 0)).toBe(true);
+    s.sync.onReducerCommit(true);
+    expect(s.posted.length).toBe(1); // no repost: that would loop with the host
+    s.type("ab");
+    expect(s.posted.length).toBe(1); // still single-flight
+  });
+
+  it("ack: a Document that judged the Edit and shows it settles it", () => {
+    const s = setup();
+    seed(s);
+    s.type("a");
+    expect(s.sync.onHostSnapshot(2, true, 0, 1, "a", 1)).toBe(false);
+    s.sync.onReducerCommit(false);
+    expect(s.posted.length).toBe(1);
+  });
+
+  it("stale: judged, not shown, at a LATER version → reposted there, no refusal", () => {
+    const onEditRefused = vi.fn();
+    const s = setup({ onEditRefused });
+    seed(s);
+    s.type("a");
+    expect(s.sync.onHostSnapshot(2, true, 0, 1, "hello", 1)).toBe(false);
+    s.sync.onReducerCommit(false);
+    expect(s.posted.at(-1)).toEqual({ content: "a", baseDocVersion: 2 });
+    expect(s.posted.length).toBe(2);
+    expect(onEditRefused).not.toHaveBeenCalled();
+  });
+
+  it("refusal: judged, not shown, at the Edit's OWN base → announced once, held, not reposted by the drain", () => {
+    const onEditRefused = vi.fn();
+    const s = refusedA({ onEditRefused });
+    expect(onEditRefused).toHaveBeenCalledTimes(1);
+    expect(s.posted.length).toBe(1);
+    s.sync.onHostSnapshot(1, true, 0, 1, "hello", 1);
+    s.sync.onReducerCommit(false);
+    expect(onEditRefused).toHaveBeenCalledTimes(1);
+    expect(s.posted.length).toBe(1);
+    s.sync.flush(); // a teardown signal does not consult the mark
+    expect(s.posted.at(-1)).toEqual({ content: "a", baseDocVersion: 1 });
+    expect(s.posted.length).toBe(2);
+    s.sync.onHostSnapshot(2, true, 0, 1, "hello", 2); // the version moves
+    s.sync.onReducerCommit(false);
+    expect(s.posted.at(-1)).toEqual({ content: "a", baseDocVersion: 2 });
+    expect(s.posted.length).toBe(3);
+  });
+
+  it("refusal with a NEWER buffer: the newer bytes go out at once and nothing is announced", () => {
+    const onEditRefused = vi.fn();
+    const s = setup({ onEditRefused });
+    seed(s);
+    s.type("a");
+    s.type("ab");
+    s.sync.onHostSnapshot(1, true, 0, 1, "hello", 1);
+    expect(onEditRefused).not.toHaveBeenCalled();
+    s.sync.onReducerCommit(false);
+    expect(s.posted.at(-1)).toEqual({ content: "ab", baseDocVersion: 1 });
+    expect(s.posted.length).toBe(2);
+  });
+
+  it("a readonly answer is not a refusal: the re-grant replays at the SAME version", () => {
+    const onEditRefused = vi.fn();
+    const s = setup({ onEditRefused });
+    seed(s);
+    s.type("a");
+    s.sync.onHostSnapshot(1, false, 0, 1, "hello", 1);
+    s.sync.onReducerCommit(false);
+    expect(s.posted.length).toBe(1);
+    s.sync.onHostSnapshot(1, true, 0, 1, "hello", 1);
+    s.sync.onReducerCommit(false);
+    expect(s.posted.at(-1)).toEqual({ content: "a", baseDocVersion: 1 });
+    expect(s.posted.length).toBe(2);
+    expect(onEditRefused).not.toHaveBeenCalled();
+  });
+
+  it("foreign, in flight: unknown text at an advanced version supersedes the Edit and is announced", () => {
+    const onLocalEditDiscarded = vi.fn();
+    const s = setup({ onLocalEditDiscarded });
+    seed(s);
+    s.type("a");
+    expect(s.sync.real.viewHoldsUnackedEdit("a", hostDoc(2, "X", 1))).toBe(false);
+    s.sync.onHostSnapshot(2, true, 0, 1, "X", 1);
+    s.setDoc("X"); // the reseed
+    s.sync.onReducerCommit(false);
+    expect(onLocalEditDiscarded).toHaveBeenCalledTimes(1);
+    expect(s.posted.length).toBe(1);
+    expect(s.sync.recordedIdentity()).toEqual({ epoch: 1, generation: 1 });
+  });
+
+  it("foreign, buffer held after a refusal: the buffer is dropped and announced", () => {
+    const onLocalEditDiscarded = vi.fn();
+    const s = refusedA({ onLocalEditDiscarded });
+    s.sync.onHostSnapshot(2, true, 0, 1, "X", 1);
+    s.setDoc("X");
+    s.sync.onReducerCommit(false);
+    expect(onLocalEditDiscarded).toHaveBeenCalledTimes(1);
+    expect(s.posted.length).toBe(1);
+  });
+
+  it("an EARLIER Edit's bytes are ours: a force-post behind them is replayed, not discarded", () => {
+    const onLocalEditDiscarded = vi.fn();
+    const s = setup({ onLocalEditDiscarded });
+    seed(s);
+    s.type("a"); // id 1
+    s.type("ab"); // buffered
+    s.sync.flush(); // id 2, force-posted at base 1, retained
+    expect(s.sync.onHostSnapshot(2, true, 0, 1, "a", 2)).toBe(false);
+    s.sync.onReducerCommit(false);
+    expect(onLocalEditDiscarded).not.toHaveBeenCalled();
+    expect(s.posted.at(-1)).toEqual({ content: "ab", baseDocVersion: 2 });
+    expect(s.posted.length).toBe(3);
+  });
+
+  it("an EOL-only switch advances the version without being foreign", () => {
+    const s = setup();
+    s.setDoc("x\ny");
+    s.sync.onHostSnapshot(1, true, 0, 1, "x\ny");
+    s.type("x\ny!");
+    expect(s.sync.onHostSnapshot(2, true, 0, 1, "x\r\ny", 0)).toBe(true);
+    expect(s.sync.recordedIdentity().epoch).toBe(0);
+  });
+
+  it("a reloaded webview mints above the host's mark", () => {
+    const s = setup();
+    s.sync.onHostSnapshot(1, true, 0, 1, "hello", 9);
+    s.type("a");
+    expect(s.postedIds).toEqual([10]);
+  });
+
+  it("a refusal mark does not outlive a readonly episode", () => {
+    const s = refusedA();
+    s.sync.onHostSnapshot(1, false, 0, 1, "hello", 1);
+    s.sync.onReducerCommit(false);
+    expect(s.posted.length).toBe(1);
+    s.sync.onHostSnapshot(1, true, 0, 1, "hello", 1);
+    s.sync.onReducerCommit(false);
+    expect(s.posted).toEqual([
+      { content: "a", baseDocVersion: 1 },
+      { content: "a", baseDocVersion: 1 },
+    ]);
+  });
+
+  it("a readonly Document is never 'pending': the Edit is demoted and the re-grant brings it back", () => {
+    const showHeld = vi.fn();
+    const s = setup({ showHeld });
+    seed(s);
+    s.type("a");
+    expect(s.sync.onHostSnapshot(1, false, 0, 1, "hello", 0)).toBe(false);
+    s.setDoc("hello"); // stands in for the readonly Document rewinding the view
+    s.sync.onReducerCommit(false);
+    s.sync.onHostSnapshot(1, true, 0, 1, "hello", 0);
+    s.sync.onReducerCommit(false);
+    expect(showHeld).toHaveBeenCalledWith("a");
+    expect(s.posted.at(-1)).toEqual({ content: "a", baseDocVersion: 1 });
+    expect(s.posted.length).toBe(2);
+  });
+
+  it("a retained copy of the force-posted bytes is not 'something newer'", () => {
+    const onEditRefused = vi.fn();
+    const s = setup({ onEditRefused });
+    seed(s);
+    s.type("a"); // id 1
+    s.type("ab");
+    s.sync.flush(); // id 2, retains "ab"
+    s.sync.onHostSnapshot(1, true, 0, 1, "hello", 2);
+    expect(onEditRefused).toHaveBeenCalledTimes(1);
+    s.sync.onReducerCommit(false);
+    expect(s.posted.length).toBe(2);
+  });
+
+  it("a foreign write the host counted is not counted twice", () => {
+    const s = setup();
+    seed(s);
+    s.type("a");
+    s.sync.onHostSnapshot(2, true, 1, 1, "X", 1);
+    expect(s.sync.recordedIdentity()).toEqual({ epoch: 1, generation: 1 });
+  });
+
+  it("an old host session's bytes are not ours on a new one", () => {
+    const s = setup();
+    seed(s);
+    s.type("a");
+    s.sync.onHostSnapshot(1, true, 0, 2, "hello", 0); // identity transition
+    s.setDoc("hello");
+    s.sync.onReducerCommit(false);
+    s.type("hello!");
+    const id = s.postedIds.at(-1) as number;
+    expect(s.sync.real.viewHoldsUnackedEdit("hello!", hostDoc(2, "a", id, 0, 2))).toBe(false);
+  });
+
+  it("an Edit applied BEHIND a rejected draft is still ours one Document later", () => {
+    const onLocalEditDiscarded = vi.fn();
+    const s = rejectedDraft({ onLocalEditDiscarded });
+    s.type("ac");
+    const id = s.postedIds.at(-1) as number;
+    // The version moved (an EOL switch) and the Document shows "a" — the Edit
+    // the host applied before it rejected the draft.
+    s.sync.onHostSnapshot(3, true, 0, 1, "a", id);
+    s.sync.onReducerCommit(false);
+    expect(onLocalEditDiscarded).not.toHaveBeenCalled();
+    expect(s.sync.recordedIdentity().epoch).toBe(0);
+  });
+
+  it("bytes posted on a lineage that lost are not ours afterwards", () => {
+    const s = setup();
+    seed(s);
+    s.type("a");
+    s.sync.onHostSnapshot(2, true, 1, 1, "X", 1); // a foreign write the host counted
+    s.setDoc("X");
+    s.sync.onReducerCommit(false);
+    s.type("Xc");
+    const id = s.postedIds.at(-1) as number;
+    expect(s.sync.real.viewHoldsUnackedEdit("Xc", hostDoc(3, "a", id, 1, 1))).toBe(false);
+  });
+
+  it("the Document behind a rejected draft is not foreign; an Edit refused after it is announced", () => {
+    const onLocalEditDiscarded = vi.fn();
+    const onEditRefused = vi.fn();
+    const s = rejectedDraft({ onLocalEditDiscarded, onEditRefused });
+    s.type("ac");
+    const id = s.postedIds.at(-1) as number;
+    s.sync.onHostSnapshot(2, true, 0, 1, "a", id);
+    s.sync.onReducerCommit(false);
+    expect(onLocalEditDiscarded).not.toHaveBeenCalled();
+    expect(onEditRefused).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -1042,7 +1378,7 @@ describe("cm edit-sync — showHeld brings the view forward before a replay", ()
         type(h, "sa");
         vi.advanceTimersByTime(300); // posts "sa" at base 1
         h.sync.onHostSnapshot(1, true, 0, 1, "s"); // not carried: "sa" demoted
-        h.sync.onReducerCommit(false); // held by the dedupe
+        h.sync.onReducerCommit(false); // refused at base 1: held
         expect(h.posted).toEqual([{ content: "sa", baseDocVersion: 1 }]);
         h.failNextPost = true;
         type(h, "sab");
@@ -1170,8 +1506,7 @@ describe("cm edit-sync — flush (teardown)", () => {
       ]);
       // EXACTLY ONE replay, never a loop: replayIfNeeded nulls the buffer on its
       // own post, so nothing is left to post again — neither on a bare second
-      // commit (which the post dedupe would also stop) nor when the replay's own
-      // ack advances the version (which only the self-null stops).
+      // commit nor when the replay's own ack advances the version.
       // [revert: replayIfNeeded's ok arm `buffered = null` → `buffered =
       // stampHeld(content)` → a fourth post ("ab", 3) appears at the ack]
       sync.onReducerCommit(false);
@@ -1185,11 +1520,12 @@ describe("cm edit-sync — flush (teardown)", () => {
   });
 
   it("does NOT replay the retained buffer on a commit at the UNCHANGED base", () => {
-    // The complement of the test above (I3): the force-post already carried
-    // ("ab", base 1), so a drain at base 1 would only repeat it. The buffer
-    // waits for the version to move.
-    // [revert: remove the `lastPost` dedupe in replayIfNeeded → a third post
-    // ("ab", 1) appears on the bare commit]
+    // The complement of the test above (I3): the host judged the force-post
+    // ("ab", base 1) at base 1 and its Document does not show it — a refusal —
+    // so a drain at base 1 would only repeat it. The buffer waits for the
+    // version to move.
+    // [revert: remove the `refusedAt` return in replayIfNeeded → a third post
+    // ("ab", 1) appears on the commit]
     vi.useFakeTimers();
     try {
       let doc = "seed";
@@ -1209,6 +1545,7 @@ describe("cm edit-sync — flush (teardown)", () => {
       sync.onLocalChange();
       sync.flush();
       expect(posted.length).toBe(2);
+      sync.onHostSnapshot(1, true, 0, 1, "seed"); // both judged, neither applied
       sync.onReducerCommit(false); // a drain with no version advance
       expect(posted.length).toBe(2);
       // …and the buffer is still there: the version advance releases it.
@@ -1499,7 +1836,7 @@ describe("cm edit-sync — flushIfIdle", () => {
       sync.flushIfIdle();
       expect(posted.length).toBe(1); // no second post at the same version
       // Deliver the ack: the buffered content must replay (no data loss).
-      sync.onHostSnapshot(2, true, 0, 1, doc);
+      sync.onHostSnapshot(2, true, 0, 1, "a");
       sync.onReducerCommit(false); // ack clears in-flight + drains
       expect(posted.length).toBe(2);
       expect(posted[1]).toEqual({ content: "ab", baseDocVersion: 2 });
@@ -1579,9 +1916,10 @@ describe("cm edit-sync — epoch-bounded buffers (S3b)", () => {
     v: number,
     epoch: number,
     generation: number,
-    canWrite = true
+    canWrite = true,
+    content = s.getDoc()
   ) => {
-    s.sync.onHostSnapshot(v, canWrite, epoch, generation, s.getDoc());
+    s.sync.onHostSnapshot(v, canWrite, epoch, generation, content);
     s.sync.onReducerCommit(false);
   };
 
@@ -1612,7 +1950,7 @@ describe("cm edit-sync — epoch-bounded buffers (S3b)", () => {
     // No foreign bytes: the settlement epoch is UNCHANGED → the recovery replay
     // fires (this is the case byte-heuristics alone could not separate from
     // external-wins).
-    ackPair(s, 2, 5, 42);
+    ackPair(s, 2, 5, 42, true, "a");
     expect(s.posted.length).toBe(2);
     expect(s.posted[1]).toEqual({ content: "ab", baseDocVersion: 2 });
   });
@@ -1809,7 +2147,7 @@ describe("cm edit-sync — epoch-bounded buffers (S3b)", () => {
     s.sync.onHostSnapshot(1, true, 5, 42, s.getDoc());
     s.type("a");
     s.type("ab");
-    ackPair(s, 2, 5, 42); // same generation, SAME epoch → replay
+    ackPair(s, 2, 5, 42, true, "a"); // same generation, SAME epoch → replay
     expect(onLocalEditDiscarded).not.toHaveBeenCalled();
     expect(s.posted.length).toBe(2);
   });
@@ -1959,7 +2297,7 @@ describe("cm edit-sync — epoch-bounded buffers (S3b)", () => {
     const s = setup({ onLocalEditDiscarded });
     s.sync.onHostSnapshot(1, true, 0, 42, s.getDoc());
     s.type("a"); // posts "a" — in flight
-    s.setDoc("host-side-other"); // reposted content, SAME epoch and generation
+    s.setDoc("hello"); // the host's own text reposted, SAME epoch and generation
     ackPair(s, 2, 0, 42);
     expect(onLocalEditDiscarded).not.toHaveBeenCalled();
   });
@@ -1983,7 +2321,7 @@ describe("cm edit-sync — epoch-bounded buffers (S3b)", () => {
     s.sync.onHostSnapshot(1, true, 0, 42, s.getDoc());
     s.type("a");
     s.setDoc("ab"); // typed during the in-flight window
-    ackPair(s, 2, 0, 42); // same lineage — our ack
+    ackPair(s, 2, 0, 42, true, "a"); // same lineage — our ack
     expect(onLocalEditDiscarded).not.toHaveBeenCalled();
   });
 
@@ -2175,7 +2513,7 @@ describe("cm edit-sync — readonly hard drops are traced", () => {
       s.type("aa"); // posts "aa" at v1, editInFlight = true
       s.type("aaa"); // single-flight: stashed into buffered (len 3), not posted
       expect(s.posted.length).toBe(1);
-      s.sync.onHostSnapshot(2, false, 0, 1, s.getDoc()); // readonly ack; canWrite flips false
+      s.sync.onHostSnapshot(2, false, 0, 1, "aa"); // readonly ack; canWrite flips false
       s.sync.onReducerCommit(false); // editInFlight clears; replayIfNeeded holds
       // the buffer under !canWrite WITHOUT nulling it (buffered is still "aaa")
       s.type("aaaaa"); // trySend's readonly branch fires: doc is now "aaaaa" (len 5)
@@ -2259,7 +2597,7 @@ describe("cm edit-sync — a writable-era buffer survives readonly", () => {
     t.change("ab");
     vi.advanceTimersByTime(300); // buffers "ab"
     expect(t.posted).toEqual([{ content: "a", baseDocVersion: 1 }]);
-    t.sync.onHostSnapshot(2, false, 0, 1, t.getDoc());
+    t.sync.onHostSnapshot(2, false, 0, 1, "a");
     t.sync.onReducerCommit(false);
   };
 
@@ -2416,7 +2754,7 @@ describe("cm edit-sync — a writable-era buffer survives readonly", () => {
     s.sync.onHostSnapshot(1, true, 0, 1, s.getDoc());
     s.type("aa"); // posts — in flight
     s.type("aaa"); // buffered while writable
-    s.sync.onHostSnapshot(2, false, 0, 1, s.getDoc());
+    s.sync.onHostSnapshot(2, false, 0, 1, "aa");
     s.sync.onReducerCommit(false);
     s.type("aaaaa"); // programmatic change under readonly → dropped
     expect(s.posted.length).toBe(1);

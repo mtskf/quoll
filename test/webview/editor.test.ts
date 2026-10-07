@@ -64,7 +64,14 @@ let container: HTMLElement | null = null;
 // reset postMessage trail — a cross-test leak that made the full parallel
 // suite non-deterministically red. dispose() cancels the pending flush.
 // The identity pair for fixtures that stay on one host lineage throughout.
-const PAIR = { externalEpoch: 0, epochGeneration: 1 } as const;
+const PAIR = {
+  externalEpoch: 0,
+  epochGeneration: 1,
+  // A host that has received every Edit posted so far.
+  get settledEditId(): number {
+    return Math.max(0, ...editPosts().map((m) => (m as { editId: number }).editId));
+  },
+};
 const mounted: EditorHandle[] = [];
 
 function makeState(overrides: Partial<WebviewState> = {}): WebviewState {
@@ -185,6 +192,7 @@ describe("editor — applyDocument threads the identity pair (S3b)", () => {
       docVersion: 1,
       externalEpoch: 0,
       epochGeneration: 111,
+      settledEditId: PAIR.settledEditId,
     });
     expect(handle.isIdentityTransition(0, 222)).toBe(true); // new generation
     expect(handle.isIdentityTransition(9, 111)).toBe(false); // same generation
@@ -196,6 +204,7 @@ describe("editor — applyDocument threads the identity pair (S3b)", () => {
       docVersion: 2,
       externalEpoch: 5,
       epochGeneration: 111,
+      settledEditId: PAIR.settledEditId,
     });
     expect(handle.isIdentityTransition(5, 111)).toBe(false);
     expect(handle.isIdentityTransition(0, 333)).toBe(true);
@@ -360,6 +369,7 @@ describe("editor — ok-ack while ahead does not reseed backwards (d2)", () => {
       docVersion: 2,
       externalEpoch: PAIR.externalEpoch + 1,
       epochGeneration: PAIR.epochGeneration,
+      settledEditId: PAIR.settledEditId,
     });
     expect(view.state.sliceDoc()).toBe("EXTERNAL");
   });
@@ -408,6 +418,7 @@ describe("editor — an ack that crossed an EOL-mode switch still folds (d2b)", 
       docVersion: 1,
       externalEpoch: 0,
       epochGeneration: 11,
+      settledEditId: PAIR.settledEditId,
     });
     view.dispatch({ changes: { from: view.state.doc.length, insert: "c" } });
     vi.advanceTimersByTime(300); // posts "a\nbc" — in flight
@@ -421,6 +432,7 @@ describe("editor — an ack that crossed an EOL-mode switch still folds (d2b)", 
       docVersion: 2,
       externalEpoch: 0,
       epochGeneration: 11,
+      settledEditId: PAIR.settledEditId,
     });
     expect(view.state.sliceDoc()).toBe("a\nbcd"); // folded, no rewind
     commit(false);
@@ -453,6 +465,7 @@ describe("editor — ok-ack fold requires identity-lineage continuity (d3)", () 
       docVersion: 1,
       externalEpoch: epoch,
       epochGeneration: gen,
+      settledEditId: PAIR.settledEditId,
     });
     view.dispatch({ changes: { from: view.state.doc.length, insert: "2" } });
     vi.advanceTimersByTime(300); // posts "D12" — in flight
@@ -477,6 +490,7 @@ describe("editor — ok-ack fold requires identity-lineage continuity (d3)", () 
       docVersion: 2,
       externalEpoch: 1,
       epochGeneration: 11,
+      settledEditId: PAIR.settledEditId,
     });
     expect(view.state.sliceDoc()).toBe("D12"); // reseeded to the host's bytes
     // The drain drops the stale-lineage buffer, so nothing replays "D123".
@@ -498,6 +512,7 @@ describe("editor — ok-ack fold requires identity-lineage continuity (d3)", () 
       docVersion: 2,
       externalEpoch: 1,
       epochGeneration: 11,
+      settledEditId: PAIR.settledEditId,
     });
     commit(false); // buffer dropped — no replay
     view.dispatch({ changes: { from: view.state.doc.length, insert: "4" } });
@@ -520,6 +535,7 @@ describe("editor — ok-ack fold requires identity-lineage continuity (d3)", () 
       docVersion: 1,
       externalEpoch: 0,
       epochGeneration: 22,
+      settledEditId: PAIR.settledEditId,
     });
     expect(view.state.sliceDoc()).toBe("D12");
     // ...and the stale-lineage buffer is dropped with it, so nothing replays
@@ -543,6 +559,7 @@ describe("editor — ok-ack fold requires identity-lineage continuity (d3)", () 
       docVersion: 2,
       externalEpoch: 0,
       epochGeneration: 11,
+      settledEditId: PAIR.settledEditId,
     });
     expect(view.state.sliceDoc()).toBe("D123"); // no visible rewind
     commit(false);
@@ -565,6 +582,7 @@ describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
       docVersion: 1,
       externalEpoch: epoch,
       epochGeneration: gen,
+      settledEditId: PAIR.settledEditId,
     });
     view.dispatch({ changes: { from: view.state.doc.length, insert: "2" } });
     vi.advanceTimersByTime(300); // posts "D12" — in flight, nothing buffered
@@ -583,6 +601,7 @@ describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
       docVersion: 2,
       externalEpoch: 1,
       epochGeneration: 11,
+      settledEditId: PAIR.settledEditId,
     });
     expect(view.state.sliceDoc()).toBe("FOREIGN"); // the reseed really happened
     commit(false);
@@ -614,6 +633,7 @@ describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
       docVersion: 2,
       externalEpoch: 1,
       epochGeneration: 11,
+      settledEditId: PAIR.settledEditId,
     }); // foreign write == the newest bytes
     commit(false);
     expect(onLocalEditDiscarded).not.toHaveBeenCalled();
@@ -631,6 +651,7 @@ describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
       docVersion: 2,
       externalEpoch: 1,
       epochGeneration: 11,
+      settledEditId: PAIR.settledEditId,
     }); // content IS ours
     commit(false);
     expect(onLocalEditDiscarded).not.toHaveBeenCalled();
@@ -652,6 +673,7 @@ describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
       docVersion: 2,
       externalEpoch: 1,
       epochGeneration: 11,
+      settledEditId: PAIR.settledEditId,
     });
     expect(view.state.sliceDoc()).toBe("FOREIGN");
     commit(false);
@@ -670,6 +692,7 @@ describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
       docVersion: 1,
       externalEpoch: 0,
       epochGeneration: 22,
+      settledEditId: PAIR.settledEditId,
     }); // identity transition
     commit(false);
     expect(onLocalEditDiscarded).toHaveBeenCalledTimes(1);
@@ -688,12 +711,13 @@ describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
     const { handle, view, commit } = mount({ onLocalEditDiscarded });
     seedAndPost(handle, view, 0, 11);
     handle.applyDocument({
-      content: "HOST-OTHER",
+      content: "D1", // the host's own text: on our lineage it has nothing else to show
       eol: "\n",
       canWrite: true,
       docVersion: 2,
       externalEpoch: 0,
       epochGeneration: 11,
+      settledEditId: PAIR.settledEditId,
     }); // same pair, different bytes
     expect(view.state.sliceDoc()).toBe("D12"); // no rewind: the local bytes stay
     commit(false);
@@ -720,6 +744,7 @@ describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
       docVersion: 1,
       externalEpoch: 0,
       epochGeneration: 11,
+      settledEditId: PAIR.settledEditId,
     }); // same pair, write revoked
     // The reseed really happened, so the silence cannot be the content conjunct
     // standing in for the lineage one.
@@ -747,6 +772,7 @@ describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
       docVersion: 2,
       externalEpoch: 0,
       epochGeneration: 11,
+      settledEditId: PAIR.settledEditId,
     }); // our own ack
     commit(false);
     expect(onLocalEditDiscarded).not.toHaveBeenCalled();
@@ -774,6 +800,7 @@ describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
       docVersion: 1,
       externalEpoch: 0,
       epochGeneration: 11,
+      settledEditId: PAIR.settledEditId,
     });
     view.dispatch({ changes: { from: view.state.doc.length, insert: "x" } });
     vi.advanceTimersByTime(300); // posts "sx" — in flight
@@ -786,6 +813,7 @@ describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
       docVersion: 2,
       externalEpoch: 0,
       epochGeneration: 11,
+      settledEditId: PAIR.settledEditId,
     }); // write revoked: reseed, buffer held
     commit(false);
     expect(view.state.sliceDoc()).toBe("s");
@@ -796,6 +824,7 @@ describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
       docVersion: 2,
       externalEpoch: 0,
       epochGeneration: 11,
+      settledEditId: PAIR.settledEditId,
     }); // re-granted
     expect(view.state.sliceDoc()).toBe("s"); // not yet: the drain does it
     commit(false); // the drain shows "sxy", then posts it
@@ -813,6 +842,7 @@ describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
       docVersion: 3,
       externalEpoch: 0,
       epochGeneration: 11,
+      settledEditId: PAIR.settledEditId,
     }); // the replay's ack
     commit(false);
     expect(editPosts()).toHaveLength(2);
@@ -1339,6 +1369,7 @@ describe("editor — caret preserved across accept-and-reseed (q)", () => {
       docVersion: 2,
       externalEpoch: PAIR.externalEpoch + 1,
       epochGeneration: PAIR.epochGeneration,
+      settledEditId: PAIR.settledEditId,
     });
     expect(view.state.sliceDoc()).toBe("hello world");
     // The user's caret was at position 3 — well within the new doc
@@ -1367,6 +1398,7 @@ describe("editor — caret preserved across accept-and-reseed (q)", () => {
       docVersion: 2,
       externalEpoch: PAIR.externalEpoch + 1,
       epochGeneration: PAIR.epochGeneration,
+      settledEditId: PAIR.settledEditId,
     });
     expect(view.state.sliceDoc()).toBe("hi");
     // Clamp to new doc length (2). NOT zero, NOT the original 4.

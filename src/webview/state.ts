@@ -38,7 +38,8 @@ export type WebviewState = {
   readonly canWrite: boolean;
   /** Single-flight invariant: at most one Edit pending at any time. Set
    *  true by a successful post-edit dispatch, cleared by the next non-stale
-   *  Document (which is the host's authoritative acknowledgement). */
+   *  Document the host produced AFTER judging that Edit (see the `document`
+   *  action's `editPending`). */
   readonly editInFlight: boolean;
   /** Most recent send-side failure — dispatched when postMessage throws
    *  (closed MessagePort, structuredClone error, host throttle) during
@@ -65,6 +66,11 @@ export type Action =
        *  re-drop the adoption and strand the webview permanently deaf to the
        *  live host. Absent/false on ordinary same-generation Documents. */
       readonly adopt?: boolean;
+      /** The Document was produced before the host judged the in-flight Edit
+       *  (`settledEditId` below its id), so it is not that Edit's answer: keep
+       *  `editInFlight`. Computed by edit-sync (`onHostSnapshot`'s return).
+       *  Never raises the flag; absent/false clears it. */
+      readonly editPending?: boolean;
     }
   | { readonly type: "theme"; readonly themeKind: ThemeKind }
   | { readonly type: "post-edit" }
@@ -137,7 +143,7 @@ export function reducer(state: WebviewState, action: Action): WebviewState {
         docVersion: action.docVersion,
         theme: action.themeKind,
         canWrite: action.canWrite,
-        editInFlight: false,
+        editInFlight: state.editInFlight && action.editPending === true,
         // A fresh non-stale Document clears a prior host reject so the user
         // can resume editing (existing behavior; kept after the warning-
         // field pruning).

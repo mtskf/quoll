@@ -115,6 +115,7 @@ describe("orchestrator integration — providers wired", () => {
         docVersion: 1,
         externalEpoch: 0,
         epochGeneration: 1,
+        settledEditId: 0,
       });
       const mountEl = parent.querySelector(".quoll-editor") as HTMLElement | null;
       if (!mountEl) {

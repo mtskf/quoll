@@ -282,8 +282,9 @@ export function isDocumentEol(value: unknown): value is DocumentEol {
  *  webview session (a reloaded webview restarts at 1) while the host's mark
  *  never goes down within its session, so after a reload the mark can exceed
  *  ids the new webview has not sent yet. A consumer must mint above the last
- *  `settledEditId` it has seen before it compares. The webview does neither
- *  yet: it does not read this field, and it does not resume minting above it. */
+ *  `settledEditId` it has seen before it compares — the webview does
+ *  (cm/edit-sync.ts `onHostSnapshot`), and reads the mark to tell a Document
+ *  produced before the host judged its in-flight Edit from that Edit's answer. */
 export type DocumentMessage = Envelope & {
   type: "document";
   content: string;

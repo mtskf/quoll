@@ -125,6 +125,7 @@ function harness(options: HarnessOptions = {}) {
     docVersion: number;
     externalEpoch: number;
     epochGeneration: number;
+    settledEditId: number;
     content: string;
   }[] = [];
   let errorAttempts = 0;
@@ -178,7 +179,13 @@ function harness(options: HarnessOptions = {}) {
       if (settleFailure === true) {
         throw new Error("boom-seed");
       }
-      documents.push({ docVersion, externalEpoch, epochGeneration, content: doc.text });
+      documents.push({
+        docVersion,
+        externalEpoch,
+        epochGeneration,
+        settledEditId,
+        content: doc.text,
+      });
       return {
         protocol: PROTOCOL_VERSION,
         type: "document",
@@ -697,7 +704,7 @@ describe("applyEdit settlement: a landed write is acked, not toasted", () => {
     // Pin that the seed snapshot carries the identity pair the replay is judged on.
     expect(seed.epochGeneration).toEqual(expect.any(Number));
     expect(seed.externalEpoch).toEqual(expect.any(Number));
-    sync.onHostSnapshot(seed.docVersion, true, seed.externalEpoch, seed.epochGeneration, "");
+    sync.onHostSnapshot({ ...seed, canWrite: true, settledEditId: 0, content: "" });
 
     webviewDoc = "a";
     sync.onLocalChange(); // posts edit #1 -> in flight
@@ -713,7 +720,7 @@ describe("applyEdit settlement: a landed write is acked, not toasted", () => {
     if (ack === undefined) {
       throw new Error("the settlement posted no Document");
     }
-    sync.onHostSnapshot(ack.docVersion, true, ack.externalEpoch, ack.epochGeneration, ack.content);
+    sync.onHostSnapshot({ ...ack, canWrite: true });
     sync.onReducerCommit(false);
 
     expect(posted).toEqual([
@@ -739,20 +746,21 @@ describe("applyEdit settlement: a landed write is acked, not toasted", () => {
     });
 
     const seed = h.identity();
-    sync.onHostSnapshot(seed.docVersion, true, seed.externalEpoch, seed.epochGeneration, "");
+    sync.onHostSnapshot({ ...seed, canWrite: true, settledEditId: 0, content: "" });
     webviewDoc = "a";
     sync.onLocalChange();
     webviewDoc = "ab";
     sync.onLocalChange();
     expect(posted).toHaveLength(1);
 
-    sync.onHostSnapshot(
-      seed.docVersion + 1,
-      true,
-      seed.externalEpoch + 1,
-      seed.epochGeneration,
-      ""
-    );
+    sync.onHostSnapshot({
+      docVersion: seed.docVersion + 1,
+      canWrite: true,
+      externalEpoch: seed.externalEpoch + 1,
+      epochGeneration: seed.epochGeneration,
+      settledEditId: 1,
+      content: "",
+    });
     sync.onReducerCommit(false);
 
     expect(posted).toHaveLength(1); // no replay

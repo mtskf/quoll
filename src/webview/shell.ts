@@ -127,11 +127,11 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   bannerHost.className = "quoll-banner-host";
   main.appendChild(bannerHost);
 
-  // ONE notice slot shared by the three edit-sync lifecycle signals — the S3b
+  // ONE notice slot shared by the four edit-sync lifecycle signals — the S3b
   // clustering tripwire (onResyncStorm), discarded un-acked local bytes from
   // EITHER holder, the pre-ack replay buffer or an Edit still awaiting its ack
-  // (onLocalEditDiscarded), and un-posted edits held under a readonly document
-  // (onReadonlyHold). It lives OUTSIDE bannerHost so the reducer-driven
+  // (onLocalEditDiscarded), un-posted edits held under a readonly document
+  // (onReadonlyHold), and an Edit the host refused (onEditRefused). It lives OUTSIDE bannerHost so the reducer-driven
   // renderBanners (replaceChildren) never clobbers it, and it is NOT reducer
   // state — none of the signals is a document error.
   //
@@ -182,7 +182,9 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   // re-rendering an identical notice reads as a new, second loss. Hold has NO
   // display-side latch: edit-sync stops firing it for the readonly episode once
   // showHoldNotice reports it shown, which is also why a dismissed hold notice
-  // stays dismissed.
+  // stays dismissed. Unsaved (a refused Edit) is NOT latched either: each
+  // refusal is an event, and showNotice already aggregates a repeat while it is
+  // on screen.
   //
   // Consequence of the shared slot: a stronger claim REPLACES a weaker one
   // (showNotice's replaceChildren) and a weaker one is declined — discard over
@@ -210,6 +212,8 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
     discard:
       "Quoll discarded pending edits while syncing this document. Review your recent changes and reapply anything missing; Undo cannot restore discarded edits.",
     hold: "This document became read-only before Quoll could save your latest edits. They are lost if this editor closes; Quoll will retry if the document becomes writable again. Review your recent changes.",
+    unsaved:
+      "Quoll could not save your latest edits. They are still in this editor but not in the file; Quoll will try again when you keep typing or leave the editor.",
     storm:
       "Quoll has repeatedly re-synced this document. Review your recent changes; some may not have been saved.",
   } as const;
@@ -223,7 +227,7 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   // copy of the check. A second copy at a call site isn't merely redundant:
   // it can shadow the real one and make it permanently unreachable, which is
   // exactly what happened here before this comment was corrected.
-  const NOTICE_PRIORITY: Record<NoticeKind, number> = { discard: 3, hold: 2, storm: 1 };
+  const NOTICE_PRIORITY: Record<NoticeKind, number> = { discard: 4, hold: 3, unsaved: 2, storm: 1 };
   let noticeKind: NoticeKind | null = null;
   let stormNoticeShown = false;
   // Returns whether the slot now carries `kind`: false only for the priority
@@ -409,6 +413,9 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
     onResyncStorm: showStormNotice,
     onLocalEditDiscarded: showDiscardNotice,
     onReadonlyHold: showHoldNotice,
+    onEditRefused: () => {
+      showNotice("unsaved");
+    },
   });
 
   const unsubscribe = subscribeToHost((message) => {
@@ -495,7 +502,7 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
           return;
         }
         const applyStart = QUOLL_PERF ? perfNow() : 0;
-        editor.applyDocument(message);
+        const editPending = editor.applyDocument(message);
         if (QUOLL_PERF) {
           const settled = perfNow();
           perfRecord("webview:doc-apply", settled - applyStart);
@@ -519,6 +526,7 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
           canWrite: message.canWrite,
           themeKind: message.themeKind,
           adopt: isTransition,
+          editPending,
         });
         return;
       }

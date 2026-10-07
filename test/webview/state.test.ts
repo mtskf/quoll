@@ -148,6 +148,23 @@ describe("reducer — editInFlight single-flight invariant", () => {
     expect(c.editInFlight).toBe(false);
   });
 
+  it("a Document produced before the host judged the Edit keeps editInFlight", () => {
+    const a = reducer(initialState, docAction({ docVersion: 1 }));
+    const b = reducer(a, { type: "post-edit" });
+    const pending = reducer(b, { ...docAction({ docVersion: 1 }), editPending: true });
+    expect(pending.editInFlight).toBe(true);
+    // Absent and `false` both mean "judged": the flag clears.
+    expect(reducer(pending, docAction({ docVersion: 1 })).editInFlight).toBe(false);
+    const judged = reducer(pending, { ...docAction({ docVersion: 1 }), editPending: false });
+    expect(judged.editInFlight).toBe(false);
+  });
+
+  it("editPending never RAISES editInFlight", () => {
+    const a = reducer(initialState, docAction({ docVersion: 1 }));
+    const b = reducer(a, { ...docAction({ docVersion: 2 }), editPending: true });
+    expect(b.editInFlight).toBe(false);
+  });
+
   it("stale Document does NOT clear editInFlight", () => {
     const a = reducer(initialState, docAction({ docVersion: 5 }));
     const b = reducer(a, { type: "post-edit" });

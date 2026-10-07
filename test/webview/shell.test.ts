@@ -102,7 +102,8 @@ function buildDocument(
     eol: "\n",
     externalEpoch: 0,
     epochGeneration: 1,
-    settledEditId: 0,
+    // A host that has received every Edit posted so far.
+    settledEditId: Math.max(0, ...editMessages().map((m) => m.editId)),
     ...overrides,
   };
 }
@@ -541,7 +542,7 @@ describe("shell — S3b epoch-bounded acceptance ordering", () => {
       view.dispatch({ changes: { from: view.state.doc.length, insert: "x" } });
       vi.advanceTimersByTime(300); // posts "sx" — in flight, nothing buffered
       deliver(
-        buildDocument({ docVersion: 2, content: "s-host", externalEpoch: 0, epochGeneration: 11 })
+        buildDocument({ docVersion: 2, content: "s", externalEpoch: 0, epochGeneration: 11 })
       );
       await Promise.resolve();
       expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(0);
@@ -960,9 +961,10 @@ describe("shell — readonly hold notice", () => {
   });
 });
 
-// A host Document carries no correlation to an Edit: the ack of an EARLIER Edit,
-// a stale repost and a refusal of the Edit in flight all arrive as "our lineage,
-// not the bytes in flight". None of them may rewind the view behind bytes this
+// The host does not answer Edits one-to-one: the ack of an EARLIER Edit, a stale
+// repost, a refusal of the Edit in flight and a Document produced before the
+// host judged it all arrive as "our lineage, not the bytes in flight". None of
+// them may rewind the view behind bytes this
 // webview still holds, and those bytes must keep a carrier until the host has
 // them — otherwise the next keystroke forks off the rewound view and the fork is
 // what reaches disk.
@@ -1309,7 +1311,7 @@ describe("shell — own-lineage Documents never rewind un-acked bytes", () => {
       expect(viewText()).toBe("sxyz");
     });
 
-    it("the post dedupe does not outlive an identity transition", async () => {
+    it("a refusal does not outlive an identity transition", async () => {
       await startScripted();
       typeAtEnd("x");
       vi.advanceTimersByTime(300); // (sx, base 1) on generation 11
@@ -1379,17 +1381,16 @@ describe("shell — own-lineage Documents never rewind un-acked bytes", () => {
   });
 });
 
-// The stated residual of the change above. The host has paths that deliver
-// FOREIGN bytes without an epoch advance (host-session-core's own ACCEPTED
-// RESIDUALs: an unobserved settle, a failed settlement transition). The webview
-// cannot tell such a Document from a refusal or a stale repost of its own
-// lineage, so it keeps the user's bytes on screen and replays them over the
-// foreign content — silently. These pins record the MEASURED outcome so the
-// protocol fix has tests to flip; do not "restore" them if they go red for that
-// reason.
-describe("shell — ACCEPTED RESIDUAL: same-epoch unrecognised content", () => {
+// The host has paths that deliver FOREIGN bytes without an epoch advance
+// (host-session-core's own ACCEPTED RESIDUALs: an unobserved settle, a failed
+// settlement transition). The webview recognises such a Document by content —
+// the version advanced and the text is neither the host's last text nor an Edit
+// this webview posted — and treats it like a counted foreign write: the view
+// takes the host's bytes, held bytes are dropped, and the loss is announced.
+describe("shell — a same-epoch foreign write wins and the discarded bytes are announced", () => {
   const G11 = { externalEpoch: 0, epochGeneration: 11 } as const;
-  const unrecognised = (): HostToWebview => buildDocument({ docVersion: 2, content: "X", ...G11 });
+  const unrecognised = (): HostToWebview =>
+    buildDocument({ docVersion: 2, content: "X", settledEditId: 1, ...G11 });
 
   async function startSeeded(): Promise<void> {
     await mount();
@@ -1397,46 +1398,39 @@ describe("shell — ACCEPTED RESIDUAL: same-epoch unrecognised content", () => {
     deliver(buildDocument({ docVersion: 1, content: "s", ...G11 }));
   }
 
-  it("a lone in-flight Edit is kept on screen and re-posted over the unrecognised content, with no notice", async () => {
-    // Edit↔Document correlation in the protocol is expected to flip this pin.
+  it("a lone in-flight Edit is discarded, not re-posted over the foreign content", async () => {
     await startSeeded();
     typeAtEnd("x");
     vi.advanceTimersByTime(300); // E(1, sx)
     deliver(unrecognised());
-    expect(viewText()).toBe("sx");
-    expect(editPairs()).toEqual([
-      ["sx", 1],
-      ["sx", 2],
-    ]);
-    expect(noticeCount()).toBe(0);
+    expect(viewText()).toBe("X");
+    expect(editPairs()).toEqual([["sx", 1]]);
+    expect(noticeCount(".quoll-notice-discard")).toBe(1);
   });
 
-  it("an in-flight Edit plus a keystroke in the debounce window are replayed over the unrecognised content", async () => {
-    // Edit↔Document correlation in the protocol is expected to flip this pin.
+  it("an in-flight Edit plus a keystroke in the debounce window are discarded together", async () => {
     await startSeeded();
     typeAtEnd("x");
     vi.advanceTimersByTime(300); // E(1, sx)
     typeAtEnd("y"); // in the window
     deliver(unrecognised());
-    expect(viewText()).toBe("sxy");
-    expect(editPairs().at(-1)).toEqual(["sxy", 2]);
-    expect(noticeCount()).toBe(0);
+    expect(viewText()).toBe("X");
+    expect(editPairs()).toEqual([["sx", 1]]);
+    expect(noticeCount(".quoll-notice-discard")).toBe(1);
   });
 
-  it("an Edit held after a refusal is re-posted over the unrecognised content once the version moves", async () => {
-    // Edit↔Document correlation in the protocol is expected to flip this pin.
+  it("an Edit held after a refusal is discarded, and the discard replaces the unsaved notice", async () => {
     await startSeeded();
     typeAtEnd("x");
     vi.advanceTimersByTime(300); // E(1, sx)
     deliver(buildDocument({ docVersion: 1, content: "s", ...G11 })); // a refusal repeating the base: held
     expect(editPairs()).toEqual([["sx", 1]]);
+    expect(noticeCount(".quoll-notice-unsaved")).toBe(1);
     deliver(unrecognised());
-    expect(viewText()).toBe("sx");
-    expect(editPairs()).toEqual([
-      ["sx", 1],
-      ["sx", 2],
-    ]);
-    expect(noticeCount()).toBe(0);
+    expect(viewText()).toBe("X");
+    expect(editPairs()).toEqual([["sx", 1]]);
+    expect(noticeCount(".quoll-notice-discard")).toBe(1);
+    expect(noticeCount(".quoll-notice-unsaved")).toBe(0);
   });
 });
 
