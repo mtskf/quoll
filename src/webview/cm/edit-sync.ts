@@ -923,8 +923,10 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
     //       editor.
     //   (d) `sent` grows under Document-less rejections: one entry per post
     //       while every Edit is answered by `edit-rejected` alone, released by
-    //       the SECOND Document after that. Deliberately not capped — a cap
-    //       would make a long-delayed ack read as foreign.
+    //       the SECOND Document after that. Not prunable here: `edit-rejected`
+    //       carries no edit id, so a rejection does not say WHICH entry it
+    //       answers, and dropping the wrong one makes that Edit's later Document
+    //       read as foreign. Closing it needs the id on `edit-rejected`.
     // Two more are local to the view:
     //   - The caret after `showHeld` is clamped like any reseed's, so after a
     //     readonly rewind + re-grant it can sit before the restored bytes.

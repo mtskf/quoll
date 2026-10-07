@@ -159,7 +159,7 @@ export type EditorOptions = {
 };
 
 /** The part of a host `DocumentMessage` the editor consumes. An object, not
- *  positional arguments: three same-typed `number` fields would be swappable
+ *  positional arguments: its same-typed `number` fields would be swappable
  *  without a type error, and the shell already holds exactly this shape.
  *  `eol` is required — the editor never infers the document EOL from
  *  `content` (see `DocumentMessage` in shared/protocol.ts). */
@@ -1194,9 +1194,10 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       // splitToCmText, not `content` itself: CM positions are LF-internal UTF-16
       // code units (see cm/seed.ts for the byte rationale).
       const insertText = needsReseed ? splitToCmText(content) : null;
-      // `false` unless the callback below ran: if the dispatch threw first,
-      // nothing judged the Edit, and reporting "not pending" is the fail-open
-      // side — the reducer clears `editInFlight`, as every Document used to.
+      // Assigned by the callback below, which `replaceViewText` runs on every
+      // arm. The initial value is never returned: a throwing dispatch (or a
+      // throwing callback) propagates out of applyDocument, so the shell never
+      // dispatches the `document` action and `editInFlight` is left as it was.
       let editPending = false;
       replaceViewText(
         insertText,

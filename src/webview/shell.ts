@@ -161,7 +161,7 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   // Notice slot behaviour. Declared AFTER `shellDisposed` because the deferred
   // storm render reads it.
   //
-  // Three classes, THREE texts, deliberately not merged into one sentence: a
+  // Four classes, FOUR texts, deliberately not merged into one sentence: a
   // storm can fire with no input and no discard at all (pinned in shell.test.ts),
   // so a shared wording would either soften a near-certain loss to "may", or
   // assert a loss the storm case cannot prove; and a hold is not a loss at all
@@ -189,13 +189,15 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   //
   // Consequence of the shared slot: a stronger claim REPLACES a weaker one
   // (showNotice's replaceChildren) and a weaker one is declined — discard over
-  // hold over storm. The discard states a certain loss; it is also what a hold
-  // turns into when foreign bytes land during the readonly window. The hold
-  // names specific edits at risk, where the storm only says some may be. Both
-  // weaker kinds are latched at their source — the storm for the session, the
-  // hold for its readonly episode — so one that was SHOWN and then replaced is
-  // not drawn again within that span: "the storm notice disappeared" (or the
-  // hold notice did) is expected behaviour, not a bug to chase. A DECLINED one
+  // hold over unsaved over storm. The discard states a certain loss; it is also
+  // what a hold turns into when foreign bytes land during the readonly window.
+  // The hold names specific edits at risk; the unsaved names an edit too, but
+  // one that stays on screen and is retried, where the storm only says some may
+  // be. Storm and hold are latched at their source — the storm for the session,
+  // the hold for its readonly episode — so one that was SHOWN and then replaced
+  // is not drawn again within that span: "the storm notice disappeared" (or the
+  // hold notice did) is expected behaviour, not a bug to chase. Unsaved is not
+  // latched: a later refusal draws it again. A DECLINED storm or hold
   // differs by kind: the storm's latch is spent either way, while the hold
   // reports the decline (showNotice's return) and edit-sync offers it again on
   // the next flush — the hold is the only signal those specific edits get, and
@@ -238,14 +240,14 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
       return true; // aggregate: the slot already says exactly this
     }
     // Choke point for NOTICE_PRIORITY: every writer (showDiscardNotice,
-    // showHoldNotice, showStormNotice's deferred render, and any future notice
-    // producer) calls
+    // showHoldNotice, showStormNotice's deferred render, the onEditRefused
+    // wiring, and any future notice producer) calls
     // through here, so this is the one place the ranking has to be checked for
     // it to actually govern who may claim the slot — re-deriving the check at
     // each call site would let a future call site forget it (and, as happened
     // once, shadow this one — see the NOTICE_PRIORITY comment above). Today
-    // this declines a storm whenever a discard or a hold already holds the
-    // slot, and a hold whenever a discard does — shell.test.ts pins the
+    // this declines a storm under discard / hold / unsaved, an unsaved under
+    // discard / hold, and a hold under a discard — shell.test.ts pins the
     // storm-under-discard case as "never inserts the storm notice … when a
     // discard coincides".
     // showDiscardNotice itself is never declined here: discard is already the
@@ -297,8 +299,8 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
       }
       try {
         // showNotice's own priority choke point is what may decline this call
-        // (a stronger claim, "discard" or "hold", already holds the slot) — that
-        // check is NOT re-derived here.
+        // (a stronger claim — "discard", "hold" or "unsaved" — already holds the
+        // slot) — that check is NOT re-derived here.
         showNotice("storm");
       } catch (err) {
         // An unattributed uncaught error in a microtask is indistinguishable

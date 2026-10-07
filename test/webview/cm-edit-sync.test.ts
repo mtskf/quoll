@@ -718,8 +718,8 @@ describe("cm edit-sync — un-acked bytes keep a carrier (demotion + refusal hol
   it("does NOT demote an in-flight Edit the Document echoes", () => {
     // The ack ADVANCES the version on purpose: at an unchanged base a wrongly
     // demoted buffer would be marked refused and held back, hiding the revert.
-    // [revert: drop the demotion's content conjunct
-    // (`!sameTextIgnoringEol(inFlight.content, content)`) → a second post
+    // [revert: drop the judgement's content conjunct
+    // (`!sameTextIgnoringEol(inFlight.content, d.content)`) → a second post
     // ("sx", 2) appears]
     const s = postedSx();
     s.sync.onHostSnapshot(2, true, 0, 1, "sx");
