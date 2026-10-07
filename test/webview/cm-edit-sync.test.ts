@@ -1215,6 +1215,59 @@ describe("cm edit-sync — Edit id", () => {
       error.mockRestore();
     }
   });
+
+  it("an uncounted foreign write is traced with lengths and versions, not the bytes", () => {
+    const SECRET = "SECRET-BYTES";
+    const foreignText = `${SECRET} from elsewhere`;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const s = setup();
+      seed(s);
+      s.type(SECRET); // id 1, in flight
+      s.sync.onHostSnapshot(2, true, 0, 1, foreignText, 0);
+      const traces = warn.mock.calls.filter((c) =>
+        String(c[0]).includes("uncounted foreign write")
+      );
+      expect(traces).toEqual([
+        [
+          "[quoll] uncounted foreign write inferred from content",
+          {
+            wireEpoch: 0,
+            foreignWrites: 1,
+            fromDocVersion: 1,
+            toDocVersion: 2,
+            settledEditId: 0,
+            sentCount: 1,
+            contentLength: foreignText.length,
+          },
+        ],
+      ]);
+      expect(JSON.stringify(traces)).not.toContain(SECRET);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("the identity-transition trace reports both epochs in the recorded unit", () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const s = setup();
+      seed(s);
+      s.sync.onHostSnapshot(2, true, 0, 1, "X"); // uncounted foreign write: recorded epoch 1
+      s.sync.onHostSnapshot(1, true, 5, 2, "X"); // a new host session at wire epoch 5
+      expect(info).toHaveBeenCalledWith(expect.stringContaining("identity transition"), {
+        fromGeneration: 1,
+        toGeneration: 2,
+        fromEpoch: 1,
+        toEpoch: 6,
+      });
+      expect(s.sync.recordedIdentity()).toEqual({ epoch: 6, generation: 2 });
+    } finally {
+      info.mockRestore();
+      warn.mockRestore();
+    }
+  });
 });
 
 describe("cm edit-sync — showHeld brings the view forward before a replay", () => {
@@ -3111,6 +3164,7 @@ describe("cm edit-sync — stale-buffer drops are traced", () => {
             stampEpoch: 0,
             recordedGeneration: 11,
             recordedEpoch: 1,
+            foreignWrites: 0,
             droppedLength: SECRET.length + 1,
             liveLength: 2,
           },
@@ -3160,6 +3214,7 @@ describe("cm edit-sync — in-flight discards are traced", () => {
             stampEpoch: 0,
             recordedGeneration: 11,
             recordedEpoch: 1,
+            foreignWrites: 0,
             droppedLength: SECRET.length,
             liveLength: 2,
           },

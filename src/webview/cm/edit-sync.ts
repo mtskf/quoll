@@ -966,6 +966,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
         stampEpoch: droppedBuffer.epoch,
         recordedGeneration: recorded.generation,
         recordedEpoch: recorded.epoch,
+        foreignWrites,
         droppedLength: droppedBuffer.content.length,
         liveLength: opts.getDoc().length,
       });
@@ -989,6 +990,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
             stampEpoch: lostSubject.epoch,
             recordedGeneration: recorded.generation,
             recordedEpoch: recorded.epoch,
+            foreignWrites,
             droppedLength: lostSubject.content.length,
             liveLength: opts.getDoc().length,
           }
@@ -1103,7 +1105,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
           fromGeneration: recorded.generation,
           toGeneration: d.epochGeneration,
           fromEpoch: recorded.epoch,
-          toEpoch: d.externalEpoch,
+          toEpoch: d.externalEpoch + foreignWrites,
         });
         noteIdentityTransition();
       }
@@ -1116,6 +1118,16 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
       const incoming = identityOf(d, foreign);
       if (foreign) {
         foreignWrites++;
+        // Lengths and versions only: document bytes must never reach the console.
+        console.warn("[quoll] uncounted foreign write inferred from content", {
+          wireEpoch: d.externalEpoch,
+          foreignWrites,
+          fromDocVersion: docVersion,
+          toDocVersion: d.docVersion,
+          settledEditId: d.settledEditId,
+          sentCount: sent.length,
+          contentLength: d.content.length,
+        });
       }
       if (supersedesIdentity({ from: recorded, to: incoming })) {
         // Bytes posted on a lineage that lost say nothing about what is ours on
