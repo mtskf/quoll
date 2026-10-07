@@ -1247,6 +1247,10 @@ describe("shell — own-lineage Documents never rewind un-acked bytes", () => {
       expect(host.unread()).toBe(0); // no automatic identical retry
       expect(viewText()).toBe("sx");
       expect(noticeCount(".quoll-notice-unsaved")).toBe(1);
+      // No present-state claim: the notice stays up after the retry below saves.
+      expect(container?.querySelector(".quoll-notice-unsaved")?.textContent).not.toContain(
+        "not in the file"
+      );
       host.visible(); // an unsolicited identical repost: still no loop
       host.pump();
       expect(host.unread()).toBe(0);
@@ -1256,6 +1260,7 @@ describe("shell — own-lineage Documents never rewind un-acked bytes", () => {
       host.quiesce();
       expect(host.disk()).toBe("sx");
       expect(viewText()).toBe("sx");
+      expect(noticeCount(".quoll-notice-unsaved")).toBe(1); // not withdrawn by the ack
     });
 
     it("a readonly verdict followed by a re-grant brings the view forward and converges", async () => {

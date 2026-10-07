@@ -185,7 +185,8 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   // showHoldNotice reports it shown, which is also why a dismissed hold notice
   // stays dismissed. Unsaved (a refused Edit) is NOT latched either: each
   // refusal is an event, and showNotice already aggregates a repeat while it is
-  // on screen.
+  // on screen. It deliberately outlives a successful retry: the text reports
+  // the refusal, not a present state a later save could falsify.
   //
   // Consequence of the shared slot: a stronger claim REPLACES a weaker one
   // (showNotice's replaceChildren) and a weaker one is declined — discard over
@@ -216,7 +217,7 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
       "Quoll discarded pending edits while syncing this document. Review your recent changes and reapply anything missing; Undo cannot restore discarded edits.",
     hold: "This document became read-only before Quoll could save your latest edits. They are lost if this editor closes; Quoll will retry if the document becomes writable again. Review your recent changes.",
     unsaved:
-      "Quoll could not save your latest edits. They are still in this editor but not in the file; Quoll will try again when you keep typing or leave the editor.",
+      "Quoll could not save an edit. Your text is still in this editor; Quoll will try again when you keep typing or leave the editor.",
     storm:
       "Quoll has repeatedly re-synced this document. Review your recent changes; some may not have been saved.",
   } as const;
