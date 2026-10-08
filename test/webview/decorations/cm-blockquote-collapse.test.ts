@@ -25,6 +25,7 @@ import { quollSyntaxReveal } from "../../../src/webview/cm/decorations/index.js"
 import { fencedCodeCollapseField } from "../../../src/webview/cm/fenced-code/fenced-code-collapse.js";
 import { quollFolding } from "../../../src/webview/cm/fold/index.js";
 import { hostDocumentReseed } from "../../../src/webview/cm/host-reseed.js";
+import { blockStyleThemeSpec, collapseToggleThemeSpec } from "../../../src/webview/cm/theme.js";
 import { settledState } from "../helpers/settled-state.js";
 import { settledMount } from "../helpers/settled-view.js";
 import { withUnstarvedFrontierState } from "../helpers/unstarved-frontier.js";
@@ -611,6 +612,71 @@ describe("blockquoteCollapseField — outer fold", () => {
     } finally {
       a.view.destroy();
       b.view.destroy();
+    }
+  });
+});
+
+describe("theme contract", () => {
+  // The spec is read as a plain string-keyed record: these selectors are the contract.
+  const spec = collapseToggleThemeSpec as unknown as Record<string, Record<string, string>>;
+  const blockSpec = blockStyleThemeSpec as unknown as Record<string, Record<string, string>>;
+  const BQ = ".quoll-blockquote-collapse-bar";
+  const FC = ".quoll-fenced-collapse-bar";
+
+  it("1. the bar is the fenced bar plus the divider's top padding", () => {
+    const { paddingTop, ...rest } = spec[BQ] as Record<string, string>;
+    expect(paddingTop).toBeDefined();
+    expect(rest).toEqual(spec[FC]);
+  });
+
+  it("2. the collapsed bar shares the fenced collapsed footer", () => {
+    expect(spec[`${BQ}-collapsed`]).toEqual(spec[`${FC}-collapsed`]);
+  });
+
+  it("3. the expanded bar is always the footer", () => {
+    expect(spec[`${BQ}:not(${BQ}-collapsed)`]).toEqual(spec[`${FC}-collapsed`]);
+  });
+
+  it("4. one shared toggle object, link-coloured at full opacity", () => {
+    const toggle = spec[".quoll-blockquote-collapse-toggle"];
+    expect(toggle).toEqual(spec[".quoll-fenced-collapse-toggle"]);
+    expect(toggle?.color).toContain("--vscode-textLink-foreground");
+    expect(toggle?.opacity).toBe("1");
+  });
+
+  it("5. divider is a margin-free ::before on the blockquote bar only", () => {
+    const before = spec[`${BQ}::before`];
+    expect(before).toBeDefined();
+    expect(before?.content).toBe('""');
+    expect(before?.display).toBe("block");
+    expect(before?.borderTop).toMatch(/^1px solid /);
+    expect(before?.borderTop).toContain("--vscode-foreground");
+    expect(before).not.toHaveProperty("marginTop");
+    expect(spec[`${FC}::before`]).toBeUndefined();
+  });
+
+  it("6. the quote row above an expanded bar is un-rounded and un-gapped", () => {
+    const key = Object.keys(spec).find(
+      (k) =>
+        k.includes(".cm-line.quoll-blockquote-close") &&
+        k.includes(":has(+ .quoll-blockquote-collapse-bar")
+    );
+    expect(key).toBeDefined();
+    const rule = spec[key as string];
+    expect(rule?.borderBottomLeftRadius).toBe("0");
+    expect(rule?.borderBottomRightRadius).toBe("0");
+    expect(rule?.paddingBottom).toBe("0");
+    expect(rule?.borderBottom).toBe("0");
+  });
+
+  it("7. the bar carries the callout accent, generated from the rows' values", () => {
+    expect(spec[`${BQ}.quoll-callout`]?.boxShadow).toBe(
+      blockSpec[".cm-line.quoll-callout"]?.boxShadow
+    );
+    for (const t of ["note", "tip", "important", "warning", "caution"]) {
+      const bar = spec[`${BQ}.quoll-callout-${t}`]?.["--quoll-callout-accent"];
+      expect(bar).toBeDefined();
+      expect(bar).toBe(blockSpec[`.cm-line.quoll-callout-${t}`]?.["--quoll-callout-accent"]);
     }
   });
 });
