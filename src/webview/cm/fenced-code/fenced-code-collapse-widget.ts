@@ -4,41 +4,20 @@
 // source round-trips byte-identically. The bar is styled by quollCollapseToggleTheme
 // (cm/theme.ts) to blend with the code panel.
 //
-// Icons: Lucide (https://lucide.dev, MIT) chevron-down / chevron-up, inlined as
-// static SVG via createElementNS — per the project's supply-chain default-deny we
-// do not add the `lucide` package for two static glyphs (and createElementNS
-// avoids innerHTML, so there is no CSP/inline-style concern). Same approach as
-// fenced-code-copy-button-widget.ts.
+// The DOM, icons and event contract are the shared renderer's (../collapse/
+// collapse-toggle-widget.ts); this class supplies the fenced class names and the toggle.
 
 import type { EditorView } from "@codemirror/view";
+import {
+  CHEVRON_DOWN_PATH,
+  CHEVRON_UP_PATH,
+  renderCollapseBar,
+} from "../collapse/collapse-toggle-widget.js";
 import { QuollWidget } from "../widget-base.js";
 import { toggleFencedCollapse } from "./fenced-code-collapse-state.js";
 
-const SVG_NS = "http://www.w3.org/2000/svg";
-
-// Lucide chevron-down / chevron-up path data (exported so the widget test can
-// assert which glyph is shown).
-export const CHEVRON_DOWN_PATH = "m6 9 6 6 6-6";
-export const CHEVRON_UP_PATH = "m18 15-6-6-6 6";
-
-function makeChevron(d: string): SVGSVGElement {
-  const svg = document.createElementNS(SVG_NS, "svg");
-  for (const [k, v] of Object.entries({
-    viewBox: "0 0 24 24",
-    fill: "none",
-    stroke: "currentColor",
-    "stroke-width": "2",
-    "stroke-linecap": "round",
-    "stroke-linejoin": "round",
-    "aria-hidden": "true",
-  })) {
-    svg.setAttribute(k, v);
-  }
-  const path = document.createElementNS(SVG_NS, "path");
-  path.setAttribute("d", d);
-  svg.appendChild(path);
-  return svg;
-}
+// Re-exported so the widget test (and any importer) keeps its import path.
+export { CHEVRON_DOWN_PATH, CHEVRON_UP_PATH };
 
 export class FencedCollapseToggleWidget extends QuollWidget {
   readonly widgetName = "FencedCollapseToggleWidget";
@@ -65,8 +44,6 @@ export class FencedCollapseToggleWidget extends QuollWidget {
   }
 
   protected render(view: EditorView, signal: AbortSignal): HTMLElement {
-    const root = document.createElement("div");
-    root.className = "quoll-fenced-collapse-bar";
     // The `-collapsed` state class marks the COLLAPSED "Show more" bar, which is the
     // panel's visible bottom (body tail + closing fence are replaced) and so must carry
     // the rounded/padded footer (collapseToggleThemeSpec). The EXPANDED "Show less" bar
@@ -77,50 +54,18 @@ export class FencedCollapseToggleWidget extends QuollWidget {
     // adjacency (`:has(+ …)` in collapseToggleThemeSpec), NOT here, so the widget only
     // needs to flag the collapsed state. Toggling a class (not a :has([aria-expanded])
     // selector) keeps that flag happy-dom-assertable.
-    root.classList.toggle("quoll-fenced-collapse-bar-collapsed", !this.expanded);
-
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "quoll-fenced-collapse-toggle";
-    button.setAttribute("aria-expanded", this.expanded ? "true" : "false");
-
-    button.appendChild(makeChevron(this.expanded ? CHEVRON_UP_PATH : CHEVRON_DOWN_PATH));
-    const label = document.createElement("span");
-    label.className = "quoll-fenced-collapse-label";
-    label.textContent = this.expanded
-      ? "Show less"
-      : `Show ${this.hiddenCount} more ${this.hiddenCount === 1 ? "line" : "lines"}`;
-    button.appendChild(label);
-
-    // mousedown: block CodeMirror's caret-on-mousedown so clicking never moves the
-    // selection into a (possibly concealed) line. preventDefault on mousedown does
-    // NOT cancel the click, so keyboard Enter/Space still activates the button.
-    button.addEventListener(
-      "mousedown",
-      (event) => {
-        if (event.button !== 0) {
-          return;
-        }
-        event.preventDefault();
-        event.stopPropagation();
+    return renderCollapseBar({
+      classes: {
+        bar: "quoll-fenced-collapse-bar",
+        barCollapsed: "quoll-fenced-collapse-bar-collapsed",
+        toggle: "quoll-fenced-collapse-toggle",
+        label: "quoll-fenced-collapse-label",
       },
-      { signal }
-    );
-    button.addEventListener(
-      "click",
-      (event) => {
-        if (event.button !== 0) {
-          return;
-        }
-        event.preventDefault();
-        event.stopPropagation();
-        toggleFencedCollapse(view, this.key, !this.expanded);
-      },
-      { signal }
-    );
-
-    root.appendChild(button);
-    return root;
+      expanded: this.expanded,
+      hiddenCount: this.hiddenCount,
+      signal,
+      onToggle: () => toggleFencedCollapse(view, this.key, !this.expanded),
+    });
   }
 
   ignoreEvent(): boolean {

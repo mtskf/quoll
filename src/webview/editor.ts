@@ -32,6 +32,7 @@ import { quollCodeRefClickHandler, quollCodeRefKeymap } from "./cm/code-ref/code
 import { quollContextHandoffKeymap } from "./cm/context-handoff.js";
 import { blockStyle } from "./cm/decorations/block-style.js";
 import { blockZoneArrowKeymap } from "./cm/decorations/block-zone-arrow-keymap.js";
+import { blockquoteCollapseField } from "./cm/decorations/blockquote-collapse.js";
 import { calloutMarkerConcealField } from "./cm/decorations/callout-marker-conceal.js";
 import { headingRhythm } from "./cm/decorations/heading-rhythm.js";
 import { quollSyntaxReveal } from "./cm/decorations/index.js";
@@ -667,6 +668,11 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // walks the tree itself and descends only through the Document root, so
         // a blockquote- or list-nested fence is never collapsible.
         fencedCodeCollapseField,
+        // Collapse long TOP-LEVEL blockquotes / callouts (>10 source lines): the same
+        // reducer skeleton as fencedCodeCollapseField (cm/collapse/) with its own
+        // invalidation policy (always a top-level re-walk — see the field header).
+        // Display-only. Publishes to neither zone facet, for the reason given above.
+        blockquoteCollapseField,
         // Bounded Table-node skeleton — precedes tableBlockField so buildAll
         // reads it via state.field() instead of a per-keystroke full walk.
         tableSkeletonField,

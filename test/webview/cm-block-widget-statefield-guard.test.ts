@@ -1,6 +1,7 @@
 import { StateField } from "@codemirror/state";
 import { ViewPlugin } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
+import { blockquoteCollapseField } from "../../src/webview/cm/decorations/blockquote-collapse.js";
 import { fencedCodeCollapseField } from "../../src/webview/cm/fenced-code/fenced-code-collapse.js";
 import { frontmatterBlockField } from "../../src/webview/cm/frontmatter/index.js";
 import { imageBlockField } from "../../src/webview/cm/image/index.js";
@@ -28,6 +29,7 @@ const BLOCK_FIELDS: ReadonlyArray<readonly [string, unknown]> = [
   ["imageBlockField", imageBlockField],
   ["frontmatterBlockField", frontmatterBlockField],
   ["fencedCodeCollapseField", fencedCodeCollapseField],
+  ["blockquoteCollapseField", blockquoteCollapseField],
 ];
 
 describe("block widgets must be StateFields, not ViewPlugins", () => {
