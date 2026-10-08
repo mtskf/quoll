@@ -8,6 +8,7 @@ import { type EditorState, StateEffect } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import { COLLAPSE_THRESHOLD } from "../collapse/collapse-shared.js";
 import { type CollapseTarget, toggleCollapse } from "../collapse/line-collapse-field.js";
+import { leadingFrontmatterEnd } from "../frontmatter/detect.js";
 import { type CalloutType, calloutTypeForOutermost } from "./callout.js";
 
 type SyntaxNode = Parameters<typeof calloutTypeForOutermost>[1];
@@ -33,7 +34,7 @@ export interface BlockquoteBlockGeometry {
 }
 
 /** Geometry for `node` iff it is a TOP-LEVEL Blockquote of more than COLLAPSE_THRESHOLD
- *  source lines; null otherwise. Every line of the node counts (nested `> >`, lazy
+ *  source lines outside the leading frontmatter; null otherwise. Every line of the node counts (nested `> >`, lazy
  *  continuation, a callout's marker row). */
 export function blockquoteBlockGeometry(
   state: EditorState,
@@ -41,6 +42,11 @@ export function blockquoteBlockGeometry(
 ): BlockquoteBlockGeometry | null {
   const parent = node.parent;
   if (node.name !== "Blockquote" || parent === null || parent.name !== "Document") {
+    return null;
+  }
+  // The frontmatter block (frontmatterBlockField) owns the outermost block over
+  // [0, fmEnd]; never emit a competing block replace inside it.
+  if (node.from < leadingFrontmatterEnd(state)) {
     return null;
   }
   const doc = state.doc;

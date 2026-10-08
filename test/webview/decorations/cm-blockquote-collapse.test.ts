@@ -25,6 +25,7 @@ import { quollSyntaxReveal } from "../../../src/webview/cm/decorations/index.js"
 import { fencedCodeCollapseField } from "../../../src/webview/cm/fenced-code/fenced-code-collapse.js";
 import { FencedCollapseToggleWidget } from "../../../src/webview/cm/fenced-code/fenced-code-collapse-widget.js";
 import { quollFolding } from "../../../src/webview/cm/fold/index.js";
+import { leadingFrontmatterEnd } from "../../../src/webview/cm/frontmatter/detect.js";
 import { hostDocumentReseed } from "../../../src/webview/cm/host-reseed.js";
 import { blockStyleThemeSpec, collapseToggleThemeSpec } from "../../../src/webview/cm/theme.js";
 import { settledState } from "../helpers/settled-state.js";
@@ -323,6 +324,32 @@ describe("blockquoteCollapseField — scope gate", () => {
     expect(d).toHaveLength(1);
     expect(d[0].widget?.key).toBe(0);
     expect(findCollapseBlockAt(blockquoteCollapseTarget, state, 0)).not.toBeNull();
+  });
+
+  it("14b. a quote-shaped run inside the leading frontmatter is never collapsible", () => {
+    // A YAML block scalar whose lines look like a quote: Lezer parses them as a top-level
+    // Blockquote, but the frontmatter block owns [0, fmEnd].
+    const frontmatter = `---\ntitle: x\ndescription: |\n${lines(14, (k) => `  > metadata ${k}`)}\n---\n\n`;
+
+    const only = stateWith(`${frontmatter}prose\n`);
+    expect(leadingFrontmatterEnd(only)).toBeGreaterThan(0);
+    expect(only.field(blockquoteCollapseField).decorations.size).toBe(0);
+    expect(only.field(blockquoteCollapseField).blocks).toEqual([]);
+    const fmQuoteKey = only.doc.line(4).from;
+    expect(findCollapseBlockAt(blockquoteCollapseTarget, only, fmQuoteKey)).toBeNull();
+
+    // A quote OUTSIDE the frontmatter of the same document still collapses.
+    const state = stateWith(`${frontmatter}${quote(14)}`);
+    const fmEnd = leadingFrontmatterEnd(state);
+    expect(fmEnd).toBeGreaterThan(0);
+    const field = state.field(blockquoteCollapseField);
+    expect(field.blocks).toHaveLength(1);
+    expect(field.blocks[0].key).toBe(frontmatter.length);
+    expect(field.blocks[0].hiddenCount).toBe(4);
+    const d = decos(state);
+    expect(d).toHaveLength(1);
+    expect(d[0].from).toBeGreaterThan(fmEnd);
+    expect(d[0].widget?.expanded).toBe(false);
   });
 });
 
