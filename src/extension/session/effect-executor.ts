@@ -838,7 +838,8 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
             // list. It would NOT skip the barrier release here — `step` settles it
             // regardless of what `runEffects` does; the one gap, `isEditApplied`
             // itself throwing, sits BEFORE `runEffects` runs at all
-            // (`host-session-step.ts:390`) — but the ack Document is exactly the
+            // (the `const editApplied = isEditApplied(event)` line in
+            // `host-session-step.ts`'s returned step) — but the ack Document is exactly the
             // effect worth keeping, so contain the throw here rather than relying
             // on that backstop. Only the injected BUILDER is guarded, so a reducer
             // bug still surfaces (the exhaustiveness guard below).

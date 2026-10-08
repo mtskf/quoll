@@ -52,8 +52,10 @@ export interface EditSettledBarrier {
    *  thunk runs (the thunk owns its own completion) and is isolated via
    *  `onError` so a throwing `onDrop` cannot abort a drop loop. */
   run(sideChannel: () => void, onDrop?: () => void): void;
-  /** Call after every reducer step. `applied` is true unless this step was a
-   *  FAILED apply settlement. Drains the deferred side channels (FIFO) only
+  /** Call after every reducer step. `applied` is false when this step cannot
+   *  show the edit landed — a FAILED apply settlement, or a lock release that
+   *  never looked at the outcome (dispose, the write-lock recovery); see
+   *  `isEditApplied`. Drains the deferred side channels (FIFO) only
    *  when the write lock is now FULLY released AND `applied` is true AND the
    *  panel is alive; otherwise DROPS them (dispose or failed apply — firing each
    *  entry's `onDrop`) or waits (still locked — a stash-drain re-apply). Cheap

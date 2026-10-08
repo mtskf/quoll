@@ -336,6 +336,14 @@ describe("createHostSessionStep", () => {
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
   });
+  // Dispose cancels the deferred side channels from the verdict itself, so the
+  // drop does not depend on the panel having set its local flag first.
+  it("treats the disposed event as NOT applied, from an explicit arm", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(isEditApplied({ type: "disposed" })).toBe(false);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
   it("does not attempt the rescue when a disposed transition throws", () => {
     const settles: boolean[] = [];
     const step = createHostSessionStep({
