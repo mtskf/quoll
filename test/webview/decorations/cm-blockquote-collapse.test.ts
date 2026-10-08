@@ -23,6 +23,7 @@ import { CALLOUT_CLASS } from "../../../src/webview/cm/decorations/callout.js";
 import { calloutMarkerConcealField } from "../../../src/webview/cm/decorations/callout-marker-conceal.js";
 import { quollSyntaxReveal } from "../../../src/webview/cm/decorations/index.js";
 import { fencedCodeCollapseField } from "../../../src/webview/cm/fenced-code/fenced-code-collapse.js";
+import { FencedCollapseToggleWidget } from "../../../src/webview/cm/fenced-code/fenced-code-collapse-widget.js";
 import { quollFolding } from "../../../src/webview/cm/fold/index.js";
 import { hostDocumentReseed } from "../../../src/webview/cm/host-reseed.js";
 import { blockStyleThemeSpec, collapseToggleThemeSpec } from "../../../src/webview/cm/theme.js";
@@ -360,8 +361,16 @@ describe("blockquoteCollapseField — reseed, isolation, stale keys", () => {
     const fencedField = state.field(fencedCodeCollapseField);
     const fd = dump(fencedField.decorations);
     expect(fd).toHaveLength(1);
+    // Positively the fenced field's own decoration: a block replace starting at the fence's
+    // 11th body line (fence open line + 10 body lines), widget a FencedCollapseToggleWidget.
+    const fenceStart = doc.indexOf("```js");
+    const eleventhBodyLine = state.doc.lineAt(fenceStart).number + 11;
+    expect(fd[0].block).toBe(true);
+    expect(fd[0].from).toBe(state.doc.line(eleventhBodyLine).from);
     expect(fd[0].widget).toBeNull(); // not a blockquote widget
     expect(fd[0].from).toBeGreaterThan(bq[0].to);
+    const fencedSpec = fencedField.decorations.iter().value?.spec as { widget?: unknown };
+    expect(fencedSpec.widget).toBeInstanceOf(FencedCollapseToggleWidget);
 
     state = state.update({
       effects: setBlockquoteCollapseEffect.of({ key: 0, expanded: true }),
@@ -386,16 +395,17 @@ describe("blockquoteCollapseField — reseed, isolation, stale keys", () => {
 
 describe("blockquoteCollapseField — combined registration", () => {
   it("18. coexists with the callout marker conceal, block-style and the reveal stack", () => {
-    const callout = `> [!note]\n${lines(12, (k) => `> body ${k}`)}`;
+    const callout = `> [!note]\n${lines(12, (k) => (k === 1 ? "> zeta-first-body" : `> body ${k}`))}`;
     const doc = `${callout}\n\ntail`;
     const view = mountWith(doc, doc.length, [
       calloutMarkerConcealField,
       blockStyle,
       quollSyntaxReveal(),
     ]);
-    // The view is not wedged: the quote's first body line is still rendered.
+    // The view is not wedged: the quote's first body line (a token no other line carries)
+    // is still rendered.
     const firstLineRendered = (): boolean =>
-      (view.dom.querySelector(".cm-content")?.textContent ?? "").includes("body 1");
+      (view.dom.querySelector(".cm-content")?.textContent ?? "").includes("zeta-first-body");
     try {
       const d0 = view.state.doc;
       // Caret outside: the conceal field holds its marker-row decorations (inline replace
@@ -582,6 +592,38 @@ describe("blockquoteCollapseField — outer fold", () => {
       });
       expect(foldedRanges(view.state).size).toBe(0);
       expectExpandedAndUncovered(view);
+      expect(barLabel(view)).toBe("Show less");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("6b. a secondary head in the concealed range expands the record while the fold survives (records, not decorations, decide)", () => {
+    const { view } = foldMount(collapsedDoc);
+    try {
+      const r = headingRange(view);
+      fold(view, r);
+      expect(foldedRanges(view.state).size).toBe(1);
+      const key = view.state.doc.line(3).from;
+      expect(fieldState(view).blocks[0].expanded).toBe(false);
+      // MAIN stays on the heading line (outside the fold), a SECONDARY head lands on a
+      // concealed line: CodeMirror clears a fold only for the main head, so the fold
+      // survives and ONLY the record-based selection check can notice the secondary head.
+      view.dispatch({
+        selection: EditorSelection.create(
+          [
+            EditorSelection.cursor(view.state.doc.line(1).from),
+            EditorSelection.cursor(view.state.doc.line(3 + 14).from),
+          ],
+          0
+        ),
+      });
+      expect(foldedRanges(view.state).size).toBe(1);
+      const rec = fieldState(view).blocks.find((b) => b.key === key);
+      expect(rec?.expanded).toBe(true);
+      expect(fieldState(view).expanded.has(key)).toBe(true);
+      unfold(view, r);
+      expect(barLabel(view)).toBe("Show less");
     } finally {
       view.destroy();
     }
@@ -684,9 +726,11 @@ describe("theme contract", () => {
   });
 
   it("7. the bar carries the callout accent, generated from the rows' values", () => {
-    expect(spec[`${BQ}.quoll-callout`]?.boxShadow).toBe(
-      blockSpec[".cm-line.quoll-callout"]?.boxShadow
-    );
+    const barShadow = spec[`${BQ}.quoll-callout`]?.boxShadow;
+    const rowShadow = blockSpec[".cm-line.quoll-callout"]?.boxShadow;
+    expect(barShadow).toBeDefined();
+    expect(rowShadow).toBeDefined();
+    expect(barShadow).toBe(rowShadow);
     for (const t of ["note", "tip", "important", "warning", "caution"]) {
       const bar = spec[`${BQ}.quoll-callout-${t}`]?.["--quoll-callout-accent"];
       expect(bar).toBeDefined();

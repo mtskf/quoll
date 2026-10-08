@@ -186,8 +186,7 @@ describe("blockquoteCollapseField — non-local structure changes", () => {
   });
 
   it("4. an unclosed fence opened above swallows the quote; closing it brings the bar back", () => {
-    const doc = proseAround;
-    const start = stateWith(doc);
+    const start = stateWith(proseAround);
     const initial = expectMatchesFresh(start);
     expect(initial).toHaveLength(1);
     expect(initial[0].hiddenCount).toBe(4);
@@ -202,8 +201,7 @@ describe("blockquoteCollapseField — non-local structure changes", () => {
   });
 
   it("5. ordinary edits keep an expanded quote expanded", () => {
-    const doc = proseAround;
-    let state = stateWith(doc);
+    let state = stateWith(proseAround);
     const key = state.doc.line(3).from;
     state = state.update({
       effects: setBlockquoteCollapseEffect.of({ key, expanded: true }),

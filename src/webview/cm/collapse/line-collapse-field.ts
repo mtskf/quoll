@@ -197,9 +197,9 @@ function buildRange<X>(
 
 /** Is `pos` inside a folded range, i.e. would a decoration anchored there render beside
  *  the fold placeholder? A range ending exactly at `pos` counts (the section-end case). */
-function hiddenByFold(state: EditorState, pos: number): boolean {
+function hiddenByFold(folded: ReturnType<typeof foldedRanges>, pos: number): boolean {
   let hidden = false;
-  foldedRanges(state).between(pos, pos, (from, to) => {
+  folded.between(pos, pos, (from, to) => {
     if (from < pos && to >= pos) {
       hidden = true;
       return false;
@@ -210,7 +210,9 @@ function hiddenByFold(state: EditorState, pos: number): boolean {
 }
 
 /** Assemble the field state from a record list (dedupes + orders by blockFrom). Filters
- *  decorations only — records are passed through by reference, never copied. */
+ *  decorations only — records are passed through by reference, never copied. The folded
+ *  set is fetched once, and the filter is skipped when no fold exists (the fenced typing
+ *  path pays nothing). */
 function assemble<X>(blocks: CollapseRecord<X>[], state: EditorState): CollapseState<X> {
   const sorted = [...blocks].sort((a, b) => a.blockFrom - b.blockFrom);
   const liveExpanded = new Set<number>();
@@ -219,10 +221,11 @@ function assemble<X>(blocks: CollapseRecord<X>[], state: EditorState): CollapseS
       liveExpanded.add(b.key);
     }
   }
+  const folded = foldedRanges(state);
+  const visible =
+    folded.size === 0 ? sorted : sorted.filter((b) => !hiddenByFold(folded, b.decoFrom));
   const decorations = Decoration.set(
-    sorted
-      .filter((b) => !hiddenByFold(state, b.decoFrom))
-      .map((b) => b.deco.range(b.decoFrom, b.decoTo)),
+    visible.map((b) => b.deco.range(b.decoFrom, b.decoTo)),
     true
   );
   return { expanded: liveExpanded, blocks: sorted, decorations };

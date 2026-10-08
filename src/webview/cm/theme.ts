@@ -483,24 +483,6 @@ const blockEdgeGapCorner = (edge: "top" | "bottom"): Record<string, string> =>
         borderBottomRightRadius: blockEdgeGapRightRadius,
       };
 
-// Fenced-code panel + blockquote rule styling for the block-style.ts line
-// decorations. Lives HERE (an EditorView.theme), NOT styles.css: CM's base
-// theme sets `.cm-line { padding: 0 2px 0 6px }` UNLAYERED, which beats
-// every layered styles.css rule (see styles.css header) — only another
-// unlayered CM theme can override the line padding. Two wins stack: CM
-// gives EditorView.theme rules higher precedence than baseTheme, AND the
-// two-class `.cm-line.<class>` selectors outrank baseTheme's single-class
-// `.cm-line` on specificity (both selectors gain the editor-scope prefix CM
-// injects). Values mirror Markdown Studio's `pre` / `blockquote` treatment;
-// token colours stay owned by quollHighlight above, so no syntax palette is
-// duplicated here.
-//
-// Kept as a SEPARATE theme extension (not merged into quollTheme) so the
-// spec stays exportable as a plain object — cm-decoration-block-style.test.ts
-// pins the contract directly (EditorView.theme returns an opaque Extension).
-// Merging into quollTheme (Codex Conf 91) would save one registration line
-// but lose the testable export and mix block-decoration styling into the
-// structural base theme; the single-responsibility split is preferred.
 // Callout accent, shared by the callout ROWS (`.cm-line.quoll-callout-*`, in
 // blockStyleThemeSpec) and the blockquote collapse BAR (`.quoll-blockquote-collapse-bar
 // .quoll-callout-*`, in collapseToggleThemeSpec): one per-type table and one bar shadow,
@@ -523,6 +505,24 @@ function calloutRuleSet(base: string): Record<string, { "--quoll-callout-accent"
   );
 }
 
+// Fenced-code panel + blockquote rule styling for the block-style.ts line
+// decorations. Lives HERE (an EditorView.theme), NOT styles.css: CM's base
+// theme sets `.cm-line { padding: 0 2px 0 6px }` UNLAYERED, which beats
+// every layered styles.css rule (see styles.css header) — only another
+// unlayered CM theme can override the line padding. Two wins stack: CM
+// gives EditorView.theme rules higher precedence than baseTheme, AND the
+// two-class `.cm-line.<class>` selectors outrank baseTheme's single-class
+// `.cm-line` on specificity (both selectors gain the editor-scope prefix CM
+// injects). Values mirror Markdown Studio's `pre` / `blockquote` treatment;
+// token colours stay owned by quollHighlight above, so no syntax palette is
+// duplicated here.
+//
+// Kept as a SEPARATE theme extension (not merged into quollTheme) so the
+// spec stays exportable as a plain object — cm-decoration-block-style.test.ts
+// pins the contract directly (EditorView.theme returns an opaque Extension).
+// Merging into quollTheme (Codex Conf 91) would save one registration line
+// but lose the testable export and mix block-decoration styling into the
+// structural base theme; the single-responsibility split is preferred.
 export const blockStyleThemeSpec = {
   // Fenced-code panel: theme-aware subtle background, monospace, slightly
   // smaller. Horizontal padding overrides CM's 6px/2px line padding.
@@ -1245,14 +1245,13 @@ const collapseToggle = {
   fontFamily: "var(--vscode-font-family, sans-serif)",
   // Link colour at FULL opacity for both bars (user decision 2026-10-08): link colour
   // at the 0.6 resting dim would fall under 4.5:1. Hover/focus keeps the shared
-  // hover background; the transition stays so that background still fades.
+  // hover background, applied instantly (no transition: opacity is fixed at 1).
   color: "var(--vscode-textLink-foreground, var(--vscode-foreground))",
   background: "none",
   border: "none",
   borderRadius: "4px",
   cursor: "pointer",
   opacity: "1",
-  transition: "var(--quoll-control-transition, opacity 0.12s ease)",
 };
 const collapseToggleHover = {
   opacity: "1",

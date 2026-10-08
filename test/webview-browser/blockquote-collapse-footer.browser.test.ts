@@ -163,10 +163,32 @@ describe("blockquote collapse bar — rendered footer geometry (real Chromium)",
 
   it("4. callout: the bar's accent box-shadow equals the rows', caret outside and inside", async () => {
     const doc = `${["> [!note]", ...lines(12)].join("\n")}\n\npara`;
-    for (const caret of [OUTSIDE(doc), 12 /* inside the first body line → marker revealed */]) {
+    // Caret positions derive from the text: outside = past the callout, inside = on the
+    // first body line. Reveal is block-scoped, so the inside caret reveals the marker row.
+    const cases = [
+      { caret: OUTSIDE(doc), markerConcealed: true },
+      { caret: doc.indexOf("q1") + 1, markerConcealed: false },
+    ];
+    for (const { caret, markerConcealed } of cases) {
       view?.destroy();
       view = mount(doc, caret);
       await settled();
+      // Pin which state this iteration really is before comparing shadows.
+      const hidden = view.contentDOM.querySelector<HTMLElement>(
+        ".cm-line.quoll-callout-marker-hidden"
+      );
+      const revealed = view.contentDOM.querySelector<HTMLElement>(
+        ".cm-line.quoll-callout-marker:not(.quoll-callout-marker-hidden)"
+      );
+      if (markerConcealed) {
+        expect(hidden, "marker row concealed with the caret outside").not.toBeNull();
+        expect(revealed).toBeNull();
+        expect((hidden as HTMLElement).getBoundingClientRect().height).toBeLessThan(1);
+      } else {
+        expect(hidden).toBeNull();
+        expect(revealed, "marker row revealed with the caret inside").not.toBeNull();
+        expect((revealed as HTMLElement).getBoundingClientRect().height).toBeGreaterThan(0);
+      }
       const bar = barOf(view);
       const row = quoteRows(view).find((el) => el.classList.contains("quoll-callout"));
       expect(row).toBeDefined();
