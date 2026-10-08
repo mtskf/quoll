@@ -62,8 +62,12 @@ export interface HostSessionStepDeps {
    *  unique repo-wide, while a number goes stale on the next edit above it —
    *  as this one did, inside the very PR that added it.
    *  When the settlement's commit THREW, that recovery is what releases the lock
-   *  (see `isEditApplied`'s `applyEditSettled` / `disposed` comment). A throw from the
-   *  `disposed` transition needs no rescue of its own, but NOT because the barrier drops
+   *  (see `isEditApplied`'s `applyEditSettled` / `disposed` comment). A `disposed`
+   *  transition that RETURNS drops the deferred thunks in its own step, by
+   *  `isEditApplied`'s `false` verdict — no ordering involved. Only one that
+   *  THROWS (the rest of this paragraph) still leans on the panel's flag-first
+   *  order. A throw from the `disposed` transition needs no rescue of its own,
+   *  but NOT because the barrier drops
    *  anything IN THIS STEP: the panel sets its local `disposed` flag BEFORE
    *  dispatching the `disposed` event (`quoll-editor-panel.ts`'s
    *  `onDidDispose`), so `editSettledBarrier`'s `isDisposed()` already reads
@@ -110,11 +114,13 @@ export interface HostSessionStepDeps {
 /** The barrier verdict for `event`: `false` means DROP the deferred side
  *  channels (the edit cannot be shown to have landed, so they would read
  *  pre-edit bytes). It is NOT a biconditional on "failed apply settlement" —
- *  three different REASONS answer `false` — four arms, since the last reason
+ *  four different REASONS answer `false` — five arms, since the last reason
  *  owns two — and only the first is a failed settlement:
  *    - `applyEditSettled` with a non-ok outcome (the failed settlement proper);
  *    - `settlementTransitionFailed`, the write-lock recovery, which is
  *      outcome-blind and so may never claim the edit landed;
+ *    - `disposed`, which releases the lock without looking at any outcome
+ *      either, and cancels the deferred side channels outright;
  *    - both exhaustive `default` arms, which log and answer conservatively for
  *      a member nobody taught this function about.
  *  Exhaustive over BOTH discriminants
@@ -133,8 +139,8 @@ export function isEditApplied(event: HostSessionEvent): boolean {
     // `settle` fall into its own WAIT arm (still locked), never DRAIN, since
     // only `applyEditSettled` (settled in this same step), the
     // `settlementTransitionFailed` recovery committed when that settlement's
-    // transition THREW, and `disposed` (dropped via the barrier's own
-    // `isDisposed` check) ever release the lock.
+    // transition THREW, and `disposed` (its own `false` arm below) ever
+    // release the lock.
     case "seed":
     case "ready":
     case "edit":
@@ -143,8 +149,14 @@ export function isEditApplied(event: HostSessionEvent): boolean {
     case "themeChanged":
     case "viewStateVisible":
     case "editRejectedDeliveryFailed":
-    case "disposed":
       return true;
+    // Dispose cancels the deferred side channels: `false` ⇒ DROP, even if the
+    // panel's local `disposed` flag (the barrier's `isDisposed`) is not set
+    // yet, so the drop does not depend on the line order in `onDidDispose`.
+    // Not a claim that the edit failed — like the recovery below, this event
+    // releases the lock without looking at any outcome.
+    case "disposed":
+      return false;
     // The write-lock recovery: outcome-blind by design, so it can never claim
     // the edit landed. `false` ⇒ DROP the deferred side channels, the same
     // verdict the throwing settlement's own rescue passes. Today the recovery is
@@ -223,7 +235,9 @@ type SettlementEvent = Extract<HostSessionEvent, { readonly type: "applyEditSett
  *  `onDidDispose`), so the barrier's own `isDisposed()` check
  *  (`edit-settled-barrier.ts`) drops the deferred thunks there — a later,
  *  independent step, not this one. So no rescue is needed for a throw from
- *  `disposed` itself. */
+ *  `disposed` itself. (That flag-first order matters to the barrier ONLY on
+ *  this throwing path: a `disposed` transition that returns drops the thunks
+ *  in its own step, by `isEditApplied`'s `false` verdict.) */
 function releasesWriteLockOnCommit(event: HostSessionEvent): SettlementEvent | null {
   switch (event.type) {
     case "applyEditSettled":

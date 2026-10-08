@@ -390,8 +390,9 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // vscode-bound). Contract recap, since the ordering here is load-bearing:
     // the settle runs UNCONDITIONALLY — a throwing effect used to skip it and
     // strand a deferred side channel — and its `applied` verdict is read from
-    // the EVENT, false only for a FAILED apply settlement (then the deferred
-    // thunk is dropped: the edit never landed, so it would read pre-edit state).
+    // the EVENT, false for a FAILED apply settlement (then the deferred
+    // thunk is dropped: the edit never landed, so it would read pre-edit state)
+    // and for `disposed` (dropped too: the panel is going away).
     // It still runs AFTER the effects so a deferred side channel observes them
     // (the ack Document is already posted). Note WHY that ordering is NOT what
     // keeps a stash drain deferred: the re-acquired lock
@@ -1204,7 +1205,10 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       revertRescueWiring.prepareDispose();
       // Set the local guard FIRST (arms the executor / listener guards), then drive
       // the core's `disposed` transition (clears the write lock so any late
-      // settlement is a no-op), then tear down.
+      // settlement is a no-op), then tear down. The edit-settled barrier does
+      // not need this order: the `disposed` step drops the deferred side
+      // channels by its own verdict (`isEditApplied`). Flag-first stays as the
+      // defence for a `disposed` transition that throws.
       disposed = true;
       // Clear the format poster immediately so `quoll.format` can never forward
       // to a disposing panel. Primary guard; `post` (createEffectExecutor) is a
