@@ -16,8 +16,23 @@
 // has a different hot path and a different set of non-local edits. The frontier gate (an
 // incomplete parse can reveal nodes outside the changed span) therefore lives in the
 // client that wants the bounded path.
+//
+// Outer folds (Decision 6). The expanded "Show less" widget is a `side: 1` point at the
+// block's last-line end; a heading fold ends at its section's last node, i.e. the SAME
+// offset when the block closes the section, and the fold placeholder is a non-inclusive
+// inline replace — so the widget would render after it as an orphan ("# H … Show less").
+// Three rules follow, and they only work together:
+//   1. `assemble` omits the DECORATION of a record whose anchor a folded range covers, but
+//      keeps the record and its sticky `expanded` membership (unfold restores the bar).
+//   2. Records, not decorations, are the state of truth: `selectionEntersCollapsed` reads
+//      the records, because a suppressed record has no decoration left to find.
+//   3. A change of the folded set triggers a FULL rebuild (not a re-assemble). CodeMirror
+//      unfolds in the very transaction that moves the selection into a fold (search next,
+//      lint jump, outline click); fold gone + head inside a concealed range must give the
+//      EXPANDED shape in that same transaction, never a re-emitted collapsed replace over
+//      the caret. With no fold extension installed `foldedRanges` is empty: no effect.
 
-import { syntaxTree } from "@codemirror/language";
+import { foldedRanges, syntaxTree } from "@codemirror/language";
 import {
   type EditorSelection,
   type EditorState,
@@ -180,8 +195,23 @@ function buildRange<X>(
   return out;
 }
 
-/** Assemble the field state from a record list (dedupes + orders by blockFrom). */
-function assemble<X>(blocks: CollapseRecord<X>[]): CollapseState<X> {
+/** Is `pos` inside a folded range, i.e. would a decoration anchored there render beside
+ *  the fold placeholder? A range ending exactly at `pos` counts (the section-end case). */
+function hiddenByFold(state: EditorState, pos: number): boolean {
+  let hidden = false;
+  foldedRanges(state).between(pos, pos, (from, to) => {
+    if (from < pos && to >= pos) {
+      hidden = true;
+      return false;
+    }
+    return undefined;
+  });
+  return hidden;
+}
+
+/** Assemble the field state from a record list (dedupes + orders by blockFrom). Filters
+ *  decorations only — records are passed through by reference, never copied. */
+function assemble<X>(blocks: CollapseRecord<X>[], state: EditorState): CollapseState<X> {
   const sorted = [...blocks].sort((a, b) => a.blockFrom - b.blockFrom);
   const liveExpanded = new Set<number>();
   for (const b of sorted) {
@@ -190,7 +220,9 @@ function assemble<X>(blocks: CollapseRecord<X>[]): CollapseState<X> {
     }
   }
   const decorations = Decoration.set(
-    sorted.map((b) => b.deco.range(b.decoFrom, b.decoTo)),
+    sorted
+      .filter((b) => !hiddenByFold(state, b.decoFrom))
+      .map((b) => b.deco.range(b.decoFrom, b.decoTo)),
     true
   );
   return { expanded: liveExpanded, blocks: sorted, decorations };
@@ -201,23 +233,22 @@ export function buildCollapseState<X>(
   state: EditorState,
   expanded: ReadonlySet<number>
 ): CollapseState<X> {
-  return assemble(buildRange(spec, state, expanded, 0, state.doc.length));
+  return assemble(buildRange(spec, state, expanded, 0, state.doc.length), state);
 }
 
 /** DD2 fast-path: does any selection head sit inside a CURRENTLY-collapsed region
- *  (a block-replace range, from < to) of `prev`? The only selection-driven
+ *  (a collapsed record's [decoFrom, decoTo], from < to — read from the records, not the
+ *  decorations: a fold-suppressed record has none) of `prev`? The only selection-driven
  *  decoration change is auto-EXPAND (expanded blocks are sticky and never
  *  re-collapse on caret-leave), so a selection-only transaction needs a rebuild
  *  ONLY when a head newly enters a collapsed region. */
-function selectionEntersCollapsed(prev: DecorationSet, selection: EditorSelection): boolean {
-  const iter = prev.iter();
-  while (iter.value !== null) {
-    if (iter.from < iter.to && anyHeadInside(selection, iter.from, iter.to)) {
-      return true;
-    }
-    iter.next();
-  }
-  return false;
+function selectionEntersCollapsed<X>(
+  blocks: readonly CollapseRecord<X>[],
+  selection: EditorSelection
+): boolean {
+  return blocks.some(
+    (b) => !b.expanded && b.decoFrom < b.decoTo && anyHeadInside(selection, b.decoFrom, b.decoTo)
+  );
 }
 
 /** Reconstruct a reused record at shifted positions (bytes unchanged → geometry shifts
@@ -290,7 +321,7 @@ function computeBounded<X>(
       byFrom.set(r.blockFrom, r); // fresh wins (a block spanning two intervals de-dupes)
     }
   }
-  return assemble([...byFrom.values()]);
+  return assemble([...byFrom.values()], tr.state);
 }
 
 /** The collapsible block whose key is `key`, or null — recomputed FRESH at click time (no
@@ -412,10 +443,16 @@ export function defineLineCollapseField<X>(
       if (syntaxTree(tr.startState) !== syntaxTree(tr.state)) {
         return buildCollapseState(spec, tr.state, working);
       }
-      // 6. Selection-only: rebuild ONLY when a head enters a currently-collapsed region
+      // 6. Fold set changed (no doc change) → FULL rebuild so auto-expand is re-evaluated
+      //    against the new folds in this same transaction (header, rule 3). `RangeSet.map`
+      //    returns `this` for empty changes, so a plain caret move never trips this.
+      if (foldedRanges(tr.startState) !== foldedRanges(tr.state)) {
+        return buildCollapseState(spec, tr.state, working);
+      }
+      // 7. Selection-only: rebuild ONLY when a head enters a currently-collapsed region
       //    (auto-expand). Otherwise decorations are unchanged — return `prev` verbatim.
       const selectionMoved = !tr.startState.selection.eq(tr.state.selection);
-      if (selectionMoved && selectionEntersCollapsed(prev.decorations, tr.state.selection)) {
+      if (selectionMoved && selectionEntersCollapsed(prev.blocks, tr.state.selection)) {
         return buildCollapseState(spec, tr.state, working);
       }
       return prev;

@@ -6,6 +6,7 @@
 // contract, the top-level gate, reseed, and that the feature is VIEW-ONLY (no transaction
 // it dispatches changes the document).
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
+import { foldable, foldEffect, foldedRanges, unfoldEffect } from "@codemirror/language";
 import { EditorSelection, EditorState, type Extension, type Transaction } from "@codemirror/state";
 import { type DecorationSet, EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
@@ -22,6 +23,7 @@ import { CALLOUT_CLASS } from "../../../src/webview/cm/decorations/callout.js";
 import { calloutMarkerConcealField } from "../../../src/webview/cm/decorations/callout-marker-conceal.js";
 import { quollSyntaxReveal } from "../../../src/webview/cm/decorations/index.js";
 import { fencedCodeCollapseField } from "../../../src/webview/cm/fenced-code/fenced-code-collapse.js";
+import { quollFolding } from "../../../src/webview/cm/fold/index.js";
 import { hostDocumentReseed } from "../../../src/webview/cm/host-reseed.js";
 import { settledState } from "../helpers/settled-state.js";
 import { settledMount } from "../helpers/settled-view.js";
@@ -428,6 +430,187 @@ describe("blockquoteCollapseField — combined registration", () => {
       expect(firstLineRendered()).toBe(true);
     } finally {
       view.destroy();
+    }
+  });
+});
+
+describe("blockquoteCollapseField — outer fold", () => {
+  const QUOTE_BAR = ".quoll-blockquote-collapse-bar";
+
+  function foldMount(doc: string, caret = 0): { view: EditorView; txs: Transaction[] } {
+    const txs: Transaction[] = [];
+    const view = mountWith(doc, caret, [
+      quollFolding(),
+      EditorView.updateListener.of((u) => {
+        txs.push(...u.transactions);
+      }),
+    ]);
+    return { view, txs };
+  }
+
+  /** The heading's fold range, asked of the repo's own foldService (not hand-spelled). */
+  function headingRange(view: EditorView): { from: number; to: number } {
+    const line = view.state.doc.line(1);
+    const r = foldable(view.state, line.from, line.to);
+    if (r === null) {
+      throw new Error("heading does not fold");
+    }
+    return r;
+  }
+
+  const fold = (view: EditorView, r: { from: number; to: number }): void =>
+    view.dispatch({ effects: foldEffect.of(r) });
+  const unfold = (view: EditorView, r: { from: number; to: number }): void =>
+    view.dispatch({ effects: unfoldEffect.of(r) });
+  const expand = (view: EditorView, key: number): void =>
+    view.dispatch({ effects: setBlockquoteCollapseEffect.of({ key, expanded: true }) });
+  const barLabel = (view: EditorView): string | null =>
+    view.dom.querySelector(`${QUOTE_BAR} .quoll-blockquote-collapse-label`)?.textContent ?? null;
+  const fieldState = (view: EditorView) => view.state.field(blockquoteCollapseField);
+  const allText = (view: EditorView): string => view.dom.textContent ?? "";
+
+  function expectExpandedAndUncovered(view: EditorView): void {
+    const d = decos(view.state);
+    expect(d).toHaveLength(1);
+    expect(d[0].widget?.expanded).toBe(true);
+    const head = view.state.selection.main.head;
+    for (const x of d) {
+      expect(x.from < x.to && head >= x.from && head <= x.to).toBe(false);
+    }
+  }
+
+  const collapsedDoc = `# H\n\n${quote(18)}`;
+
+  it("1. a heading fold over a quote that ends the document hides the Show-less bar; unfold brings it back", () => {
+    const { view } = foldMount(`# H\n\n${quote(14)}`);
+    try {
+      const key = view.state.doc.line(3).from;
+      expand(view, key);
+      expect(allText(view)).toContain("Show less");
+      const r = headingRange(view);
+      fold(view, r);
+      expect(view.dom.querySelector(QUOTE_BAR)).toBeNull();
+      expect(fieldState(view).decorations.size).toBe(0);
+      expect(fieldState(view).expanded.has(key)).toBe(true);
+      unfold(view, r);
+      expect(barLabel(view)).toBe("Show less");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("2. same when the quote is the last block before the next heading", () => {
+    const { view } = foldMount(`# H\n\n${quote(14)}\n\n# Next\n\ntail`);
+    try {
+      const key = view.state.doc.line(3).from;
+      expand(view, key);
+      const r = headingRange(view);
+      fold(view, r);
+      expect(view.dom.querySelector(QUOTE_BAR)).toBeNull();
+      expect(fieldState(view).decorations.size).toBe(0);
+      expect(fieldState(view).expanded.has(key)).toBe(true);
+      unfold(view, r);
+      expect(barLabel(view)).toBe("Show less");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("3. a collapsed quote under the fold shows no bar while folded and gets it back on unfold", () => {
+    const { view } = foldMount(collapsedDoc);
+    try {
+      expect(barLabel(view)).toBe("Show 8 more lines");
+      const r = headingRange(view);
+      fold(view, r);
+      expect(view.dom.querySelector(QUOTE_BAR)).toBeNull();
+      expect(fieldState(view).decorations.size).toBe(0);
+      unfold(view, r);
+      expect(barLabel(view)).toBe("Show 8 more lines");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("4. a fold in a section that does not contain the quote leaves its decoration in place", () => {
+    const { view } = foldMount(`# A\n\nbody\n\n# H\n\n${quote(18)}`);
+    try {
+      const before = decos(view.state);
+      expect(before).toHaveLength(1);
+      const line = view.state.doc.line(1);
+      const r = foldable(view.state, line.from, line.to);
+      if (r === null) {
+        throw new Error("section A does not fold");
+      }
+      expect(r.to).toBeLessThan(before[0].from);
+      fold(view, r);
+      const after = decos(view.state);
+      expect(after).toHaveLength(1);
+      expect(after[0].from).toBe(before[0].from);
+      expect(after[0].to).toBe(before[0].to);
+      // Fold-set changes rebuild fully (new widget instances), so compare by value.
+      expect(after[0].widget?.key).toBe(before[0].widget?.key);
+      expect(after[0].widget?.expanded).toBe(before[0].widget?.expanded);
+      expect(after[0].widget?.hiddenCount).toBe(before[0].widget?.hiddenCount);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("5. a jump into a folded, collapsed quote unfolds AND expands it (never a replace over the caret)", () => {
+    const { view } = foldMount(collapsedDoc);
+    try {
+      fold(view, headingRange(view));
+      expect(foldedRanges(view.state).size).toBe(1);
+      view.dispatch({ selection: { anchor: view.state.doc.line(3 + 14).from } });
+      expect(foldedRanges(view.state).size).toBe(0);
+      expectExpandedAndUncovered(view);
+      expect(barLabel(view)).toBe("Show less");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("6. unfold + a selection move into the quote in ONE transaction gives the expanded shape", () => {
+    const { view } = foldMount(collapsedDoc);
+    try {
+      const r = headingRange(view);
+      fold(view, r);
+      view.dispatch({
+        effects: unfoldEffect.of(r),
+        selection: { anchor: view.state.doc.line(3 + 14).from },
+      });
+      expect(foldedRanges(view.state).size).toBe(0);
+      expectExpandedAndUncovered(view);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("7. none of the fold / unfold / jump transactions changes the document", () => {
+    const a = foldMount(`# H\n\n${quote(14)}`);
+    const b = foldMount(collapsedDoc);
+    try {
+      const key = a.view.state.doc.line(3).from;
+      expand(a.view, key);
+      const ra = headingRange(a.view);
+      fold(a.view, ra);
+      unfold(a.view, ra);
+
+      const rb = headingRange(b.view);
+      fold(b.view, rb);
+      b.view.dispatch({ selection: { anchor: b.view.state.doc.line(3 + 14).from } });
+      fold(b.view, headingRange(b.view));
+      b.view.dispatch({
+        effects: unfoldEffect.of(headingRange(b.view)),
+        selection: { anchor: b.view.state.doc.line(3 + 15).from },
+      });
+
+      const all = [...a.txs, ...b.txs];
+      expect(all.length).toBeGreaterThan(0);
+      expect(all.every((tr) => !tr.docChanged)).toBe(true);
+    } finally {
+      a.view.destroy();
+      b.view.destroy();
     }
   });
 });
