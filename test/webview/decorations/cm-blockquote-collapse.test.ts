@@ -351,6 +351,18 @@ describe("blockquoteCollapseField — scope gate", () => {
     expect(d[0].from).toBeGreaterThan(fmEnd);
     expect(d[0].widget?.expanded).toBe(false);
   });
+
+  it("14c. a quote starting on the line right after the closing fence still collapses", () => {
+    // Pins the guard's upper bound: no blank line between `---` and the quote.
+    const frontmatter = "---\ntitle: x\n---\n";
+    const state = stateWith(`${frontmatter}${quote(14)}`);
+    expect(leadingFrontmatterEnd(state)).toBeGreaterThan(0);
+    expect(leadingFrontmatterEnd(state)).toBeLessThanOrEqual(frontmatter.length);
+    const field = state.field(blockquoteCollapseField);
+    expect(field.blocks).toHaveLength(1);
+    expect(field.blocks[0].key).toBe(frontmatter.length);
+    expect(field.blocks[0].hiddenCount).toBe(4);
+  });
 });
 
 describe("blockquoteCollapseField — reseed, isolation, stale keys", () => {
