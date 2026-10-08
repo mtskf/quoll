@@ -583,17 +583,17 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
   // Assume NOT writable on a throw. That is a real trade-off, not a free win:
   // `canDrain` does NOT consult `canWrite`, so a false negative still runs the
   // drain, `decideEdit` then returns `readonly`, and the core's `readonly` arm
-  // drops the stash WITHOUT a showError. While the panel is alive the keystroke
-  // survives regardless — the webview's single-flight replay buffer
+  // drops the stash. While the panel is alive the keystroke survives
+  // regardless — the webview's single-flight replay buffer
   // (`webview/cm/edit-sync.ts`) still holds it and re-posts after the reseed.
-  // Post-dispose the stash is the only carrier and that keystroke is lost. That
-  // loss is PRE-EXISTING and NOT introduced by this fallback — the identical
-  // drop happens for a genuine read-only flip mid-flight, and it is strictly
-  // better than the behaviour this arm replaced (an unguarded throw stranded the
-  // lock, losing that keystroke AND every later edit for the session). Tracked
-  // as its own TODO. The alternative here is worse: optimistically claiming
-  // writability would let the reducer replay a write we could not confirm is
-  // permitted.
+  // Post-dispose the stash is the only carrier: that keystroke is lost, and the
+  // core's disposed readonly arm surfaces the loss as a toast. That loss is
+  // PRE-EXISTING and NOT introduced by this fallback — the identical drop
+  // happens for a genuine read-only flip mid-flight, and it is strictly better
+  // than the behaviour this arm replaced (an unguarded throw stranded the lock,
+  // losing that keystroke AND every later edit for the session). The
+  // alternative here is worse: optimistically claiming writability would let
+  // the reducer replay a write we could not confirm is permitted.
   const readCanWrite = (): boolean => {
     try {
       return deps.canWrite();

@@ -442,8 +442,9 @@ const postDoc = (s: HostSessionState, docVersion: number): HostSessionEffect => 
 // return in the `applyEditSettled` case) builds only failure toasts, so the pair
 // is not even constructed; the undrainable arm keeps only `showError`s from the
 // settlement effects; a stash that DRAINS post-dispose never calls
-// `ackEffects` at all (the drain's readonly/stale/no-op arm returns `[]` when
-// disposed, and its accept / parse-failed arms post no Document); and the
+// `ackEffects` at all (the drain's readonly/stale/no-op arm emits at most a
+// dropped-stash `showError` when disposed — never a Document — and its accept /
+// parse-failed arms post no Document); and the
 // recovery arm, whose disposed branch emits only its toast + triage and never
 // calls `ackEffects`. Deliberate in all four: there is no view left to resync,
 // and the only loss worth reporting there (a dropped stash) has its own toast.
@@ -1336,11 +1337,35 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
             // content, not on the label, so a drain that lands here at an
             // unobserved label takes the withhold arm. The shared `ackEffects` is
             // what keeps this site and `settlementEffects` from drifting apart.
+            //
+            // POST-DISPOSE a `readonly` verdict is the one LOSS in this arm: alive,
+            // the repost shows the user their edit reverting; disposed, the stash
+            // was the keystroke's only carrier (no webview, no replay buffer), so
+            // it gets a toast like the parse-failed arm above. `decideEdit` checks
+            // readonly BEFORE content equality, so the stash may already carry the
+            // settled text — nothing was lost then, and the toast would be a false
+            // alarm. `stale` (unreachable here, the base is current by
+            // construction) and `no-op` stay silent. The wording does not claim
+            // the file IS read-only: `canWrite: false` also covers the executor's
+            // fallback for a writability read that threw, and the reducer cannot
+            // tell the two apart.
+            if (state.disposed) {
+              return {
+                state: settled,
+                effects:
+                  verdict.kind === "readonly" && !sameTextIgnoringEol(stash.content, observed)
+                    ? [
+                        {
+                          type: "showError",
+                          message: `Quoll could not confirm ${state.context.fsPath} was writable, so your last change was not saved, and the editor closed before it could be shown. Reopen the file to check its contents.`,
+                        },
+                      ]
+                    : [],
+              };
+            }
             return {
               state: settled,
-              effects: state.disposed
-                ? []
-                : ackEffects(ackLabelObserved, settled, heldBase, state.context),
+              effects: ackEffects(ackLabelObserved, settled, heldBase, state.context),
             };
           default: {
             const _exhaustive: never = verdict;
