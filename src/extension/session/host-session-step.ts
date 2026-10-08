@@ -62,7 +62,8 @@ export interface HostSessionStepDeps {
    *  unique repo-wide, while a number goes stale on the next edit above it —
    *  as this one did, inside the very PR that added it.
    *  When the settlement's commit THREW, that recovery is what releases the lock
-   *  (see `isEditApplied`'s `applyEditSettled` / `disposed` comment). A `disposed`
+   *  (see the lock-release list in the comment above `isEditApplied`'s
+   *  `case "seed"` group). A `disposed`
    *  transition that RETURNS drops the deferred thunks in its own step, by
    *  `isEditApplied`'s `false` verdict — no ordering involved. Only one that
    *  THROWS (the rest of this paragraph) still leans on the panel's flag-first
