@@ -205,10 +205,11 @@ function hiddenByFold(folded: ReturnType<typeof foldedRanges>, pos: number): boo
   return hidden;
 }
 
-/** Assemble the field state from a record list (dedupes + orders by blockFrom). Filters
- *  decorations only — records are passed through by reference, never copied. The folded
- *  set is fetched once, and the filter is skipped when no fold exists (the fenced typing
- *  path pays nothing). */
+/** Assemble the field state from a record list: orders by blockFrom. It does NOT dedupe —
+ *  the caller passes at most one record per block (computeBounded's `byFrom` map is what
+ *  guarantees that). Filters decorations only — records are passed through by reference,
+ *  never copied. The folded set is fetched once, and the filter is skipped when no fold
+ *  exists (the fenced typing path pays nothing). */
 function assemble<X>(blocks: CollapseRecord<X>[], state: EditorState): CollapseState<X> {
   const sorted = [...blocks].sort((a, b) => a.blockFrom - b.blockFrom);
   const liveExpanded = new Set<number>();

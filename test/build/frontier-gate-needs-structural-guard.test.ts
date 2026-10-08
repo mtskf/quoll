@@ -49,7 +49,7 @@
 //     which holds no such call); it is a DIFFERENT disjunction from the structural guard's,
 //     and its actual structural check (`touchesStructural` + `topLevelBoundaryRisk`) is the
 //     first term of that same plan. It is not migrated to `requiresFullBoundedRebuild` —
-//     see the comment at its own call site and fenced-code-collapse.ts's header.
+//     see the comment at its own call site and structural-guard.ts's header.
 //   - every other file — 0.
 //
 // Two further assertions close the gap a call-count alone cannot: (a) `structural-guard.ts`

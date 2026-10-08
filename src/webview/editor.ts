@@ -557,9 +557,10 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // EditorView.theme like quollCopyButtonTheme so it overrides CM's unlayered
         // `.cm-line` rules — see cm/theme.ts.
         quollFencedHeaderBarTheme,
-        // Collapse-bar styling for long fenced blocks (fenced-code-collapse-widget.ts).
-        // An EditorView.theme like quollCopyButtonTheme so it overrides CM's
-        // unlayered `.cm-line` rules — see cm/theme.ts.
+        // Collapse-bar styling for long fenced blocks and long blockquotes
+        // (cm/collapse/collapse-toggle-widget.ts). An EditorView.theme like
+        // quollCopyButtonTheme so it overrides CM's unlayered `.cm-line` rules — see
+        // cm/theme.ts.
         quollCollapseToggleTheme,
         quollSyntaxReveal(),
         // Fold gutter (PURE UI activation: codeFolding + foldGutter +

@@ -1193,14 +1193,18 @@ export const fencedHeaderBarThemeSpec: Record<string, Record<string, string>> = 
 
 export const quollFencedHeaderBarTheme = EditorView.theme(fencedHeaderBarThemeSpec);
 
-// "Show more" / "Show less" collapse bar for long fenced code blocks
-// (fenced-code-collapse-widget.ts). Separate EditorView.theme (not styles.css) for
+// "Show more" / "Show less" collapse bar for long fenced code blocks AND long top-level
+// blockquotes. One shared renderer (collapse/collapse-toggle-widget.ts) builds both bars;
+// each client widget supplies its own class names (`.quoll-fenced-collapse-*` /
+// `.quoll-blockquote-collapse-*`). Separate EditorView.theme (not styles.css) for
 // the same reason as copyButtonThemeSpec: it must beat CodeMirror's UNLAYERED
 // baseTheme `.cm-line` rules. The bar is a full-width clickable row that blends
-// with the code panel (same navy surface tint as .cm-line.quoll-fenced-code) so it
-// reads as part of the block, set slightly dimmer until hover. Exported as a plain
-// spec so cm-fenced-code-collapse.test.ts can pin the contract. Height/placement
-// are verified in the real-browser harness (not assertable in happy-dom).
+// with its panel (same navy surface tint as .cm-line.quoll-fenced-code) so it
+// reads as part of the block. The toggle is link-coloured at FULL opacity — there is no
+// resting dim (see collapseToggle). Exported as a plain spec so
+// cm-fenced-code-collapse.test.ts and cm-blockquote-collapse.test.ts can pin the
+// contract. Height/placement are verified in the real-browser harness (not assertable
+// in happy-dom).
 // The rounded, padded footer edge shared by the collapse bar's TWO footer states —
 // the collapsed "Show more" bar AND the expanded "Show less" bar when it is the panel's
 // visible bottom. Both are the panel's TRUE bottom, so they draw the same bottom edge as
@@ -1287,12 +1291,14 @@ export const collapseToggleThemeSpec = {
     marginBottom: "0.3em",
   },
   // COLLAPSED-state footer: in the collapsed state the closing fence line falls
-  // inside the Decoration.replace concealed range (buildFencedCollapse), so this
+  // inside the Decoration.replace concealed range (recordFor in
+  // collapse/line-collapse-field.ts, fed by fencedCollapseTarget.blockFor), so this
   // "Show more" bar is the panel's visible bottom. It reads as a finished rounded
-  // panel via the shared footer corner. State class (`-collapsed`) toggled by
-  // FencedCollapseToggleWidget.toDOM.
+  // panel via the shared footer corner. State class (`-collapsed`) toggled by the
+  // shared renderer (renderCollapseBar, collapse/collapse-toggle-widget.ts) for BOTH
+  // the fenced and the blockquote bar.
   //
-  // The collapsed conceal range (buildFencedCollapse via fencedBlockGeometry.collapseTo)
+  // The collapsed conceal range (fencedBlockGeometry.collapseTo → CollapseBlock.collapseTo)
   // EXTENDS over the closing fence line, so a caret parked ON the closing fence counts
   // as inside the concealed region and AUTO-EXPANDS the block (the same auto-unfold a
   // caret on a hidden body line triggers — no new rebuild trigger; the existing
@@ -1303,7 +1309,8 @@ export const collapseToggleThemeSpec = {
   ".quoll-fenced-collapse-bar-collapsed": collapseBarFooterCorner,
   ".quoll-blockquote-collapse-bar-collapsed": collapseBarFooterCorner,
   // EXPANDED-state footer. The "Show less" bar is a `side:1` block widget planted
-  // AFTER the last body line (buildFencedCollapse, at concealTo), so the row directly
+  // AFTER the last body line (recordFor / toggleDecoration in
+  // collapse/line-collapse-field.ts, at concealTo), so the row directly
   // BELOW it is the closing fence — which is either REVEALED (caret in the block, its
   // ``` row carries a rounded `.quoll-fenced-code-close`) or CONCEALED (caret out, its
   // row collapses to the zero-height `.quoll-fenced-code-fence-hidden` and block-style
