@@ -20,11 +20,14 @@
 // meaningless — `Table` is subtracted too. The keep-foldable set is therefore
 // headings and lists; everything else is subtracted here.
 //
-// This is a NODE-TYPE override, so on its own it would leave a list or heading
-// nested in a blockquote foldable — the inner node owns that fold. Nothing folds
-// inside a blockquote, though, so the two surviving fold paths (listItemFold and
-// the headerIndent foldService below) each check for a Blockquote ancestor
-// (`insideBlockquote`; pinned in cm-fold-blockquote.test.ts). A table nested in a list
+// A NODE-TYPE subtraction on its own would leave anything else nested in a
+// blockquote foldable — the inner node owns that fold (a ListItem, a heading, or
+// any Block upstream's broad rule still folds: HTMLBlock, CommentBlock,
+// LinkReference, …). Nothing folds inside a blockquote, though, so there is one
+// Blockquote-ancestor gate (`insideBlockquote`) per fold seam: `nonFoldableBlocks`
+// wraps EVERY foldNodeProp fold in it, whatever the node type, and the
+// headerIndent foldService below checks it for headings (pinned in
+// cm-fold-blockquote.test.ts). A table nested in a list
 // item leaves the ListItem fold intact (the chevron sits on the list's marker
 // line, never on a table row) — EXCEPT the tight shape where the table starts on
 // the marker line itself (`- | a | b |\n…`): there the table's block widget
@@ -57,6 +60,9 @@ import { leadingFrontmatterEnd } from "./frontmatter/detect.js";
 // decorations/block-style.ts).
 type SyntaxNode = ReturnType<typeof syntaxTree>["topNode"];
 
+type FoldRange = { from: number; to: number };
+type FoldFn = (node: SyntaxNode, state: EditorState) => FoldRange | null;
+
 // A ListItem's first content node — the leading ListMark (`-` / `1.`) is skipped
 // so the caller inspects the item's actual body (a Paragraph, a Table, a nested
 // list…), not the marker.
@@ -72,9 +78,10 @@ function firstContentChild(node: SyntaxNode): SyntaxNode | null {
 //      emits no competing table widget inside it (`m.from < fmEnd`). A marker-line
 //      table inside a frontmatter fence parses, but renders as raw source with no
 //      widget (Codex Conf-74).
-//   2. parseTable rejects the per-node slice — a blockquote-nested table
-//      (continuation lines bear `>` markers) or a malformed slice (cell-count
-//      mismatch). Both render as raw source (Codex Conf-84).
+//   2. parseTable rejects the per-node slice — a malformed slice (cell-count
+//      mismatch), which renders as raw source (Codex Conf-84). A blockquote-nested
+//      table is rejected the same way, but never gets here: the blockquote gate in
+//      `nonFoldableBlocks` answers for a quoted ListItem before listItemFold runs.
 // (buildAll's third gate, a degenerate zero-width block range, is unreachable for a
 // ListItem's first-content Table, which always spans at least the marker line.)
 function tableEmitsBlockWidget(state: EditorState, from: number, to: number): boolean {
@@ -93,10 +100,10 @@ function tableEmitsBlockWidget(state: EditorState, from: number, to: number): bo
 // too). Nothing folds in there: the quote's own `padding-top` + outer-gap border
 // are not something the fold gutter compensates for, so a chevron on a quoted
 // heading/list line lands vertically off — and a fold inside a quote is not an
-// affordance worth compensating for. `nonFoldableBlocks` alone cannot express
-// this: it subtracts by NODE TYPE, and a ListItem or heading nested in the quote
-// owns its own fold, so BOTH fold paths ask this — `listItemFold` (foldNodeProp)
-// and `headerIndent` (foldService). An ANCESTOR walk, not a parent check, so a
+// affordance worth compensating for. Subtracting by NODE TYPE cannot express
+// this — whatever is nested in the quote owns its own fold — so each fold seam
+// asks this once: `nonFoldableBlocks` for every foldNodeProp fold, `headerIndent`
+// for the heading foldService. An ANCESTOR walk, not a parent check, so a
 // heading in a list in a quote (`> - # H`) is covered while a heading in a
 // top-level list (`- # H`) is left alone.
 function insideBlockquote(node: SyntaxNode): boolean {
@@ -118,16 +125,14 @@ function insideBlockquote(node: SyntaxNode): boolean {
 // Returning null suppresses that lone chevron. The emit guard is load-bearing: a
 // marker-line table that emits NO widget (inside leading frontmatter, or a slice
 // parseTable rejects) renders as raw source, so its list fold must be kept. An
-// item inside a blockquote never folds at all (`insideBlockquote`), whatever its
-// body. Every other genuine list fold (a table on a continuation line,
-// a plain multi-line body) keeps the default range. lang-markdown folds ListItem
-// via its broad `type => …` Block foldNodeProp, and this object-form `.add`
-// OVERRIDES that per node type (same mechanism as the Table/Paragraph/Blockquote
-// subtractions below). Pinned by cm-fold-blockquote.test.ts.
-function listItemFold(node: SyntaxNode, state: EditorState): { from: number; to: number } | null {
-  if (insideBlockquote(node)) {
-    return null;
-  }
+// item inside a blockquote never folds at all, whatever its body — that is the
+// gate in `nonFoldableBlocks`, not a check here. Every other genuine list fold (a
+// table on a continuation line, a plain multi-line body) keeps the default range.
+// lang-markdown folds ListItem via its broad `type => …` Block foldNodeProp, and
+// the `foldOverrides` entry REPLACES that for this node type (same mechanism as
+// the Table/Paragraph/Blockquote subtractions below). Pinned by
+// cm-fold-blockquote.test.ts.
+function listItemFold(node: SyntaxNode, state: EditorState): FoldRange | null {
   const content = firstContentChild(node);
   if (
     content?.type.name === "Table" &&
@@ -139,15 +144,30 @@ function listItemFold(node: SyntaxNode, state: EditorState): { from: number; to:
   return { from: state.doc.lineAt(node.from).to, to: node.to };
 }
 
+// Per-type subtractions / overrides; any Block type not named here keeps
+// upstream's fold.
+const foldOverrides: Record<string, FoldFn> = {
+  Blockquote: () => null,
+  Paragraph: () => null,
+  FencedCode: () => null,
+  CodeBlock: () => null,
+  Table: () => null,
+  ListItem: listItemFold,
+};
+
 export const nonFoldableBlocks: MarkdownExtension = {
   props: [
-    foldNodeProp.add({
-      Blockquote: () => null,
-      Paragraph: () => null,
-      FencedCode: () => null,
-      CodeBlock: () => null,
-      Table: () => null,
-      ListItem: listItemFold,
+    // Function-form source: Lezer hands it the PRE-extension type, so
+    // `type.prop(foldNodeProp)` is upstream's fold for EVERY Block type (HTMLBlock,
+    // CommentBlock, LinkReference, …). One blockquote gate wraps that and our
+    // overrides, so no foldNodeProp fold survives inside a quote — including Block
+    // types a future lang-markdown adds. A type with no fold stays without one.
+    foldNodeProp.add((type) => {
+      const base = foldOverrides[type.name] ?? type.prop(foldNodeProp);
+      if (!base) {
+        return undefined;
+      }
+      return (node, state) => (insideBlockquote(node) ? null : base(node, state));
     }),
   ],
 };
