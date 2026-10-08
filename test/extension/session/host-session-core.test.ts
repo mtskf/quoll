@@ -627,9 +627,16 @@ describe("host-session-core: applyEditSettled drain", () => {
       lockedWithStash("edit1", "edit1plus", { disposed: true }),
       settled({ settledVersion: 2, canWrite: false, currentContent: "edit1" })
     );
-    expect(r.effects).toEqual([
-      { type: "showError", message: expect.stringContaining(ctx.fsPath) },
-    ]);
+    expect(r.effects).toHaveLength(1);
+    expect(r.effects[0]).toMatchObject({
+      type: "showError",
+      message: expect.stringContaining(ctx.fsPath),
+    });
+    // The wording must not assert a cause the reducer cannot know:
+    // `canWrite: false` is also what the executor reports when the writability
+    // read itself threw.
+    expect(r.effects[0]).toMatchObject({ message: expect.stringContaining("could not confirm") });
+    expect(r.effects[0]).toMatchObject({ message: expect.not.stringContaining("is not writable") });
   });
 
   it.each([
