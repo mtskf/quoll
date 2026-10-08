@@ -34,8 +34,8 @@ export interface BlockquoteBlockGeometry {
 }
 
 /** Geometry for `node` iff it is a TOP-LEVEL Blockquote of more than COLLAPSE_THRESHOLD
- *  source lines outside the leading frontmatter; null otherwise. Every line of the node counts (nested `> >`, lazy
- *  continuation, a callout's marker row). */
+ *  source lines outside the leading frontmatter; null otherwise. Every line of the node
+ *  counts (nested `> >`, lazy continuation, a callout's marker row). */
 export function blockquoteBlockGeometry(
   state: EditorState,
   node: SyntaxNode
