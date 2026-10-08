@@ -1,5 +1,5 @@
 // Node-agnostic reducer behind the "Show more" collapse of long top-level blocks. A client
-// (fenced code today) supplies a `LineCollapseSpec`: which Lezer node to look at, the
+// (fenced code, blockquote) supplies a `LineCollapseSpec`: which Lezer node to look at, the
 // block's geometry, its toggle widget, and its doc-change invalidation policy. This file
 // owns everything else: sticky expanded keys, host-reseed reset, the auto-expand of a
 // selection head inside a concealed range, record reuse, and the toggle command.
@@ -124,6 +124,15 @@ function anyHeadInside(selection: EditorSelection, from: number, to: number): bo
   return false;
 }
 
+/** The decoration carrying a block's toggle widget: expanded → a side:1 point widget
+ *  ("Show less" after the last line); collapsed → a block replace over the concealed
+ *  range ("Show more"). */
+function toggleDecoration(widget: QuollWidget, expanded: boolean): Decoration {
+  return expanded
+    ? Decoration.widget({ widget, block: true, side: 1 })
+    : Decoration.replace({ widget, block: true });
+}
+
 /** Build the record for one collapsible block. Collapsed → a block replace over
  *  [concealFrom, collapseTo]; expanded → a side:1 point widget at concealTo. `blockTo`
  *  is the LIVENESS extent, distinct from the decoration range. */
@@ -138,28 +147,15 @@ function recordFor<X>(
     hiddenCount: g.hiddenCount,
     extra: g.extra,
   });
-  if (isExpanded) {
-    return {
-      key: g.key,
-      blockFrom: g.key,
-      blockTo: g.blockTo,
-      expanded: true,
-      hiddenCount: g.hiddenCount,
-      decoFrom: g.concealTo,
-      decoTo: g.concealTo,
-      deco: Decoration.widget({ widget, block: true, side: 1 }),
-      extra: g.extra,
-    };
-  }
   return {
     key: g.key,
     blockFrom: g.key,
     blockTo: g.blockTo,
-    expanded: false,
+    expanded: isExpanded,
     hiddenCount: g.hiddenCount,
-    decoFrom: g.concealFrom,
-    decoTo: g.collapseTo,
-    deco: Decoration.replace({ widget, block: true }),
+    decoFrom: isExpanded ? g.concealTo : g.concealFrom,
+    decoTo: isExpanded ? g.concealTo : g.collapseTo,
+    deco: toggleDecoration(widget, isExpanded),
     extra: g.extra,
   };
 }
@@ -283,9 +279,6 @@ function shiftRecord<X>(
     hiddenCount: b.hiddenCount,
     extra: b.extra,
   });
-  const deco = b.expanded
-    ? Decoration.widget({ widget, block: true, side: 1 })
-    : Decoration.replace({ widget, block: true });
   return {
     key,
     blockFrom,
@@ -294,7 +287,7 @@ function shiftRecord<X>(
     hiddenCount: b.hiddenCount,
     decoFrom,
     decoTo,
-    deco,
+    deco: toggleDecoration(widget, b.expanded),
     extra: b.extra,
   };
 }

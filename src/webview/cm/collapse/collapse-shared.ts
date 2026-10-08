@@ -1,4 +1,4 @@
-// Primitives shared by every line-collapse client (fenced code today): the threshold and
+// Primitives shared by every line-collapse client (fenced code, blockquote): the threshold and
 // the selection-parking helper. Moved verbatim out of fenced-code-collapse-state.ts, which
 // re-exports both so no importer changes.
 

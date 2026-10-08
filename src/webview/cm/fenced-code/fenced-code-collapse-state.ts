@@ -91,8 +91,10 @@ export function fencedBlockGeometry(
   };
 }
 
-/** Resolve the collapsible FencedCode whose open line.from === `key`. Used by the
- *  toggle command to recompute FRESH geometry at click time (no stale closure).
+/** Resolve the collapsible FencedCode whose open line.from === `key`, with FRESH
+ *  geometry (no stale closure). The toggle command now resolves its block through the
+ *  shared `findCollapseBlockAt` (../collapse/line-collapse-field.ts), which uses the same
+ *  walk; this fenced-typed lookup stays as the unit-tested pin of that keying rule.
  *
  *  DD1: keyed by `doc.lineAt(node.from).from`, matched via `tree.iterate` — NOT
  *  `resolveInner(key, 1)`. For an INDENTED fence (`  ```js`) the key is the line
