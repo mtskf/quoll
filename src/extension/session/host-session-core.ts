@@ -459,10 +459,10 @@ function withholdAckEffects(
     // fallback console call: that one is absorbed by `reportContained`'s inert
     // catch, so the effect loop still reaches the next effect and the signal
     // still goes out. It defends against the guard being REMOVED by a future
-    // edit — and ONLY that. It does NOT cover the unguarded positions
+    // edit — and ONLY that. It does NOT cover the unguarded pure-literal builders
     // `effect-executor.ts`'s `case "logWarn"` ⚠️ lists: no list that reaches this
-    // helper evaluates a builder (`ackEffects`' three call sites compose none), so
-    // a builder throw either precedes the pair — which then never runs — or
+    // helper evaluates one (`ackEffects`' three call sites compose none), so a
+    // builder throw either precedes the pair — which then never runs — or
     // follows it, and the order changes neither. Same rule as the settlement's
     // toast-before-reseed order, applied to the withhold pair.
     { type: "showResyncFailure" },

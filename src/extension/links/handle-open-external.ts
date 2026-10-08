@@ -126,17 +126,17 @@ export function handleOpenExternal(href: string, deps: HandleOpenExternalDeps): 
     void Promise.resolve(deps.openExternal(href)).then(
       (delivered: boolean) => {
         if (!delivered) {
-          console.warn("[quoll] env.openExternal reported no handler for the URL scheme");
           deps.showError(OPEN_EXTERNAL_FAILURE_MESSAGE);
+          console.warn("[quoll] env.openExternal reported no handler for the URL scheme");
         }
       },
       (err: unknown) => {
-        console.error("[quoll] env.openExternal rejected", err);
         deps.showError(OPEN_EXTERNAL_FAILURE_MESSAGE);
+        console.error("[quoll] env.openExternal rejected", err);
       }
     );
   } catch (err) {
-    console.error("[quoll] env.openExternal threw synchronously", err);
     deps.showError(OPEN_EXTERNAL_FAILURE_MESSAGE);
+    console.error("[quoll] env.openExternal threw synchronously", err);
   }
 }

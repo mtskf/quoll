@@ -243,4 +243,46 @@ describe("handleOpenExternal", () => {
     expect(openExternal).toHaveBeenCalledOnce();
     expect(errors).toEqual([FAILURE_TOAST]);
   });
+
+  // A console that throws must not cost the user the toast: at every failure
+  // site the user-visible signal is attempted BEFORE the triage log. Pinned as
+  // call order, one case per site.
+  describe("failure sites attempt the toast before the log", () => {
+    const failures: [string, "warn" | "error", () => Thenable<boolean>][] = [
+      ["fulfilled false", "warn", async () => false],
+      [
+        "async rejection",
+        "error",
+        async () => {
+          throw new Error("simulated platform failure");
+        },
+      ],
+      [
+        "synchronous throw",
+        "error",
+        () => {
+          throw new Error("simulated synchronous throw");
+        },
+      ],
+    ];
+    it.each(failures)("%s", async (_name, level, openExternal) => {
+      const order: string[] = [];
+      const consoleSpy = vi.spyOn(console, level).mockImplementation(() => {
+        order.push("log");
+      });
+      try {
+        handleOpenExternal("https://example.com", {
+          openExternal,
+          showError: () => {
+            order.push("toast");
+          },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(order).toEqual(["toast", "log"]);
+      } finally {
+        consoleSpy.mockRestore();
+      }
+    });
+  });
 });
