@@ -107,15 +107,14 @@ describe("a list item with a table on its marker line is NOT foldable", () => {
     expect(foldableAt(doc, 0)).not.toBeNull();
   });
 
-  it("a blockquote-nested table on the marker line STILL folds (no widget emitted)", () => {
-    // Codex Conf-84: a blockquote-nested table is a Table on the marker line too,
-    // but its continuation lines carry `>` markers so parseTable rejects the slice
-    // and tableBlockField emits NO widget — it renders as raw source. The inner
-    // list fold must therefore be KEPT (the emit guard in listItemFold), otherwise
-    // the chevron on the visible `> - | a | b |` source line vanishes with nothing
-    // covering it.
+  it("a blockquote-nested table on the marker line yields NO fold (nothing folds in a blockquote)", () => {
+    // A blockquote-nested table is a Table on the marker line too, and its
+    // continuation lines carry `>` markers so parseTable rejects the slice and
+    // tableBlockField emits NO widget — it renders as raw source. That used to
+    // keep the list fold (the emit guard in listItemFold); the blockquote-ancestor
+    // rule now wins first, so the visible `> - | a | b |` line shows no chevron.
     const doc = "> - | a | b |\n>   | - | - |\n>   | 1 | 2 |\n\nafter\n";
-    expect(foldableAt(doc, doc.indexOf("- | a | b |"))).not.toBeNull();
+    expect(foldableAt(doc, doc.indexOf("- | a | b |"))).toBeNull();
   });
 
   it("an ordinary (indented) tight table still suppresses the fold (widget emitted)", () => {
@@ -134,29 +133,99 @@ describe("a list item with a table on its marker line is NOT foldable", () => {
   });
 });
 
-// Defined-contract pins: the subtraction targets the Blockquote/Paragraph/code/
-// Table NODES, so a blockquote that WRAPS a STILL-foldable structure (list,
-// heading) keeps the INNER fold — consistent with "keep lists/headings
-// foldable". A blockquote wrapping only a code block or only a table (both
-// subtracted) shows no chevron. Pinning current behaviour so a future change here
-// is a deliberate, reviewed decision — not a silent drift.
-describe("foldable content nested in a blockquote stays foldable (contract)", () => {
-  it("a blockquote wrapping a nested list STILL yields a fold (inner ListItem)", () => {
-    expect(foldableAt("> - a\n>   - b\n>   - c\n", 0)).not.toBeNull();
+// Nothing folds inside a blockquote (callouts included — a callout IS a
+// blockquote). Subtracting the Blockquote/Paragraph/code/Table NODES is not
+// enough on its own: any other block nested in the quote owns its own fold — a
+// ListItem, and every Block lang-markdown's broad foldNodeProp still folds
+// (HTMLBlock, CommentBlock, LinkReference, ProcessingInstructionBlock), plus
+// headings via the headerIndent foldService. So there is one Blockquote-ancestor
+// gate per seam: one wrapping EVERY foldNodeProp fold, one in the heading
+// foldService (see `insideBlockquote` in src/webview/cm/markdown.ts). The same
+// structures at top level keep folding — pinned in the first describe above and
+// by the controls at the end of this one.
+describe("nothing nested in a blockquote is foldable", () => {
+  it("a blockquote wrapping a nested list yields NO fold", () => {
+    expect(foldableAt("> - a\n>   - b\n>   - c\n", 0)).toBeNull();
   });
 
   it("a blockquote wrapping ONLY a GFM table yields NO fold (inner Table subtracted)", () => {
     expect(foldableAt("> | a | b |\n> | - | - |\n> | 1 | 2 |\n", 0)).toBeNull();
   });
 
-  it("a blockquote wrapping an ATX heading STILL yields a fold (headerIndent foldService)", () => {
-    // Heading folds come from the foldService, NOT foldNodeProp — pinning that
-    // the foldNodeProp override leaves the foldService path untouched.
-    expect(foldableAt("> # H\n> body\n> more\n", 0)).not.toBeNull();
+  it("a blockquote wrapping an ATX heading yields NO fold", () => {
+    expect(foldableAt("> # H\n> body\n> more\n", 0)).toBeNull();
+  });
+
+  it("a blockquote wrapping a Setext heading yields NO fold", () => {
+    expect(foldableAt("> H\n> ===\n> body\n> more\n", 0)).toBeNull();
+  });
+
+  it("a callout wrapping a heading or a list yields NO fold", () => {
+    const heading = "> [!NOTE]\n> # H\n> body\n> more\n";
+    expect(foldableAt(heading, heading.indexOf("# H"))).toBeNull();
+    const list = "> [!NOTE]\n> - a\n>   - b\n>   - c\n";
+    expect(foldableAt(list, list.indexOf("- a"))).toBeNull();
+  });
+
+  it("a heading in a list in a blockquote yields NO fold (ancestor, not just parent)", () => {
+    const doc = "> - # H\n>   body\n>   more\n";
+    expect(foldableAt(doc, 0)).toBeNull();
+  });
+
+  it("a list in a blockquote in a list yields NO fold on the quoted line", () => {
+    // The outer item still folds from ITS marker line; the quoted inner item
+    // does not, and the outer range cannot be claimed from the inner line.
+    const doc = "- outer\n  > - a\n  >   - b\n  >   - c\n";
+    expect(foldableAt(doc, 0)).not.toBeNull();
+    expect(foldableAt(doc, doc.indexOf("- a"))).toBeNull();
   });
 
   it("a blockquote wrapping ONLY a fenced block yields NO fold (code subtracted too)", () => {
     expect(foldableAt("> ```js\n> const x = 1\n> ```\n", 0)).toBeNull();
+  });
+
+  // The Block types `nonFoldableBlocks` does NOT subtract by name: upstream's
+  // broad Block fold still owns them, so only the blockquote gate wrapping every
+  // foldNodeProp fold keeps them chevron-free inside a quote.
+  it("a blockquote wrapping a multi-line HTML block yields NO fold", () => {
+    expect(foldableAt("> <div>\n> x\n> </div>\n", 0)).toBeNull();
+  });
+
+  it("a callout wrapping a multi-line HTML comment yields NO fold", () => {
+    const doc = "> [!NOTE]\n> <!-- a\n> b\n> -->\n";
+    expect(foldableAt(doc, doc.indexOf("<!--"))).toBeNull();
+  });
+
+  it("a blockquote wrapping a multi-line link reference yields NO fold", () => {
+    expect(foldableAt('> [foo]: /url\n> "title"\n', 0)).toBeNull();
+  });
+
+  it("a blockquote wrapping a multi-line processing instruction yields NO fold", () => {
+    expect(foldableAt("> <?php\n> x\n> ?>\n", 0)).toBeNull();
+  });
+
+  it("a TOP-LEVEL multi-line HTML block STILL folds (the gate is blockquote-scoped)", () => {
+    // Control: the gate is not a new global subtraction — outside a quote the
+    // upstream Block fold passes through untouched.
+    expect(foldableAt("<div>\nx\n</div>\n", 0)).toEqual({ from: 5, to: 14 });
+  });
+
+  it("a heading in a TOP-LEVEL list STILL folds (only a Blockquote ancestor suppresses)", () => {
+    // The heading sits on a CONTINUATION line, so the ListItem fold (anchored on
+    // the marker line) cannot reach it — this range comes from the heading
+    // foldService alone, and goes null if the ancestor check ever widens to lists.
+    const doc = "- intro\n\n  # H\n  body\n  more\n";
+    expect(foldableAt(doc, doc.indexOf("# H"))).toEqual({ from: 14, to: 28 });
+    // The marker-line shape folds too, but does not discriminate on its own: the
+    // heading section and the ListItem yield the SAME range there.
+    expect(foldableAt("- # H\n  body\n  more\n", 0)).not.toBeNull();
+  });
+
+  it("a top-level section that CONTAINS a blockquote heading still folds past it", () => {
+    // The quoted `# Q` is not a section boundary for the top-level `# A`: it is
+    // a child of the Blockquote, not a sibling, so `# A` folds to just before `# B`.
+    const doc = "# A\nbody\n\n> # Q\n> quoted\n\ntail\n# B\n";
+    expect(foldableAt(doc, 0)).toEqual({ from: 3, to: doc.indexOf("\n# B") });
   });
 });
 

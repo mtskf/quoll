@@ -9,8 +9,11 @@
 // Paragraph, Blockquote, fenced/indented code, GFM tables — via foldNodeProp. We
 // override foldNodeProp for Blockquote + Paragraph + code blocks + tables to null so
 // prose blockquotes, standalone multi-line paragraphs, code blocks, and the
-// display-only table block widget show no chevron, while headings/lists still fold.
-// A foldService cannot subtract foldNodeProp — see cm/markdown.ts + docs/LEARNING.md.)
+// display-only table block widget show no chevron, while headings/lists still fold
+// — except inside a blockquote, where nothing folds: `insideBlockquote` (also in
+// cm/markdown.ts) gates every foldNodeProp fold, whatever the node type, and the
+// heading foldService. A foldService cannot subtract foldNodeProp — see
+// cm/markdown.ts + docs/LEARNING.md.)
 // This module only mounts the machinery:
 //   - codeFolding({ placeholderDOM }) — foldState field + the INLINE placeholder
 //                                 builder (foldPlaceholderDOM: the collapsed-region
@@ -895,12 +898,15 @@ export const quollFoldKeymapExtension: Extension = keymap.of(quollFoldKeymap);
 // split. Distinct from HEADING_NODE above (H1–H3 only, gutter row-scale).
 const ANY_HEADING_NODE = /^(?:ATXHeading|SetextHeading)[1-6]$/;
 
-/** True when a foldable-block boundary LINE starts strictly inside `(lo, hi)` —
- *  i.e. the head line of a heading (any level) OR a list item, the two block kinds
- *  `foldable()` recognises (see the module header: headings via the headerIndent
- *  foldService, ListItem via lang-markdown's foldNodeProp; Blockquote / Paragraph /
- *  code / Table are subtracted and never fold). Used to decide whether the excess
- *  span of an over-wide mapped fold conceals a real block boundary (see
+/** True when a block-boundary LINE starts strictly inside `(lo, hi)` — i.e. the
+ *  head line of a heading (any level) OR a list item, the two block kinds this
+ *  reconcile clamps for (see the module header: headings fold via the headerIndent
+ *  foldService, ListItem via foldNodeProp). Matched by node NAME, which
+ *  deliberately over-approximates `foldable()`: a heading or list item inside a
+ *  blockquote never folds (`insideBlockquote` in cm/markdown.ts) but still counts
+ *  as a boundary here. That only errs toward clamping the over-wide fold back to
+ *  its canonical range — it never keeps a fold concealing more. Used to decide
+ *  whether the excess span of an over-wide mapped fold conceals a block boundary (see
  *  {@link reconcileReseedFolds}) — a sibling heading dropped into a folded section
  *  OR a sibling list item dropped into a folded list. Bounded iterate over the
  *  excess span only — reseed is not a hot path, but this still avoids a whole-tree
@@ -965,9 +971,10 @@ function concealsFoldableBoundary(
  *     targeted response to a change ON that fold, not a spurious spring-open.
  *  2. Over-wide fold — the line is still foldable, but the mapped fold now extends
  *     PAST its current `foldable()` section end AND the excess span conceals a
- *     foldable-block boundary. The two block kinds `foldable()` recognises both hit
- *     this: a same-level sibling HEADING dropped inside a folded section (a formatter
- *     / git inserting `# New` into `# One`'s body) OR a sibling LIST ITEM dropped
+ *     block boundary (a heading or list-item head line, matched by node name — see
+ *     {@link concealsFoldableBoundary}). Both kinds hit this: a same-level sibling
+ *     HEADING dropped inside a folded section (a formatter / git inserting `# New`
+ *     into `# One`'s body) OR a sibling LIST ITEM dropped
  *     into a folded list (`- sibling` landing after a folded `- parent`'s children) —
  *     either then stays concealed until the user unfolds. Clamp back to the real
  *     foldable range instead. Unlike case 1, this is NOT gated on `editedRange`
