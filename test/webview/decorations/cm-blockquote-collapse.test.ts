@@ -420,6 +420,35 @@ describe("blockquoteCollapseField — reseed, isolation, stale keys", () => {
   });
 });
 
+describe("BlockquoteCollapseToggleWidget — identity", () => {
+  it("eq() distinguishes every rendered input", () => {
+    const a = new BlockquoteCollapseToggleWidget(0, false, 5, null);
+    expect(a.eq(new BlockquoteCollapseToggleWidget(0, false, 5, null))).toBe(true);
+    expect(a.eq(new BlockquoteCollapseToggleWidget(1, false, 5, null))).toBe(false);
+    expect(a.eq(new BlockquoteCollapseToggleWidget(0, true, 5, null))).toBe(false);
+    expect(a.eq(new BlockquoteCollapseToggleWidget(0, false, 6, null))).toBe(false);
+    expect(a.eq(new BlockquoteCollapseToggleWidget(0, false, 5, "note"))).toBe(false);
+  });
+
+  it("retyping the callout type re-renders the bar's callout class", () => {
+    const doc = `> [!note]\n${lines(13, (k) => `> body ${k}`)}\n\ntail`;
+    const view = mountWith(doc, doc.length);
+    try {
+      const bar = (): Element | null => view.dom.querySelector(".quoll-blockquote-collapse-bar");
+      expect(bar()?.classList.contains("quoll-callout-note")).toBe(true);
+      const from = doc.indexOf("note");
+      view.dispatch({ changes: { from, to: from + "note".length, insert: "tip" } });
+      expect(view.state.doc.line(1).text).toBe("> [!tip]");
+      // Still collapsed: the bar is the same block replace, only its payload changed.
+      expect(decos(view.state)[0].widget?.expanded).toBe(false);
+      expect(bar()?.classList.contains("quoll-callout-tip")).toBe(true);
+      expect(bar()?.classList.contains("quoll-callout-note")).toBe(false);
+    } finally {
+      view.destroy();
+    }
+  });
+});
+
 describe("blockquoteCollapseField — combined registration", () => {
   it("18. coexists with the callout marker conceal, block-style and the reveal stack", () => {
     const callout = `> [!note]\n${lines(12, (k) => (k === 1 ? "> zeta-first-body" : `> body ${k}`))}`;
