@@ -483,6 +483,28 @@ const blockEdgeGapCorner = (edge: "top" | "bottom"): Record<string, string> =>
         borderBottomRightRadius: blockEdgeGapRightRadius,
       };
 
+// Callout accent, shared by the callout ROWS (`.cm-line.quoll-callout-*`, in
+// blockStyleThemeSpec) and the blockquote collapse BAR (`.quoll-blockquote-collapse-bar
+// .quoll-callout-*`, in collapseToggleThemeSpec): one per-type table and one bar shadow,
+// so the bar's accent can never drift from the rows'.
+const calloutAccentBar = "inset 2px 0 0 0 var(--quoll-callout-accent)";
+const calloutAccents = {
+  note: "var(--vscode-editorInfo-foreground, var(--vscode-charts-blue, #3794ff))",
+  tip: "var(--vscode-charts-green, var(--vscode-terminal-ansiGreen, #3fb950))",
+  important: "var(--vscode-charts-purple, #a371f7)",
+  warning: "var(--vscode-editorWarning-foreground, var(--vscode-charts-yellow, #d29922))",
+  caution: "var(--vscode-editorError-foreground, var(--vscode-charts-red, #f85149))",
+} as const;
+/** `<base>.quoll-callout-<type>` → `{ --quoll-callout-accent }` for every callout type. */
+function calloutRuleSet(base: string): Record<string, { "--quoll-callout-accent": string }> {
+  return Object.fromEntries(
+    Object.entries(calloutAccents).map(([type, accent]) => [
+      `${base}.quoll-callout-${type}`,
+      { "--quoll-callout-accent": accent },
+    ])
+  );
+}
+
 // Fenced-code panel + blockquote rule styling for the block-style.ts line
 // decorations. Lives HERE (an EditorView.theme), NOT styles.css: CM's base
 // theme sets `.cm-line { padding: 0 2px 0 6px }` UNLAYERED, which beats
@@ -660,28 +682,8 @@ export const blockStyleThemeSpec = {
   // line still gets the accent (the box-shadow is orthogonal to the depth fill).
   // Colours are self-adapting VS Code semantic tokens matching GitHub's semantics
   // (note=blue, tip=green, important=purple, warning=amber, caution=red).
-  ".cm-line.quoll-callout": {
-    boxShadow: "inset 2px 0 0 0 var(--quoll-callout-accent)",
-  },
-  ".cm-line.quoll-callout-note": {
-    "--quoll-callout-accent":
-      "var(--vscode-editorInfo-foreground, var(--vscode-charts-blue, #3794ff))",
-  },
-  ".cm-line.quoll-callout-tip": {
-    "--quoll-callout-accent":
-      "var(--vscode-charts-green, var(--vscode-terminal-ansiGreen, #3fb950))",
-  },
-  ".cm-line.quoll-callout-important": {
-    "--quoll-callout-accent": "var(--vscode-charts-purple, #a371f7)",
-  },
-  ".cm-line.quoll-callout-warning": {
-    "--quoll-callout-accent":
-      "var(--vscode-editorWarning-foreground, var(--vscode-charts-yellow, #d29922))",
-  },
-  ".cm-line.quoll-callout-caution": {
-    "--quoll-callout-accent":
-      "var(--vscode-editorError-foreground, var(--vscode-charts-red, #f85149))",
-  },
+  ".cm-line.quoll-callout": { boxShadow: calloutAccentBar },
+  ...calloutRuleSet(".cm-line"),
   // The REVEALED marker line (the `[!TYPE]` line, caret inside the block) reads as
   // a header — the accent bar + this weighted marker line carry the callout type,
   // so no per-type emoji badge is painted (it was redundant on the minimal axis).
@@ -872,12 +874,12 @@ export const quollTaskCompletedContentTheme = EditorView.theme(taskCompletedCont
 // invariance of the open fence line (accounting for CM's inline `.cm-widgetBuffer`)
 // is confirmed by the real-browser smoke. Exported as a plain spec so
 // cm-fenced-code-copy-button.test.ts can pin the contract.
-// Shared FG + hover-BG for the two fenced-code panel controls — the copy button
+// Shared hover-BG for the two fenced-code panel controls — the copy button
 // (copyButtonThemeSpec) and the "Show N more lines" collapse toggle
-// (collapseToggleThemeSpec) — so the pair reads as a set. Single source of truth:
-// retune here and both controls move together (never duplicate the literals). The
-// foreground is the neutral token both specs already fell back to; the hover tint
-// is the toolbar-control background the collapse bar already used. Correct in both
+// (collapseToggleThemeSpec) — so the pair reads as a set. Single source of truth for
+// the hover tint (never duplicate the literal). The FOREGROUND is no longer shared: the
+// copy button keeps this neutral foreground and its resting dim, while the collapse
+// toggle is link-coloured at full opacity (user decision 2026-10-08). Correct in both
 // light and dark.
 const fencedControlForeground = "var(--vscode-foreground)";
 const fencedControlHoverBackground =
@@ -1191,14 +1193,18 @@ export const fencedHeaderBarThemeSpec: Record<string, Record<string, string>> = 
 
 export const quollFencedHeaderBarTheme = EditorView.theme(fencedHeaderBarThemeSpec);
 
-// "Show more" / "Show less" collapse bar for long fenced code blocks
-// (fenced-code-collapse-widget.ts). Separate EditorView.theme (not styles.css) for
+// "Show more" / "Show less" collapse bar for long fenced code blocks AND long top-level
+// blockquotes. One shared renderer (collapse/collapse-toggle-widget.ts) builds both bars;
+// each client widget supplies its own class names (`.quoll-fenced-collapse-*` /
+// `.quoll-blockquote-collapse-*`). Separate EditorView.theme (not styles.css) for
 // the same reason as copyButtonThemeSpec: it must beat CodeMirror's UNLAYERED
 // baseTheme `.cm-line` rules. The bar is a full-width clickable row that blends
-// with the code panel (same navy surface tint as .cm-line.quoll-fenced-code) so it
-// reads as part of the block, set slightly dimmer until hover. Exported as a plain
-// spec so cm-fenced-code-collapse.test.ts can pin the contract. Height/placement
-// are verified in the real-browser harness (not assertable in happy-dom).
+// with its panel (same navy surface tint as .cm-line.quoll-fenced-code) so it
+// reads as part of the block. The toggle is link-coloured at FULL opacity — there is no
+// resting dim (see collapseToggle). Exported as a plain spec so
+// cm-fenced-code-collapse.test.ts and cm-blockquote-collapse.test.ts can pin the
+// contract. Height/placement are verified in the real-browser harness (not assertable
+// in happy-dom).
 // The rounded, padded footer edge shared by the collapse bar's TWO footer states —
 // the collapsed "Show more" bar AND the expanded "Show less" bar when it is the panel's
 // visible bottom. Both are the panel's TRUE bottom, so they draw the same bottom edge as
@@ -1213,31 +1219,86 @@ const collapseBarFooterCorner = {
   ...blockEdgeGapCorner("bottom"),
 };
 
+// The bar / toggle / svg style objects are shared BY REFERENCE between the fenced
+// (`.quoll-fenced-collapse-*`) and blockquote (`.quoll-blockquote-collapse-*`) selector
+// families — one object, two keys — so the two bars cannot drift apart.
+const collapseBar = {
+  backgroundColor:
+    "var(--quoll-surface-fill, var(--vscode-textCodeBlock-background, rgba(255, 255, 255, 0.05)))",
+  // Body-text-column alignment: mirror the .cm-line.quoll-fenced-code inset so the
+  // bar's fill lines up with the code panel above it (without this the bar — a
+  // block widget that is NOT a .cm-line — would keep its full-width fill and jut
+  // 6px/2px past the inset panel). Same transparent-border + background-clip trick
+  // as the fenced-code panel: it insets the paint without touching the widget's
+  // getBoundingClientRect HEIGHT (left/right borders add no vertical height; the
+  // `margin:0` block-widget invariant is about VERTICAL height). See the shared
+  // rationale on .quoll-blockquote.
+  borderLeft: "var(--quoll-column-inset-left, 6px) solid transparent",
+  borderRight: "var(--quoll-column-inset-right, 2px) solid transparent",
+  backgroundClip: "padding-box",
+  paddingLeft: "var(--quoll-block-pad-x, 16px)",
+  paddingRight: "var(--quoll-block-pad-x, 16px)",
+};
+const collapseToggle = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: "0.35em",
+  padding: "0.15em 0.4em",
+  margin: "0.1em 0",
+  fontSize: "0.85em",
+  fontFamily: "var(--vscode-font-family, sans-serif)",
+  // Link colour at FULL opacity for both bars (user decision 2026-10-08): link colour
+  // at the 0.6 resting dim would fall under 4.5:1. Hover/focus keeps the shared
+  // hover background, applied instantly (no transition: opacity is fixed at 1).
+  color: "var(--vscode-textLink-foreground, var(--vscode-foreground))",
+  background: "none",
+  border: "none",
+  borderRadius: "4px",
+  cursor: "pointer",
+  opacity: "1",
+};
+const collapseToggleHover = {
+  opacity: "1",
+  backgroundColor: fencedControlHoverBackground,
+};
+const collapseToggleSvg = {
+  display: "block",
+  width: "1em",
+  height: "1em",
+};
+
+const collapseBarSeamUnround = {
+  borderBottomLeftRadius: "0",
+  borderBottomRightRadius: "0",
+  paddingBottom: "0",
+  borderBottom: "0",
+};
+
 export const collapseToggleThemeSpec = {
-  ".quoll-fenced-collapse-bar": {
-    backgroundColor:
-      "var(--quoll-surface-fill, var(--vscode-textCodeBlock-background, rgba(255, 255, 255, 0.05)))",
-    // Body-text-column alignment: mirror the .cm-line.quoll-fenced-code inset so the
-    // bar's fill lines up with the code panel above it (without this the bar — a
-    // block widget that is NOT a .cm-line — would keep its full-width fill and jut
-    // 6px/2px past the inset panel). Same transparent-border + background-clip trick
-    // as the fenced-code panel: it insets the paint without touching the widget's
-    // getBoundingClientRect HEIGHT (left/right borders add no vertical height; the
-    // `margin:0` block-widget invariant is about VERTICAL height). See the shared
-    // rationale on .quoll-blockquote.
-    borderLeft: "var(--quoll-column-inset-left, 6px) solid transparent",
-    borderRight: "var(--quoll-column-inset-right, 2px) solid transparent",
-    backgroundClip: "padding-box",
-    paddingLeft: "var(--quoll-block-pad-x, 16px)",
-    paddingRight: "var(--quoll-block-pad-x, 16px)",
+  ".quoll-fenced-collapse-bar": collapseBar,
+  // Blockquote bar: the shared bar plus the divider's top spacing. The spacing is
+  // padding-top on the ROOT (not a margin on the ::before): a margin could collapse out
+  // of the widget root and desynchronise CodeMirror's height map, which measures block
+  // widgets by their border box.
+  ".quoll-blockquote-collapse-bar": { ...collapseBar, paddingTop: "0.5em" },
+  // Hairline divider between the quote text and the toggle, blockquote-only. A ::before
+  // inside the padding box, so it is inset by --quoll-block-pad-x (clear of a callout's
+  // accent bar) in both the collapsed and the expanded state.
+  ".quoll-blockquote-collapse-bar::before": {
+    content: '""',
+    display: "block",
+    borderTop: "1px solid color-mix(in srgb, var(--vscode-foreground) 22%, transparent)",
+    marginBottom: "0.3em",
   },
   // COLLAPSED-state footer: in the collapsed state the closing fence line falls
-  // inside the Decoration.replace concealed range (buildFencedCollapse), so this
+  // inside the Decoration.replace concealed range (recordFor in
+  // collapse/line-collapse-field.ts, fed by fencedCollapseTarget.blockFor), so this
   // "Show more" bar is the panel's visible bottom. It reads as a finished rounded
-  // panel via the shared footer corner. State class (`-collapsed`) toggled by
-  // FencedCollapseToggleWidget.toDOM.
+  // panel via the shared footer corner. State class (`-collapsed`) toggled by the
+  // shared renderer (renderCollapseBar, collapse/collapse-toggle-widget.ts) for BOTH
+  // the fenced and the blockquote bar.
   //
-  // The collapsed conceal range (buildFencedCollapse via fencedBlockGeometry.collapseTo)
+  // The collapsed conceal range (fencedBlockGeometry.collapseTo → CollapseBlock.collapseTo)
   // EXTENDS over the closing fence line, so a caret parked ON the closing fence counts
   // as inside the concealed region and AUTO-EXPANDS the block (the same auto-unfold a
   // caret on a hidden body line triggers — no new rebuild trigger; the existing
@@ -1246,8 +1307,10 @@ export const collapseToggleThemeSpec = {
   // Show-more footer AND a revealed rounded `.quoll-fenced-code-close` below it: the
   // transient double-round is structurally impossible, not merely tolerated.
   ".quoll-fenced-collapse-bar-collapsed": collapseBarFooterCorner,
+  ".quoll-blockquote-collapse-bar-collapsed": collapseBarFooterCorner,
   // EXPANDED-state footer. The "Show less" bar is a `side:1` block widget planted
-  // AFTER the last body line (buildFencedCollapse, at concealTo), so the row directly
+  // AFTER the last body line (recordFor / toggleDecoration in
+  // collapse/line-collapse-field.ts, at concealTo), so the row directly
   // BELOW it is the closing fence — which is either REVEALED (caret in the block, its
   // ``` row carries a rounded `.quoll-fenced-code-close`) or CONCEALED (caret out, its
   // row collapses to the zero-height `.quoll-fenced-code-fence-hidden` and block-style
@@ -1266,6 +1329,10 @@ export const collapseToggleThemeSpec = {
   // browser harness (happy-dom has no layout — fenced-collapse precedent).
   ".quoll-fenced-collapse-bar:not(.quoll-fenced-collapse-bar-collapsed):not(:has(+ .cm-line.quoll-fenced-code-close))":
     collapseBarFooterCorner,
+  // A blockquote's expanded bar is ALWAYS the panel's footer (a quote has no closing
+  // fence row below the widget), so no adjacency gate is needed.
+  ".quoll-blockquote-collapse-bar:not(.quoll-blockquote-collapse-bar-collapsed)":
+    collapseBarFooterCorner,
   // …and when the bar IS that footer, the last body line directly above it must NOT
   // also round OR carry the external gap — otherwise block-style's migrated `-close`
   // (caret-out) and this bar both round + gap, double-rounding/gapping an interior row.
@@ -1279,39 +1346,27 @@ export const collapseToggleThemeSpec = {
   // `:has(arg)`) beats that plain 2-class gap rule. Higher specificity than block-style's
   // base `.cm-line.quoll-fenced-code-close`, so the un-round wins too.
   ".cm-line.quoll-fenced-code-close:has(+ .quoll-fenced-collapse-bar:not(.quoll-fenced-collapse-bar-collapsed))":
-    {
-      borderBottomLeftRadius: "0",
-      borderBottomRightRadius: "0",
-      paddingBottom: "0",
-      borderBottom: "0",
-    },
-  ".quoll-fenced-collapse-toggle": {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: "0.35em",
-    padding: "0.15em 0.4em",
-    margin: "0.1em 0",
-    fontSize: "0.85em",
-    fontFamily: "var(--vscode-font-family, sans-serif)",
-    color: fencedControlForeground,
-    background: "none",
-    border: "none",
-    borderRadius: "4px",
-    cursor: "pointer",
-    // Shared floating-control resting dim + fade (styles.css :root); the collapse
-    // toggle previously had no transition, so it now fades on hover like the rest.
-    opacity: "var(--quoll-control-rest-opacity, 0.6)",
-    transition: "var(--quoll-control-transition, opacity 0.12s ease)",
-  },
-  ".quoll-fenced-collapse-toggle:hover, .quoll-fenced-collapse-toggle:focus-visible": {
-    opacity: "1",
-    backgroundColor: fencedControlHoverBackground,
-  },
-  ".quoll-fenced-collapse-toggle svg": {
-    display: "block",
-    width: "1em",
-    height: "1em",
-  },
+    collapseBarSeamUnround,
+  // Mirrors the fenced `-close:has(+ bar)` rule above for the quote's last row.
+  ".cm-line.quoll-blockquote-close:has(+ .quoll-blockquote-collapse-bar:not(.quoll-blockquote-collapse-bar-collapsed))":
+    collapseBarSeamUnround,
+  // …and when the quote ends in a CONCEALED nested closing fence, block-style migrates
+  // `-close` one line up and a zero-height hidden fence row sits between that row and the
+  // bar, so the rule above (direct adjacency) misses it. Skip over the hidden row.
+  ".cm-line.quoll-blockquote-close:has(+ .cm-line.quoll-fenced-code-fence-hidden + .quoll-blockquote-collapse-bar:not(.quoll-blockquote-collapse-bar-collapsed))":
+    collapseBarSeamUnround,
+  ".quoll-fenced-collapse-toggle": collapseToggle,
+  ".quoll-blockquote-collapse-toggle": collapseToggle,
+  ".quoll-fenced-collapse-toggle:hover, .quoll-fenced-collapse-toggle:focus-visible":
+    collapseToggleHover,
+  ".quoll-blockquote-collapse-toggle:hover, .quoll-blockquote-collapse-toggle:focus-visible":
+    collapseToggleHover,
+  ".quoll-fenced-collapse-toggle svg": collapseToggleSvg,
+  ".quoll-blockquote-collapse-toggle svg": collapseToggleSvg,
+  // Callout accent on the blockquote bar: same shadow + per-type colours as the rows
+  // (shared consts above). Lives HERE, not in blockStyleThemeSpec, whose last key is pinned.
+  ".quoll-blockquote-collapse-bar.quoll-callout": { boxShadow: calloutAccentBar },
+  ...calloutRuleSet(".quoll-blockquote-collapse-bar"),
 };
 
 export const quollCollapseToggleTheme = EditorView.theme(collapseToggleThemeSpec);

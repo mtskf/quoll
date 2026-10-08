@@ -132,6 +132,14 @@ function assertInPage(theme) {
   const bar = document.querySelector(".quoll-fenced-collapse-bar");
   add("fenced-code", !!fence && !!bar, `fence=${!!fence} collapseBar=${!!bar} (want both)`);
 
+  // 6b. Long blockquote → collapse bar present, in the collapsed state.
+  const bqBar = document.querySelector(".quoll-blockquote-collapse-bar");
+  add(
+    "blockquote-collapse",
+    !!bqBar && bqBar.classList.contains("quoll-blockquote-collapse-bar-collapsed"),
+    `blockquoteBar=${!!bqBar} collapsed=${!!bqBar?.classList.contains("quoll-blockquote-collapse-bar-collapsed")} (want both)`
+  );
+
   // 7. Theme → the shell toggled the matching class on <html>.
   const html = document.documentElement;
   const themeClass = theme === "dark" ? "dark-theme" : "light-theme";

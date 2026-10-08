@@ -874,12 +874,14 @@ describe("quollCopyButtonTheme", () => {
     expect(hoverBg).not.toBe("transparent");
   });
 
-  it("shares ONE foreground + hover-background token with the collapse toggle (single source)", () => {
-    // entry: unify copy-button + collapse-bar colours. Both specs reference the
-    // SAME shared value (not duplicated literals) so retuning one moves both.
+  it("keeps the neutral foreground while the collapse toggle is link-coloured; both share ONE hover background", () => {
+    // The foreground is no longer shared (user decision 2026-10-08): the copy button
+    // stays neutral, the collapse toggle is link-coloured. The hover background is still
+    // ONE shared value so retuning it moves both.
     const copyFg = copyButtonThemeSpec[".quoll-copy-button"].color;
     const collapseFg = collapseToggleThemeSpec[".quoll-fenced-collapse-toggle"].color;
-    expect(copyFg).toBe(collapseFg);
+    expect(copyFg).toBe("var(--vscode-foreground)");
+    expect(collapseFg).toContain("--vscode-textLink-foreground");
     const copyHoverBg =
       copyButtonThemeSpec[".quoll-copy-button:hover, .quoll-copy-button:focus-visible"]
         .backgroundColor;
