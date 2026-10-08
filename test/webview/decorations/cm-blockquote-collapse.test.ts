@@ -669,6 +669,20 @@ describe("theme contract", () => {
     expect(rule?.borderBottom).toBe("0");
   });
 
+  it("6b. the row above a hidden nested-fence row before an expanded bar is un-rounded too", () => {
+    const key = Object.keys(spec).find((k) =>
+      k.includes(
+        ".cm-line.quoll-blockquote-close:has(+ .cm-line.quoll-fenced-code-fence-hidden + .quoll-blockquote-collapse-bar"
+      )
+    );
+    expect(key).toBeDefined();
+    const rule = spec[key as string];
+    expect(rule?.borderBottomLeftRadius).toBe("0");
+    expect(rule?.borderBottomRightRadius).toBe("0");
+    expect(rule?.paddingBottom).toBe("0");
+    expect(rule?.borderBottom).toBe("0");
+  });
+
   it("7. the bar carries the callout accent, generated from the rows' values", () => {
     expect(spec[`${BQ}.quoll-callout`]?.boxShadow).toBe(
       blockSpec[".cm-line.quoll-callout"]?.boxShadow

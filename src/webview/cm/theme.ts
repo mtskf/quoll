@@ -1344,6 +1344,11 @@ export const collapseToggleThemeSpec = {
   // Mirrors the fenced `-close:has(+ bar)` rule above for the quote's last row.
   ".cm-line.quoll-blockquote-close:has(+ .quoll-blockquote-collapse-bar:not(.quoll-blockquote-collapse-bar-collapsed))":
     collapseBarSeamUnround,
+  // …and when the quote ends in a CONCEALED nested closing fence, block-style migrates
+  // `-close` one line up and a zero-height hidden fence row sits between that row and the
+  // bar, so the rule above (direct adjacency) misses it. Skip over the hidden row.
+  ".cm-line.quoll-blockquote-close:has(+ .cm-line.quoll-fenced-code-fence-hidden + .quoll-blockquote-collapse-bar:not(.quoll-blockquote-collapse-bar-collapsed))":
+    collapseBarSeamUnround,
   ".quoll-fenced-collapse-toggle": collapseToggle,
   ".quoll-blockquote-collapse-toggle": collapseToggle,
   ".quoll-fenced-collapse-toggle:hover, .quoll-fenced-collapse-toggle:focus-visible":

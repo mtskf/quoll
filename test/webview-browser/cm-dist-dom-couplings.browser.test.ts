@@ -11,6 +11,7 @@ import { EditorSelection, EditorState, type Extension } from "@codemirror/state"
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
 import { blockStyle } from "../../src/webview/cm/decorations/block-style.js";
+import { blockquoteCollapseField } from "../../src/webview/cm/decorations/blockquote-collapse.js";
 import { quollSyntaxReveal } from "../../src/webview/cm/decorations/index.js";
 import { fencedCodeCollapseField } from "../../src/webview/cm/fenced-code/fenced-code-collapse.js";
 import { quollFolding } from "../../src/webview/cm/fold/index.js";
@@ -92,6 +93,42 @@ describe("collapse-bar adjacency has no interposed .cm-widgetBuffer (theme.ts :h
     // `:has(+ …)` stops matching. (Test-analyzer confirmed via mutation: renaming
     // FENCED_CODE_CLOSE_CLASS in block-style.ts reddens this test.)
     expect(bar?.matches(":has(+ .cm-line.quoll-fenced-code-close)")).toBe(true);
+  });
+});
+
+// The blockquote "Show more" bar is the same kind of block widget: its `:has(+ …)` /
+// `+` footer rules (theme.ts collapseToggleThemeSpec) need it to be a direct `.cm-content`
+// sibling of the quote rows with no `.cm-widgetBuffer` between them.
+describe("blockquote collapse-bar adjacency has no interposed .cm-widgetBuffer", () => {
+  const long = `${Array.from({ length: 14 }, (_, i) => `> q${i + 1}`).join("\n")}\n\npara`;
+
+  it("the bar's siblings are .cm-line rows and the footer combinator resolves", async () => {
+    view = mount(
+      long,
+      [
+        markdown({ base: markdownLanguage }),
+        quollSyntaxReveal(),
+        blockStyle,
+        blockquoteCollapseField,
+      ],
+      long.indexOf("para")
+    );
+    await settled();
+    const content = view.contentDOM;
+    const bar = content.querySelector<HTMLElement>(".quoll-blockquote-collapse-bar");
+    expect(bar).not.toBeNull();
+    expect(bar?.previousElementSibling?.classList.contains("cm-line")).toBe(true);
+    expect(bar?.nextElementSibling?.classList.contains("cm-line")).toBe(true);
+    // Inline `>` hide widgets carry their own buffers INSIDE rows; only a direct
+    // `.cm-content` child buffer would break the sibling combinators.
+    expect(content.querySelectorAll(":scope > .cm-widgetBuffer").length).toBe(0);
+    // The collapsed bar's previous row is the quote's 10th visible row.
+    expect(
+      (bar?.previousElementSibling as HTMLElement).classList.contains("quoll-blockquote")
+    ).toBe(true);
+    expect(
+      (bar?.previousElementSibling as Element).matches(":has(+ .quoll-blockquote-collapse-bar)")
+    ).toBe(true);
   });
 });
 
