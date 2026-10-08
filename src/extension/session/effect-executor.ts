@@ -911,7 +911,7 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
           }
           break;
         }
-        case "postRejectedDraft":
+        case "postRejectedDraft": {
           // docVersion is the core-managed value (NOT a fresh
           // document.version read) — the rejected draft never ran
           // applyEdit, so the version is unchanged and the webview's next
@@ -919,15 +919,36 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
           // reducer's `document` arm clears `serializeError`, so the
           // Document MUST precede the `edit-rejected` (reversing it would
           // wipe the banner the user needs).
-          post(
-            deps.buildRejectedDraft(
+          let draftMessage: HostToWebview;
+          try {
+            draftMessage = deps.buildRejectedDraft(
               effect.content,
               effect.docVersion,
               effect.externalEpoch,
               effect.epochGeneration,
               effect.settledEditId
-            )
-          );
+            );
+          } catch (err) {
+            // CONTAINED like `postDocument`'s builder, for the same reason: this
+            // builder reads LIVE state (theme kind, FS writability), so it can
+            // throw, and an escaping throw abandons the rest of the list — the
+            // drain's `Cannot save:` toast — and escapes the dispatch.
+            //
+            // ⛔ Skip BOTH sends. The banner without its draft Document is not a
+            // degraded delivery, it is a different one: `sendEditRejected` alone,
+            // or its `editRejectedDeliveryFailed` recovery, can end with an
+            // authoritative Document replacing the bytes the user typed. So this
+            // is containment and NOT recovery — the rejection stays pending with
+            // nothing delivered, exactly as it did when the throw escaped.
+            reportContained(() =>
+              console.error(
+                "[quoll] failed to build the rejected draft; skipping its Document and edit-rejected",
+                err
+              )
+            );
+            break;
+          }
+          post(draftMessage);
           // The replay banner is FAILURE-AWARE: route it through
           // `sendEditRejected` (with the core-stamped fresh delivery id),
           // NOT a bare `post`. A `ready`/`seed` replay can fail to deliver
@@ -942,6 +963,7 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
           // instead of a deadlock (Codex N6).
           sendEditRejected(effect.error, effect.id);
           break;
+        }
         case "postEditRejected":
           sendEditRejected(effect.error, effect.id);
           break;
@@ -1011,32 +1033,25 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
           // containment gives up is the LOG LINE, not the containment — see
           // `reportContained`'s ⚠️; that is a separate limit, not this one.)
           //
-          // What is still open is TWO position classes, and one of them IS a
-          // console call:
-          //   1. Three effects evaluate their INJECTED BUILDER outside every
-          //      `try`, because `post` guards `deps.send(message)` and not the
-          //      argument handed to it: `postRejectedDraft` →
-          //      `deps.buildRejectedDraft`, `postTheme` → `deps.buildTheme`,
-          //      `sendEditRejected` → `deps.buildEditRejected` (before that
-          //      function's own `try`). `case "postDocument"` DOES guard its
-          //      builder, which is what makes these three a gap rather than a
-          //      convention. Sharpest on the drain's parse-failed arm
-          //      (`[...staleReBaseWarn, postRejectedDraft, showError]`): a
-          //      throwing `buildRejectedDraft` abandons the `Cannot save:` toast
-          //      AND leaves `rejection: { kind: "pending" }` committed with no
-          //      delivery and no `editRejectedDeliveryFailed`. NOT closed by
-          //      wrapping: the builder's RESULT is what the effect needs, so
-          //      containment has to decide what the arm does when the message
-          //      cannot be built at all — a new failure path, not a reuse.
-          //   2. `case "openExternal"` → `runOpenExternal(effect.href)`, a bare
-          //      side effect with NO guard, whose delegate reports through bare
-          //      `console.warn` ×2 + bare `console.error` + `deps.showError`
-          //      outside its own `try` (`links/handle-open-external.ts`) — so
-          //      this class DOES include console calls. Left open: the reducer
-          //      emits `openExternal` as the SOLE effect of its one list, so
-          //      there is no tail to abandon.
-          // Both OPEN (pre-existing), tracked in `docs/TODO.md` ("Contain the
-          // injected-builder evaluations in `runEffects`").
+          // The rule for the remaining positions, so the next one is decided
+          // rather than rediscovered:
+          //   - A builder that reads LIVE state is GUARDED. That is
+          //     `deps.buildSeedDocument` (`case "postDocument"`) and
+          //     `deps.buildRejectedDraft` (`case "postRejectedDraft"`); the
+          //     latter contains the throw and delivers nothing — see its catch.
+          //   - A builder that is a pure object literal is NOT guarded, on
+          //     purpose: `deps.buildTheme` (`postTheme`) and
+          //     `deps.buildEditRejected` (`sendEditRejected`, before that
+          //     function's own `try`) read nothing that can fail
+          //     (`document-message.ts`). ⚠️ That is a property of today's
+          //     injected implementations — a builder that starts reading live
+          //     state moves to the first bullet.
+          //   - `case "openExternal"` → `runOpenExternal(effect.href)` has no
+          //     guard here. The reducer emits `openExternal` as the SOLE effect
+          //     of its one list, so there is no tail to abandon, and the
+          //     delegate carries its own synchronous `try`
+          //     (`links/handle-open-external.ts`). Its triage logs are still
+          //     bare console calls, placed AFTER the toast they accompany.
           try {
             console.warn(effect.message, effect.detail);
           } catch (err) {
