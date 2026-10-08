@@ -5,16 +5,17 @@
 // import cycle (parity with frontmatter/reveal-state.ts).
 
 import { syntaxTree } from "@codemirror/language";
-import { EditorSelection, type EditorState, StateEffect } from "@codemirror/state";
+import { type EditorState, StateEffect } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
+import { COLLAPSE_THRESHOLD, parkSelectionOutsideConceal } from "../collapse/collapse-shared.js";
+import { type CollapseTarget, toggleCollapse } from "../collapse/line-collapse-field.js";
 import { fencedCodeFenceLandmarks } from "./fenced-code-body.js";
 
 type Tree = ReturnType<typeof syntaxTree>;
 type SyntaxNode = Tree["topNode"];
 
-/** Bodies with strictly MORE than this many lines collapse; 10 or fewer render
- *  unchanged. */
-export const COLLAPSE_THRESHOLD = 10;
+// Both moved to the shared collapse layer; re-exported so no importer changes.
+export { COLLAPSE_THRESHOLD, parkSelectionOutsideConceal };
 
 /** Toggle a block's expanded state. `key` is the open-fence line.from offset; it
  *  is mapped through document changes so a held effect survives a same-tick edit. */
@@ -126,60 +127,34 @@ export function findCollapsibleFencedBlockAt(
   return result;
 }
 
-/** Move EVERY selection range whose head lands in `[concealFrom, concealTo]` out to
- *  a cursor at `safeCaret`; ranges whose head is outside are kept verbatim. Returns
- *  `null` when no head is inside (no selection change needed).
- *
- *  DD4 symmetry: the build's auto-expand checks ALL range heads, so parking only
- *  `selection.main.head` would let a SECONDARY caret inside the region re-trigger
- *  auto-expand on the very next rebuild → an infinite collapse↔expand loop. Parking
- *  every inside-head closes that loop.
- *
- *  Two inside-heads parked onto the SAME `safeCaret` merge inside
- *  `EditorSelection.create` → `normalized`, which adjusts `mainIndex` with
- *  `if (i <= mainIndex) mainIndex--` on every merge at/before the main (verified
- *  against @codemirror/state 6.6.0 `EditorSelection.normalized` — the merge
- *  decrements `mainIndex` for ANY merge index `<= mainIndex`, not only `===`), so
- *  the result stays in range even when an outside main sits at a higher index than
- *  two merged inside cursors. NO out-of-bounds. Pinned by the 3-cursor test. */
-export function parkSelectionOutsideConceal(
-  selection: EditorSelection,
-  concealFrom: number,
-  concealTo: number,
-  safeCaret: number
-): EditorSelection | null {
-  let changed = false;
-  const ranges = selection.ranges.map((r) => {
-    if (r.head >= concealFrom && r.head <= concealTo) {
-      changed = true;
-      return EditorSelection.cursor(safeCaret);
+/** The fenced client's find/toggle target for the shared collapse reducer. Defined here
+ *  (no widget import, no frontier gate) so the widget can import the toggle from this
+ *  module without a cycle. */
+export const fencedCollapseTarget: CollapseTarget<null> = {
+  nodeName: "FencedCode",
+  blockFor: (state, node) => {
+    const g = fencedBlockGeometry(state, node);
+    if (g === null) {
+      return null;
     }
-    return r;
-  });
-  return changed ? EditorSelection.create(ranges, selection.mainIndex) : null;
-}
+    return {
+      key: g.key,
+      concealFrom: g.concealFrom,
+      concealTo: g.concealTo,
+      collapseTo: g.collapseTo,
+      // An unclosed block owns everything to doc end.
+      blockTo: g.closed ? g.collapseTo : state.doc.length,
+      hiddenCount:
+        state.doc.lineAt(g.concealTo).number - state.doc.lineAt(g.concealFrom).number + 1,
+      safeCaret: g.safeCaret,
+      extra: null,
+    };
+  },
+  effect: setFencedCollapseEffect,
+};
 
-/** Toggle the block keyed by `key`. Expand → just dispatch the effect. Collapse →
- *  dispatch the effect AND park every selection head that sits inside the
- *  soon-concealed region (DD4) in the SAME transaction, so the build's auto-expand
- *  does not immediately re-open it. */
+/** Toggle a block's expanded state; collapsing also parks every selection head inside the
+ *  soon-concealed region (the closing fence included) in the SAME transaction. */
 export function toggleFencedCollapse(view: EditorView, key: number, expand: boolean): void {
-  const effects = setFencedCollapseEffect.of({ key, expanded: expand });
-  if (expand) {
-    view.dispatch({ effects });
-    return;
-  }
-  const block = findCollapsibleFencedBlockAt(view.state, key);
-  const parked =
-    block === null
-      ? null
-      : parkSelectionOutsideConceal(
-          view.state.selection,
-          block.concealFrom,
-          // Park heads on the closing fence too (collapseTo, not concealTo): otherwise
-          // collapsing with the caret on the ``` would auto-expand right back.
-          block.collapseTo,
-          block.safeCaret
-        );
-  view.dispatch(parked !== null ? { effects, selection: parked } : { effects });
+  toggleCollapse(view, fencedCollapseTarget, key, expand);
 }
