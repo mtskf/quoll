@@ -1336,11 +1336,32 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
             // content, not on the label, so a drain that lands here at an
             // unobserved label takes the withhold arm. The shared `ackEffects` is
             // what keeps this site and `settlementEffects` from drifting apart.
+            //
+            // POST-DISPOSE a `readonly` verdict is the one LOSS in this arm: alive,
+            // the repost shows the user their edit reverting; disposed, the stash
+            // was the keystroke's only carrier (no webview, no replay buffer), so
+            // it gets a toast like the parse-failed arm above. `decideEdit` checks
+            // readonly BEFORE content equality, so the stash may already carry the
+            // settled text — nothing was lost then, and the toast would be a false
+            // alarm. `stale` (unreachable here, the base is current by
+            // construction) and `no-op` stay silent.
+            if (state.disposed) {
+              return {
+                state: settled,
+                effects:
+                  verdict.kind === "readonly" && !sameTextIgnoringEol(stash.content, observed)
+                    ? [
+                        {
+                          type: "showError",
+                          message: `Quoll could not save your last change to ${state.context.fsPath} because the file is not writable, and the editor closed before the change could be shown. Reopen the file to check its contents.`,
+                        },
+                      ]
+                    : [],
+              };
+            }
             return {
               state: settled,
-              effects: state.disposed
-                ? []
-                : ackEffects(ackLabelObserved, settled, heldBase, state.context),
+              effects: ackEffects(ackLabelObserved, settled, heldBase, state.context),
             };
           default: {
             const _exhaustive: never = verdict;

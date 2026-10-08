@@ -619,6 +619,33 @@ describe("host-session-core: applyEditSettled drain", () => {
     expect(r.effects[0]).toMatchObject({ type: "showError" });
   });
 
+  it("POST-DISPOSE drain readonly, stash DIFFERS from the settled document → showError once: the dropped edit is not silent", () => {
+    // Alive, this arm reposts the authoritative Document and the user watches
+    // the edit revert. Post-dispose there is no webview and no replay buffer, so
+    // the stash is the keystroke's only carrier and a toast is the only signal.
+    const r = core.transition(
+      lockedWithStash("edit1", "edit1plus", { disposed: true }),
+      settled({ settledVersion: 2, canWrite: false, currentContent: "edit1" })
+    );
+    expect(r.effects).toEqual([
+      { type: "showError", message: expect.stringContaining(ctx.fsPath) },
+    ]);
+  });
+
+  it.each([
+    ["byte-identical", "a\nb", "a\nb"],
+    ["EOL-only difference", "a\nb", "a\r\nb"],
+  ])("POST-DISPOSE drain readonly, stash carries the settled text (%s) → silent: nothing was lost", (_label, stash, current) => {
+    // `decideEdit` checks readonly BEFORE content equality, so a stash that
+    // already matches the settled document lands in the same arm. Announcing a
+    // dropped edit there would be a false alarm.
+    const r = core.transition(
+      lockedWithStash("a\nb", stash, { disposed: true }),
+      settled({ settledVersion: 2, canWrite: false, currentContent: current })
+    );
+    expect(r.effects).toEqual([]);
+  });
+
   it("POST-DISPOSE non-ok WITH a stash → showError only (failed save still surfaced), NO webview post", () => {
     const r = core.transition(
       lockedWithStash("edit1", "edit1plus", { disposed: true }),
