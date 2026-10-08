@@ -340,7 +340,7 @@
     "@lezer/markdown": "^1.6.4"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.4.15",
+    "@biomejs/biome": "^2.5.15",
     "@types/mocha": "^10",
     "@types/node": "20.16.0",
     "@types/vscode": "1.94.0",
