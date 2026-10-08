@@ -9,8 +9,10 @@
 // Paragraph, Blockquote, fenced/indented code, GFM tables — via foldNodeProp. We
 // override foldNodeProp for Blockquote + Paragraph + code blocks + tables to null so
 // prose blockquotes, standalone multi-line paragraphs, code blocks, and the
-// display-only table block widget show no chevron, while headings/lists still fold.
-// A foldService cannot subtract foldNodeProp — see cm/markdown.ts + docs/LEARNING.md.)
+// display-only table block widget show no chevron, while headings/lists still fold
+// — except inside a blockquote, where nothing folds (`insideBlockquote`, also in
+// cm/markdown.ts). A foldService cannot subtract foldNodeProp — see cm/markdown.ts
+// + docs/LEARNING.md.)
 // This module only mounts the machinery:
 //   - codeFolding({ placeholderDOM }) — foldState field + the INLINE placeholder
 //                                 builder (foldPlaceholderDOM: the collapsed-region

@@ -12,6 +12,7 @@
 //   2. markdownKeymap (Enter/Backspace) is wired + active.
 //   3. the re-implemented headerIndent folds heading lines byte-identically to
 //      upstream markdown({ base }) — a parity oracle across heading fixtures.
+//      Scoped to headings OUTSIDE a blockquote: inside one Quoll folds nothing.
 //   4. the re-implemented listItemFold folds list items byte-identically to that
 //      same upstream oracle — its surviving (non-null) range.
 // NOTE: the built-in pasteURLAsLink is deliberately NOT part of this language
@@ -116,8 +117,8 @@ describe("re-implemented headerIndent folds byte-identically to upstream", () =>
   // HEADING line only (quollLang's nonFoldableBlocks subtraction diverges from
   // upstream on blockquote/paragraph/code lines by design — headings are the
   // shared contract). A wrong sectionEnd/headingLevel diverges from upstream.
-  // The blockquote-wrapped-heading fixture pins the exact from/to that
-  // cm-fold-blockquote.test.ts only asserts `not.toBeNull()` for.
+  // Parity holds for headings OUTSIDE a blockquote only — the quoted case is a
+  // deliberate divergence, pinned separately below.
   // Settled, not merely ensureSyntaxTree'd: `foldable()` resolves in the language
   // field's tree snapshot, which a bare `ensureSyntaxTree` leaves truncated — the
   // load-sensitive spurious `null`. See helpers/settled-state.ts.
@@ -133,7 +134,6 @@ describe("re-implemented headerIndent folds byte-identically to upstream", () =>
     { doc: "## H2 only\nbody\nmore\n", headAt: 0 }, // trailing section to EOF
     { doc: "Setext\n===\n\nbody\ntail\n", headAt: 0 }, // setext H1
     { doc: "# top\nintro\n### deep\nx\ny\n# end\n", headAt: 0 }, // top spans H3
-    { doc: "> # A\n> body\n> # B\n", headAt: 0 }, // heading INSIDE a blockquote
     { doc: "# A\nbody\n# B\nafter\n", headAt: "# A\nbody\n".length }, // mid-doc heading (headAt > 0): "# B" folds to EOF
   ];
 
@@ -145,6 +145,16 @@ describe("re-implemented headerIndent folds byte-identically to upstream", () =>
       expect(q).toEqual(u); // ...with byte-identical from/to to upstream.
     });
   }
+
+  // Quoll-SPECIFIC divergence (NOT a parity oracle): nothing folds inside a
+  // blockquote, so a quoted heading shows no chevron while upstream still folds
+  // it. The upstream half keeps the fixture honest — if upstream stopped folding
+  // it too, this would no longer be a divergence worth carrying.
+  it("suppresses the fold chevron for a heading inside a blockquote (diverges from upstream)", () => {
+    const doc = "> # A\n> body\n> # B\n";
+    expect(foldHeadingRange(upstreamLang, doc, 0)).not.toBeNull();
+    expect(foldHeadingRange(quollLang, doc, 0)).toBeNull();
+  });
 
   // Boundary + break-guard coverage the FIXTURES loop (all non-empty sections)
   // cannot reach — asserted as parity-on-null (both quoll and upstream return

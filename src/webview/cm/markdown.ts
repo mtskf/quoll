@@ -20,11 +20,11 @@
 // meaningless — `Table` is subtracted too. The keep-foldable set is therefore
 // headings and lists; everything else is subtracted here.
 //
-// This is a NODE-TYPE override. A blockquote that wraps a still-foldable
-// structure (a nested list, a heading) keeps that inner fold — the inner node
-// owns it, consistent with "keep lists/headings foldable" (pinned in
-// cm-fold-blockquote.test.ts). A blockquote wrapping ONLY a code block or ONLY a
-// table shows no chevron (both are subtracted too). A table nested in a list
+// This is a NODE-TYPE override, so on its own it would leave a list or heading
+// nested in a blockquote foldable — the inner node owns that fold. Nothing folds
+// inside a blockquote, though, so the two surviving fold paths (listItemFold and
+// the headerIndent foldService below) each check for a Blockquote ancestor
+// (`insideBlockquote`; pinned in cm-fold-blockquote.test.ts). A table nested in a list
 // item leaves the ListItem fold intact (the chevron sits on the list's marker
 // line, never on a table row) — EXCEPT the tight shape where the table starts on
 // the marker line itself (`- | a | b |\n…`): there the table's block widget
@@ -89,6 +89,25 @@ function tableEmitsBlockWidget(state: EditorState, from: number, to: number): bo
   return parseTable(slice, 0, slice.length) !== null;
 }
 
+// True when `node` sits anywhere inside a Blockquote (a callout is a Blockquote
+// too). Nothing folds in there: the quote's own `padding-top` + outer-gap border
+// are not something the fold gutter compensates for, so a chevron on a quoted
+// heading/list line lands vertically off — and a fold inside a quote is not an
+// affordance worth compensating for. `nonFoldableBlocks` alone cannot express
+// this: it subtracts by NODE TYPE, and a ListItem or heading nested in the quote
+// owns its own fold, so BOTH fold paths ask this — `listItemFold` (foldNodeProp)
+// and `headerIndent` (foldService). An ANCESTOR walk, not a parent check, so a
+// heading in a list in a quote (`> - # H`) is covered while a heading in a
+// top-level list (`- # H`) is left alone.
+function insideBlockquote(node: SyntaxNode): boolean {
+  for (let cur = node.parent; cur; cur = cur.parent) {
+    if (cur.type.name === "Blockquote") {
+      return true;
+    }
+  }
+  return false;
+}
+
 // ListItem fold: re-implements lang-markdown's default Block range (from the end
 // of the item's first line to the item end) EXCEPT when the item's first content
 // child is a GFM Table that starts on the marker line AND actually emits a block
@@ -97,14 +116,18 @@ function tableEmitsBlockWidget(state: EditorState, from: number, to: number): bo
 // blockFrom = lineAt(Table.from).from), so it SWALLOWS the `-`/`1.` marker and the
 // ListItem chevron would visually land on the table — a meaningless affordance.
 // Returning null suppresses that lone chevron. The emit guard is load-bearing: a
-// blockquote-nested table (`> - | a | b |\n…`) is a Table on the marker line too,
-// but renders as raw source with NO widget, so its inner list fold must be kept
-// (Codex Conf-84). Every other genuine list fold (a table on a continuation line,
+// marker-line table that emits NO widget (inside leading frontmatter, or a slice
+// parseTable rejects) renders as raw source, so its list fold must be kept. An
+// item inside a blockquote never folds at all (`insideBlockquote`), whatever its
+// body. Every other genuine list fold (a table on a continuation line,
 // a plain multi-line body) keeps the default range. lang-markdown folds ListItem
 // via its broad `type => …` Block foldNodeProp, and this object-form `.add`
 // OVERRIDES that per node type (same mechanism as the Table/Paragraph/Blockquote
 // subtractions below). Pinned by cm-fold-blockquote.test.ts.
 function listItemFold(node: SyntaxNode, state: EditorState): { from: number; to: number } | null {
+  if (insideBlockquote(node)) {
+    return null;
+  }
   const content = firstContentChild(node);
   if (
     content?.type.name === "Table" &&
@@ -135,8 +158,10 @@ export const nonFoldableBlocks: MarkdownExtension = {
 // section (the line before the next same-or-higher heading). This is the ONLY
 // source of heading folds — the base commonmark `foldNodeProp` deliberately
 // returns `undefined` for headings, so without this service a heading shows no
-// chevron. Pinned by cm-markdown-language.test.ts (byte-identical to upstream),
-// cm-fold-delegation.test.ts, and cm-fold-blockquote.test.ts (heading-in-blockquote).
+// chevron. One deliberate divergence from upstream: a heading inside a blockquote
+// does not fold (`insideBlockquote`). Pinned by cm-markdown-language.test.ts
+// (byte-identical to upstream outside a blockquote), cm-fold-delegation.test.ts,
+// and cm-fold-blockquote.test.ts (heading-in-blockquote → no fold).
 function headingLevel(node: SyntaxNode): number | null {
   if (isNascentLoneSetextHeading(node)) {
     return null; // a lone-`-`/`=` nascent list is not a heading → no fold chevron
@@ -190,7 +215,7 @@ const headerIndent = foldService.of((state, start, end) => {
       break;
     }
     const level = headingLevel(node);
-    if (level === null) {
+    if (level === null || insideBlockquote(node)) {
       continue;
     }
     const upto = sectionEnd(node, level);
