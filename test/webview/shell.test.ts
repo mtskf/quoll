@@ -1050,12 +1050,22 @@ describe("shell — own-lineage Documents never rewind un-acked bytes", () => {
   // post order. The webview under test is the real shell; only the VS Code
   // plumbing between the two is stood in for.
   function realHost(seed: string) {
+    // Non-null while the write validator refuses every Edit with this error.
+    let rejectWith: { code: "unsafe_url"; message: string } | null = null;
     const core = createHostSessionCore(
       { uriString: "file:///t.md", fsPath: "/t.md" },
-      { mintEpochGeneration: () => 11, validateForWrite: () => ({ ok: true }) as never }
+      {
+        mintEpochGeneration: () => 11,
+        validateForWrite: () =>
+          rejectWith === null ? { ok: true } : { ok: false, error: rejectWith },
+      }
     );
     let state: HostSessionState = core.initialState(1);
-    const doc = { version: 1, content: seed };
+    const doc: { version: number; content: string; eol: "\n" | "\r\n" } = {
+      version: 1,
+      content: seed,
+      eol: "\n",
+    };
     let canWrite = true;
     let taken = 0;
     let applying: { content: string; pre: string } | null = null;
@@ -1070,12 +1080,15 @@ describe("shell — own-lineage Documents never rewind un-acked bytes", () => {
             buildDocument({
               docVersion: e.docVersion,
               content: doc.content,
+              eol: doc.eol,
               canWrite,
               externalEpoch: e.externalEpoch,
               epochGeneration: e.epochGeneration,
               settledEditId: e.settledEditId,
             })
           );
+        } else if (e.type === "postEditRejected") {
+          out.push({ protocol: PROTOCOL_VERSION, type: "edit-rejected", error: e.error });
         } else if (e.type === "applyEdit") {
           applying = { content: e.content, pre: doc.content };
         } else if (e.type === "showError") {
@@ -1089,6 +1102,18 @@ describe("shell — own-lineage Documents never rewind un-acked bytes", () => {
       setCanWrite(v: boolean) {
         canWrite = v;
       },
+      // Make the write validator refuse every Edit from here on.
+      failValidation() {
+        rejectWith = { code: "unsafe_url", message: "URL is not in the allowlist" };
+      },
+      // Another writer replaced the document's text: the version advances and
+      // no lineage covers it.
+      externalWrite(content: string, eol: "\n" | "\r\n" = "\n") {
+        doc.content = content;
+        doc.eol = eol;
+        doc.version++;
+        run({ type: "documentChanged", documentVersion: doc.version, lineageSince: null });
+      },
       ready() {
         run({ type: "ready", documentVersion: doc.version, lineageSince: null });
       },
@@ -1098,6 +1123,10 @@ describe("shell — own-lineage Documents never rewind un-acked bytes", () => {
       },
       // Edits the webview has posted that the host has not been handed yet.
       unread: () => editMessages().length - taken,
+      // The next posted Edit never arrived (its postMessage threw).
+      lose() {
+        taken++;
+      },
       // Hand the next posted Edit to the host.
       receive() {
         const e = editMessages()[taken];
@@ -1136,7 +1165,7 @@ describe("shell — own-lineage Documents never rewind un-acked bytes", () => {
           preApplyContent: a.pre,
         });
       },
-      // Deliver every queued Document to the webview, in order.
+      // Deliver every queued message to the webview, in order.
       pump() {
         while (out.length > 0) {
           drive(out.shift() as HostToWebview);
@@ -1161,6 +1190,39 @@ describe("shell — own-lineage Documents never rewind un-acked bytes", () => {
     return host;
   }
 
+  async function start(seed: string) {
+    await mount();
+    vi.useFakeTimers();
+    const host = realHost(seed);
+    host.ready();
+    host.pump();
+    expect(viewText()).toBe(seed);
+    return host;
+  }
+
+  // The draft the host answered with `edit-rejected` stays on screen behind the
+  // "Cannot save" banner with no carrier in edit-sync.
+  async function startWithRejectedDraft() {
+    const host = await start("a\nb");
+    host.failValidation();
+    typeAtEnd("x");
+    vi.advanceTimersByTime(300);
+    host.receive(); // parse-failed
+    host.pump(); // edit-rejected
+    expect(viewText()).toBe("a\nbx");
+    expect(container?.querySelector(".quoll-banner.error")).not.toBeNull();
+    return host;
+  }
+
+  it("a rejected draft replaced by an external write is announced exactly once", async () => {
+    const host = await startWithRejectedDraft();
+    expect(noticeCount(".quoll-notice-discard")).toBe(0);
+    host.externalWrite("theirs");
+    host.pump();
+    expect(viewText()).toBe("theirs");
+    expect(noticeCount(".quoll-notice-discard")).toBe(1);
+  });
+
   describe("against the real host reducer", () => {
     // Against the REAL host, no legitimate own-lineage flow may read as
     // foreign: a discard notice in any of these columns means a Document
@@ -1169,15 +1231,40 @@ describe("shell — own-lineage Documents never rewind un-acked bytes", () => {
       expect(noticeCount(".quoll-notice-discard")).toBe(0);
     });
 
-    async function start(seed: string) {
-      await mount();
-      vi.useFakeTimers();
-      const host = realHost(seed);
-      host.ready();
+    it("a rejected draft is not announced as discarded when the external write differs in line endings only", async () => {
+      const host = await startWithRejectedDraft();
+      host.externalWrite("a\r\nbx", "\r\n");
       host.pump();
-      expect(viewText()).toBe(seed);
-      return host;
-    }
+      expect(viewText()).toBe("a\nbx");
+      expect(noticeCount(".quoll-notice-discard")).toBe(0);
+    });
+
+    it("a buffer held after a failed send is not announced as discarded by a readonly Document, and reaches the host on re-grant", async () => {
+      const host = await start("s");
+      let failNextEdit = true;
+      postMessage.mockImplementation((m: unknown) => {
+        if (failNextEdit && (m as { type?: string }).type === "edit") {
+          failNextEdit = false;
+          throw new Error("channel closed");
+        }
+      });
+      typeAtEnd("x");
+      vi.advanceTimersByTime(300); // the send throws: "sx" stays buffered
+      host.lose();
+      expect(host.unread()).toBe(0);
+      expect(container?.querySelector(".quoll-banner.error")).not.toBeNull();
+      host.setCanWrite(false);
+      host.visible();
+      host.pump();
+      expect(viewText()).toBe("s"); // a readonly Document always shows the host's bytes
+      expect(noticeCount(".quoll-notice-discard")).toBe(0);
+      host.setCanWrite(true);
+      host.visible();
+      host.pump();
+      host.quiesce();
+      expect(host.disk()).toBe("sx");
+      expect(viewText()).toBe("sx");
+    });
 
     it("flush window: a keystroke typed after a force-post the host answers with a STALE repost still reaches disk", async () => {
       const host = await start("s");

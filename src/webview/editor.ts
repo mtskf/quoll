@@ -27,6 +27,7 @@ import {
   PROTOCOL_VERSION,
   type WebviewToHost,
 } from "../shared/protocol.js";
+import { sameTextIgnoringEol } from "../shared/text-equality.js";
 import { applyCaret, type Caret, selectionCharCount, selectionToCaret } from "./cm/caret.js";
 import { quollCodeRefClickHandler, quollCodeRefKeymap } from "./cm/code-ref/code-ref-handlers.js";
 import { quollContextHandoffKeymap } from "./cm/context-handoff.js";
@@ -1181,8 +1182,22 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       // `supersedesIdentity` in cm/edit-sync.ts. (Foreign bytes that arrive
       // WITHOUT an epoch advance are recognised there by content; the drain
       // comment states what that cannot see.)
-      const foldsOkAck = aheadOfHost && canWrite && sync.viewHoldsUnackedEdit(liveDoc, snapshot);
+      const heldOnLeadingLineage = aheadOfHost && sync.viewHoldsUnackedEdit(liveDoc, snapshot);
+      const foldsOkAck = heldOnLeadingLineage && canWrite;
       const needsReseed = aheadOfHost && !foldsOkAck;
+      // A draft the host answered with `edit-rejected` sits on screen without a
+      // carrier, so edit-sync's own discard notice never sees this reseed take
+      // it away. Judged BEFORE the replace: the shell clears `serializeError`
+      // right after this call returns. Each conjunct excludes a reseed that
+      // loses nothing — bytes edit-sync still holds on a leading lineage come
+      // back on the re-grant (a readonly Document rewinds the view only), and
+      // an EOL-only difference replaces no text. A buffer on a foreign lineage
+      // is announced by edit-sync too; the shell shows one notice per kind.
+      const discardsRejectedDraft =
+        needsReseed &&
+        !heldOnLeadingLineage &&
+        opts.getState().serializeError !== null &&
+        !sameTextIgnoringEol(liveDoc, content);
       // Decide HERE whether the text is replaced at all; `replaceViewText` owns
       // how. `null` (the fold and the not-ahead arms) leaves the text alone, and
       // the dispatch then carries the compartment effects only.
@@ -1216,6 +1231,16 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
           setReadOnlyClass(canWrite);
         }
       );
+      if (discardsRejectedDraft) {
+        // Caught for the reason edit-sync's call site gives: a throw here would
+        // skip the shell's `document` dispatch and leave the reducer behind the
+        // view the replace above already installed.
+        try {
+          opts.onLocalEditDiscarded?.();
+        } catch (err) {
+          console.error("[quoll] onLocalEditDiscarded threw", err);
+        }
+      }
       return editPending;
     },
     isIdentityTransition(externalEpoch, epochGeneration) {
