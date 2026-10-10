@@ -1223,6 +1223,40 @@ describe("shell — own-lineage Documents never rewind un-acked bytes", () => {
     expect(noticeCount(".quoll-notice-discard")).toBe(1);
   });
 
+  it("a throwing discard notifier does not stop the replacing Document from landing", async () => {
+    const host = await startWithRejectedDraft();
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const realSetAttribute = Element.prototype.setAttribute;
+    // showNotice builds the dismiss button with this exact attribute, so this
+    // throws from inside the notifier and nowhere else.
+    const setAttribute = vi.spyOn(Element.prototype, "setAttribute").mockImplementation(function (
+      this: Element,
+      name: string,
+      value: string
+    ) {
+      if (name === "aria-label" && value === "Dismiss") {
+        throw new Error("notice boom");
+      }
+      realSetAttribute.call(this, name, value);
+    });
+    try {
+      host.externalWrite("theirs");
+      expect(() => host.pump()).not.toThrow();
+      expect(viewText()).toBe("theirs");
+      // The reducer received the `document` (it clears serializeError) — the
+      // view and the reducer did not diverge.
+      expect(container?.querySelector(".quoll-banner.error")).toBeNull();
+      expect(noticeCount(".quoll-notice-discard")).toBe(0);
+      expect(consoleError).toHaveBeenCalledWith(
+        "[quoll] onLocalEditDiscarded threw",
+        expect.any(Error)
+      );
+    } finally {
+      setAttribute.mockRestore();
+      consoleError.mockRestore();
+    }
+  });
+
   describe("against the real host reducer", () => {
     // Against the REAL host, no legitimate own-lineage flow may read as
     // foreign: a discard notice in any of these columns means a Document
