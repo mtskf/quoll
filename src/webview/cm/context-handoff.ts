@@ -11,34 +11,47 @@
 // IS the file's raw Markdown and a CM line number equals the file line
 // number. The webview sends only geometry; the host owns the path.
 //
-// Both handoff commands flush the pending debounced Edit BEFORE posting (see
-// flushBeforeHandoff), using a single-flight-respecting flush (flushIfIdle; the
-// editor-switch uses the teardown flush because it disposes the panel) — otherwise
-// a handoff fired inside edit-sync's 300 ms debounce window would reference host
-// content that lacks the user's latest keystrokes.
+// Both handoff commands wait for edit-sync to settle BEFORE posting (see
+// afterSettled) — a handoff posted inside the debounce window, or behind an
+// in-flight Edit, would reference host content that lacks the user's latest
+// keystrokes.
 
 import { type EditorState, type Extension, Prec } from "@codemirror/state";
-import { type Command, keymap } from "@codemirror/view";
+import { type Command, type EditorView, keymap } from "@codemirror/view";
 
 import { PROTOCOL_VERSION, type WebviewToHost } from "../../shared/protocol.js";
 import { type PostMessageHost, safePostMessage } from "../safe-post-message.js";
 
 export type HandoffHost = PostMessageHost;
 
-/** Flush any pending debounced Edit BEFORE posting a handoff. edit-sync
- *  debounces outbound Edits by 300 ms, so a handoff fired mid-window would hand
- *  Claude / Codex host/TextDocument content that lacks the user's latest
- *  keystrokes (the host only auto-saves when already dirty — webview-only edits
- *  are not covered). Flushing first makes the just-typed bytes reach the host
- *  BEFORE the handoff (FIFO). Wired to edit-sync's flushIfIdle
- *  (single-flight-respecting) — NOT switch-editor's teardown flush — because the
- *  handoff leaves the panel alive. Logs, never throws — a throw would unwind
- *  CodeMirror's key dispatch. */
-function flushBeforeHandoff(flushPendingEdit: () => void): void {
+/** Run `post` once the host holds the text the user is looking at. edit-sync
+ *  debounces outbound Edits and single-flights them, so a handoff posted
+ *  straight away would point Claude / Codex at host content that lacks what the
+ *  user just typed (the host only saves a document it knows is dirty). `settle`
+ *  flushes and waits for the ack; `false` means the text will not get there
+ *  (refused, superseded, timed out) or the editor is gone, and the
+ *  handoff is NOT sent — stale context is worse than none. `settle` owns
+ *  telling the user. Logs, never throws: a throw would unwind CodeMirror's key
+ *  dispatch. */
+async function afterSettled(
+  view: EditorView,
+  settle: () => Promise<boolean>,
+  post: () => void
+): Promise<void> {
   try {
-    flushPendingEdit();
+    // Called synchronously, inside the key dispatch: the waiter exists before
+    // anything else can run, so a teardown always finds it to cancel.
+    const settled = await settle();
+    // Same synchronous section as the post, after the LAST await. On today's
+    // event path nothing can run between `settle` resolving and here (only
+    // microtasks do), so this never fires; it keeps a post off a destroyed
+    // editor if a caller ever schedules `settle` differently. `destroy()`
+    // removes `view.dom`.
+    if (settled && view.dom.isConnected) {
+      post();
+    }
   } catch (err) {
-    console.error("[quoll] flushPendingEdit before handoff failed", err);
+    console.error("[quoll] handoff not sent: waiting for edit-sync failed", err);
   }
 }
 
@@ -84,26 +97,29 @@ export function selectionToHandoff(state: EditorState): {
 /** The handoff Command. Exported so the keymap test can invoke it directly on
  *  a real EditorView (black-box) rather than introspecting the Extension graph
  *  or firing a platform-dependent synthetic key event. */
-export function contextHandoffCommand(host: HandoffHost, flushPendingEdit: () => void): Command {
+export function contextHandoffCommand(host: HandoffHost, settle: () => Promise<boolean>): Command {
   return (view) => {
-    // Flush the pending debounced Edit FIRST so the handoff references the
-    // just-typed content, not the pre-keystroke host snapshot (see
-    // flushBeforeHandoff).
-    flushBeforeHandoff(flushPendingEdit);
-    const { hasSelection, startLine, endLine } = selectionToHandoff(view.state);
-    const message: WebviewToHost = {
-      protocol: PROTOCOL_VERSION,
-      type: "context-handoff",
-      hasSelection,
-      startLine,
-      endLine,
-    };
-    // Log, never throw out of a keymap command (a throw would unwind
-    // CodeMirror's key dispatch) — safePostMessage handles that.
-    safePostMessage(host, message, "context-handoff");
-    // Return true unconditionally: the chord is "claimed" by Quoll whether or
-    // not the post succeeded, so CodeMirror stops default handling and the
-    // event never bubbles to a stale native binding.
+    const pressed = view.state;
+    void afterSettled(view, settle, () => {
+      // Same document as at the key press: the selection the user had THEN is
+      // the request, and its line numbers still hold — moving or collapsing it
+      // during the wait must not turn a range into a whole-file reference.
+      // Document changed during the wait: the press-time line numbers are
+      // stale, so the current selection is used instead.
+      const state = view.state.doc.eq(pressed.doc) ? pressed : view.state;
+      const { hasSelection, startLine, endLine } = selectionToHandoff(state);
+      const message: WebviewToHost = {
+        protocol: PROTOCOL_VERSION,
+        type: "context-handoff",
+        hasSelection,
+        startLine,
+        endLine,
+      };
+      // Log, never throw (see afterSettled) — safePostMessage handles that.
+      safePostMessage(host, message, "context-handoff");
+    });
+    // Claimed whether or not anything is posted, so CodeMirror stops default
+    // handling and the event never bubbles to a stale native binding.
     return true;
   };
 }
@@ -113,20 +129,17 @@ export function contextHandoffCommand(host: HandoffHost, flushPendingEdit: () =>
  *  Exported so the keymap test can invoke it directly on a real EditorView. */
 export function codexContextHandoffCommand(
   host: HandoffHost,
-  flushPendingEdit: () => void
+  settle: () => Promise<boolean>
 ): Command {
-  return () => {
-    // Flush FIRST: Codex hands off the WHOLE file, so a stale host save would
-    // ship pre-keystroke bytes (see flushBeforeHandoff).
-    flushBeforeHandoff(flushPendingEdit);
-    const message: WebviewToHost = {
-      protocol: PROTOCOL_VERSION,
-      type: "codex-context-handoff",
-    };
-    // Mirror contextHandoffCommand: log, never throw out of a keymap command.
-    safePostMessage(host, message, "codex-context-handoff");
-    // Claim the chord regardless so CodeMirror preventDefaults and the event
-    // does not bubble to the workbench (togglePanel) — see CODEX_CONTEXT_HANDOFF_KEY.
+  return (view) => {
+    // Codex hands off the WHOLE file, so host content behind the view would
+    // ship pre-keystroke bytes (see afterSettled).
+    void afterSettled(view, settle, () => {
+      const message: WebviewToHost = { protocol: PROTOCOL_VERSION, type: "codex-context-handoff" };
+      safePostMessage(host, message, "codex-context-handoff");
+    });
+    // Claim the chord regardless so the event does not bubble to the workbench
+    // (togglePanel) — see CODEX_CONTEXT_HANDOFF_KEY.
     return true;
   };
 }
@@ -137,12 +150,12 @@ export function codexContextHandoffCommand(
  *  workbench togglePanel binding. */
 export function quollContextHandoffKeymap(
   host: HandoffHost,
-  flushPendingEdit: () => void
+  settle: () => Promise<boolean>
 ): Extension {
   return Prec.high(
     keymap.of([
-      { key: CONTEXT_HANDOFF_KEY, run: contextHandoffCommand(host, flushPendingEdit) },
-      { key: CODEX_CONTEXT_HANDOFF_KEY, run: codexContextHandoffCommand(host, flushPendingEdit) },
+      { key: CONTEXT_HANDOFF_KEY, run: contextHandoffCommand(host, settle) },
+      { key: CODEX_CONTEXT_HANDOFF_KEY, run: codexContextHandoffCommand(host, settle) },
     ])
   );
 }

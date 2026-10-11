@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { EditorView } from "@codemirror/view";
+import { EditorView, runScopeHandlers } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -1009,6 +1009,91 @@ describe("shell — readonly hold notice", () => {
       window.dispatchEvent(new Event("blur"));
       expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(0);
       expect(postedEdits()).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Fired as BOTH the Ctrl and the Meta variant: happy-dom's platform detection
+  // is not deterministic, and exactly one of them matches `Mod-j`.
+  const pressCodexChord = (): void => {
+    const view = mountedView();
+    for (const mod of [{ ctrlKey: true }, { metaKey: true }]) {
+      runScopeHandlers(
+        view,
+        new KeyboardEvent("keydown", { key: "j", code: "KeyJ", ...mod }),
+        "editor"
+      );
+    }
+  };
+  const handoffsPosted = (): number =>
+    postMessage.mock.calls.filter(
+      ([m]) => (m as { type?: string }).type === "codex-context-handoff"
+    ).length;
+
+  it("an unsynced handoff shows a notice and posts nothing; a later synced one clears it", async () => {
+    await mount();
+    vi.useFakeTimers();
+    try {
+      deliver(buildDocument({ docVersion: 1, content: "s" }));
+      const view = mountedView();
+      view.dispatch({ changes: { from: view.state.doc.length, insert: "x" } });
+      pressCodexChord(); // flushes → Edit in flight, never acked
+      expect(postedEdits().map((m) => m.content)).toEqual(["sx"]);
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(container?.querySelector(".quoll-notice-handoff-unsynced")).not.toBeNull();
+      expect(handoffsPosted()).toBe(0);
+      deliver(buildDocument({ docVersion: 2, content: "sx" })); // the ack, late
+      pressCodexChord();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(handoffsPosted()).toBe(1);
+      expect(container?.querySelector(".quoll-resync-notice")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("an unsynced handoff is declined under a loss notice, and says so in the console", async () => {
+    await mount();
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      deliver(buildDocument({ docVersion: 1, content: "s" }));
+      const view = mountedView();
+      view.dispatch({ changes: { from: view.state.doc.length, insert: "x" } });
+      vi.advanceTimersByTime(300); // posts — in flight
+      deliver(buildDocument({ docVersion: 1, content: "s" })); // a refusal → `unsaved`
+      const unsaved = container?.querySelector(".quoll-notice-unsaved");
+      expect(unsaved).not.toBeNull();
+      pressCodexChord(); // view ahead, nothing on its way → unsynced at once
+      await vi.advanceTimersByTimeAsync(0);
+      expect(container?.querySelector(".quoll-resync-notice")).toBe(unsaved);
+      expect(handoffsPosted()).toBe(0);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("handoff not sent"));
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("a synced handoff posts and leaves a loss notice on screen", async () => {
+    await mount();
+    vi.useFakeTimers();
+    try {
+      deliver(buildDocument({ docVersion: 1, content: "s" }));
+      const view = mountedView();
+      view.dispatch({ changes: { from: view.state.doc.length, insert: "x" } });
+      vi.advanceTimersByTime(300); // posts — in flight
+      deliver(buildDocument({ docVersion: 1, content: "s" })); // a refusal → `unsaved`
+      const unsaved = container?.querySelector(".quoll-notice-unsaved");
+      expect(unsaved).not.toBeNull();
+      view.dispatch({ changes: { from: view.state.doc.length, insert: "y" } });
+      vi.advanceTimersByTime(300); // the retry
+      deliver(buildDocument({ docVersion: 2, content: "sxy" })); // acked
+      pressCodexChord(); // synced: only its own notice kind is its to clear
+      await vi.advanceTimersByTimeAsync(0);
+      expect(handoffsPosted()).toBe(1);
+      expect(container?.querySelector(".quoll-resync-notice")).toBe(unsaved);
     } finally {
       vi.useRealTimers();
     }

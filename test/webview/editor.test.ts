@@ -128,6 +128,7 @@ function mount(
     onDispatch?: (action: Action) => void;
     nonce?: string;
     onLocalEditDiscarded?: () => void;
+    onHandoffSynced?: (synced: boolean) => void;
   } = {}
 ): MountResult {
   let state = opts.state ?? makeState();
@@ -138,6 +139,7 @@ function mount(
     getState: () => state,
     dispatch,
     onLocalEditDiscarded: opts.onLocalEditDiscarded,
+    onHandoffSynced: opts.onHandoffSynced,
   });
   mounted.push(handle);
   const mountEl = container?.querySelector(".quoll-editor") as HTMLElement | null;
@@ -1077,6 +1079,39 @@ describe("editor — dispose cancels pending flush (k)", () => {
   });
 });
 
+// dispose() also cancels a handoff still waiting on an ack: the wait must not
+// outlive the view, and a teardown is not reported to the shell as "unsynced".
+describe("editor — dispose cancels a waiting handoff", () => {
+  it("a handoff waiting at dispose posts nothing, tells the shell nothing, and leaves no timer", async () => {
+    const { runScopeHandlers } = await import("@codemirror/view");
+    vi.useFakeTimers();
+    const onHandoffSynced = vi.fn();
+    const { handle, view } = mount({ onHandoffSynced });
+    handle.applyDocument({ content: "seed", eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "x" } });
+    // happy-dom's CM platform detection is non-deterministic, so fire BOTH
+    // Ctrl-j and Cmd-j; exactly one resolves to Mod-j.
+    for (const mods of [{ ctrlKey: true }, { metaKey: true }]) {
+      runScopeHandlers(
+        view,
+        new KeyboardEvent("keydown", { key: "j", ...mods, bubbles: true, cancelable: true }),
+        "editor"
+      );
+    }
+    // The chord flushed the Edit; it is in flight, un-acked, so the handoff waits.
+    expect(editPosts().map((m) => (m as { content: string }).content)).toEqual(["seedx"]);
+    handle.dispose();
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(onHandoffSynced).not.toHaveBeenCalled();
+    expect(
+      postMessage.mock.calls.filter(
+        ([m]) => (m as { type?: string })?.type === "codex-context-handoff"
+      )
+    ).toEqual([]);
+  });
+});
+
 // V-M13(a) (C3): debounce-driven first-post path throw surface.
 // postEditMessage catches a throw and dispatches serialize-error; without
 // this guard, editInFlight would stay true forever (no Document arrives
@@ -1939,6 +1974,9 @@ describe("editor — context-handoff keymap is registered", () => {
         "editor"
       );
     }
+    // The command posts once edit-sync reports the host holds the view's text
+    // (here: at once), from a promise continuation.
+    await new Promise<void>((r) => setTimeout(r, 0));
     const handoff = postMessage.mock.calls
       .map((c) => c[0])
       .find(
@@ -2339,11 +2377,39 @@ describe("editor — Codex context-handoff keymap is registered", () => {
         "editor"
       );
     }
+    // Posted from a promise continuation, once edit-sync reports settled.
+    await new Promise<void>((r) => setTimeout(r, 0));
     const codexHandoffs = postMessage.mock.calls
       .map((c) => c[0])
       .filter((m) => !!m && (m as { type?: unknown }).type === "codex-context-handoff");
     expect(codexHandoffs).toHaveLength(1);
     expect(codexHandoffs[0]).toMatchObject({ type: "codex-context-handoff" });
+  });
+
+  it("a throwing onHandoffSynced does not stop a synced handoff from being posted", async () => {
+    const { runScopeHandlers } = await import("@codemirror/view");
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const boom = new Error("notice failed");
+    const { view, handle } = mount({
+      onHandoffSynced: () => {
+        throw boom;
+      },
+    });
+    handle.applyDocument({ content: "seed", eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
+    for (const mods of [{ ctrlKey: true }, { metaKey: true }]) {
+      runScopeHandlers(
+        view,
+        new KeyboardEvent("keydown", { key: "j", ...mods, bubbles: true, cancelable: true }),
+        "editor"
+      );
+    }
+    await new Promise<void>((r) => setTimeout(r, 0));
+    expect(
+      postMessage.mock.calls.filter(
+        ([m]) => (m as { type?: string })?.type === "codex-context-handoff"
+      )
+    ).toHaveLength(1);
+    expect(errorSpy).toHaveBeenCalledWith("[quoll] onHandoffSynced threw", boom);
   });
 });
 

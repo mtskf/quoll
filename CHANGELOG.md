@@ -7,6 +7,8 @@ All notable changes to Quoll are documented here.
 ### Fixed
 - surface rejected-draft and stash losses, and say what Format Document did (#459)
 
+- Sending the document to Claude Code or Codex right after typing now waits until your latest edits have reached the file, so the assistant no longer sees a version that is missing them. If Quoll cannot confirm that within two seconds, nothing is sent and a notice says so.
+
 - In a file with Windows line endings (CRLF), copying or cutting whole lines with several cursors and no selection now pastes them back as whole lines. They used to be spliced into the middle of the lines the cursors were on.
 
 ### Changed

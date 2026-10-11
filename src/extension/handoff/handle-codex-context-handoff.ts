@@ -58,9 +58,9 @@ export async function handleCodexContextHandoff<U>(
   // (false / throw) means the disk is still stale — abort with a warning that
   // names the FAILURE (not "just save it": the automatic save just failed, so
   // "save this file" would misdirect a read-only / permission error). Note:
-  // document.save() flushes APPLIED edits; an edit typed within edit-sync's
-  // ~300 ms debounce window may not yet be flushed — a documented LOW limitation
-  // (no data loss; the edit still syncs on its own timer).
+  // document.save() flushes APPLIED edits; the webview posts this message only
+  // once the host has acked the text on screen (cm/context-handoff.ts
+  // `afterSettled`), so those are the user's latest keystrokes.
   if (deps.isDirty) {
     const saved = await tryBool(deps.save, "document.save()");
     if (!saved) {

@@ -128,6 +128,13 @@ const CARET_REPORT_DEBOUNCE_MS = 100;
 // .claude/docs/LEARNING.md.
 const RECONCILE_PARSE_BUDGET_MS = 500;
 
+/** How long a handoff waits for the host to hold the view's text. The wait is
+ *  normally one post + one apply round-trip; past this the host is not
+ *  answering (or the user never stopped typing) and the handoff is abandoned
+ *  with a notice. A fixed deadline from the key press, on purpose: a sliding
+ *  one could hold a handoff open indefinitely. */
+const HANDOFF_SETTLE_TIMEOUT_MS = 2000;
+
 export type EditorOptions = {
   parent: HTMLElement;
   nonce: string;
@@ -165,6 +172,13 @@ export type EditorOptions = {
    *  stay on screen, un-saved. The shell wires it to a user-visible notice.
    *  Pass-through — the rule lives on `EditSyncOptions.onEditRefused`. */
   onEditRefused?: () => void;
+  /** Fired when an AI handoff finished waiting, with whether the host holds
+   *  the text on screen. `false` (refused or superseded edits, or no ack in
+   *  time) means nothing is posted; the shell shows a notice for that and
+   *  clears it on a later `true` — without one the chord would simply appear
+   *  dead. It reports the SYNC check only: whether the post that follows a
+   *  `true` goes out is `safePostMessage`'s to report. Not fired on teardown. */
+  onHandoffSynced?: (synced: boolean) => void;
 };
 
 /** The part of a host `DocumentMessage` the editor consumes. An object, not
@@ -813,11 +827,28 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // package.json keybinding. Cmd+Option+K never collides with Claude's
         // editorTextFocus binding; Cmd+J is claimed here before the workbench
         // togglePanel (verified in smoke; fallback stopPropagation → Mod-Alt-j).
-        // Flushes the pending debounced Edit before posting so the handoff never
-        // ships pre-keystroke line refs. Uses flushIfIdle (single-flight-
-        // respecting), NOT switch-editor's teardown flush, because the panel
-        // stays alive after a handoff and a force-post could be reseed-clobbered.
-        quollContextHandoffKeymap(getHost(), () => sync.flushIfIdle()),
+        // Flushes the pending debounced Edit and waits for the host to hold the
+        // view's text before posting, so the handoff never ships pre-keystroke
+        // content or line refs; when the text will not get there nothing is
+        // posted and the shell is told (onHandoffSynced).
+        quollContextHandoffKeymap(getHost(), async () => {
+          // flushIfIdle (single-flight-respecting), NOT the teardown flush: the
+          // panel stays alive, and a force-post could be reseed-clobbered.
+          sync.flushIfIdle();
+          const outcome = await sync.awaitSettled(HANDOFF_SETTLE_TIMEOUT_MS);
+          if (outcome === "cancelled") {
+            return false; // teardown: nobody left to tell
+          }
+          const synced = outcome === "settled";
+          // A failed NOTICE must not change the verdict: the sync check passed
+          // or it did not, whatever the shell made of being told.
+          try {
+            opts.onHandoffSynced?.(synced);
+          } catch (err) {
+            console.error("[quoll] onHandoffSynced threw", err);
+          }
+          return synced;
+        }),
         // Document outline navigator: a webview-native overlay panel (toggle
         // button + Mod-Alt-o) listing the doc's ATX headings; clicking one
         // dispatches a selection-only jump (byte-preserving) and focuses the
@@ -1374,6 +1405,9 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       // destroyed view; the empty-string Edit it would post must never
       // ship.
       sync.cancelPendingFlush();
+      // A handoff still waiting on an ack must not wake up against a destroyed
+      // view: cancelPendingFlush stops the debounce, not the waiters.
+      sync.cancelSettleWaits();
       // Drop a pending caret post too — the teardown-signal flush already
       // delivered the final caret while the transport was live; canceling
       // prevents a stray post from a timer outliving the destroyed view.
