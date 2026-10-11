@@ -2385,6 +2385,32 @@ describe("editor — Codex context-handoff keymap is registered", () => {
     expect(codexHandoffs).toHaveLength(1);
     expect(codexHandoffs[0]).toMatchObject({ type: "codex-context-handoff" });
   });
+
+  it("a throwing onHandoffSynced does not stop a synced handoff from being posted", async () => {
+    const { runScopeHandlers } = await import("@codemirror/view");
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const boom = new Error("notice failed");
+    const { view, handle } = mount({
+      onHandoffSynced: () => {
+        throw boom;
+      },
+    });
+    handle.applyDocument({ content: "seed", eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
+    for (const mods of [{ ctrlKey: true }, { metaKey: true }]) {
+      runScopeHandlers(
+        view,
+        new KeyboardEvent("keydown", { key: "j", ...mods, bubbles: true, cancelable: true }),
+        "editor"
+      );
+    }
+    await new Promise<void>((r) => setTimeout(r, 0));
+    expect(
+      postMessage.mock.calls.filter(
+        ([m]) => (m as { type?: string })?.type === "codex-context-handoff"
+      )
+    ).toHaveLength(1);
+    expect(errorSpy).toHaveBeenCalledWith("[quoll] onHandoffSynced threw", boom);
+  });
 });
 
 // Native-spellcheck toggle: the `spellcheck` attribute on the contenteditable

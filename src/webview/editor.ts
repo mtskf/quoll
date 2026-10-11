@@ -840,7 +840,13 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
             return false; // teardown: nobody left to tell
           }
           const synced = outcome === "settled";
-          opts.onHandoffSynced?.(synced);
+          // A failed NOTICE must not change the verdict: the sync check passed
+          // or it did not, whatever the shell made of being told.
+          try {
+            opts.onHandoffSynced?.(synced);
+          } catch (err) {
+            console.error("[quoll] onHandoffSynced threw", err);
+          }
           return synced;
         }),
         // Document outline navigator: a webview-native overlay panel (toggle
