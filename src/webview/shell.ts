@@ -131,7 +131,8 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   // clustering tripwire (onResyncStorm), discarded un-acked local bytes from
   // EITHER holder, the pre-ack replay buffer or an Edit still awaiting its ack
   // (onLocalEditDiscarded), un-posted edits held under a readonly document
-  // (onReadonlyHold), and an Edit the host refused (onEditRefused). It lives
+  // (onReadonlyHold), and an Edit the host refused (onEditRefused) — plus the
+  // outcome of a Format Document that did not format (see below). It lives
   // OUTSIDE bannerHost so the reducer-driven renderBanners (replaceChildren)
   // never clobbers it, and it is NOT reducer
   // state — none of the signals is a document error.
@@ -174,6 +175,15 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   // was appended" still shows the notice: the claim is only that the document is
   // not carrying the user's bytes as written, and whether they were never
   // applied, overwritten, or added to is not decidable in the webview.)
+  //
+  // The four `format-*` kinds are a FIFTH family and a different sort of
+  // statement: feedback on a command the user just ran (Format Document that
+  // changed nothing, was refused, or failed), not a loss. They share the lowest
+  // rank, below storm, so one never displaces a loss notice — it is declined,
+  // which is acceptable because the loss notice is the more important thing on
+  // screen — while a newer format result replaces an older one (equal rank).
+  // Not latched, no auto-dismiss: one stays until dismissed, replaced, or a
+  // Format Document that DOES format, which clears it (clearFormatNotice).
   //
   // The latches are INDEPENDENT. Storm is once-per-session and OUTLIVES a
   // dismiss (edit-sync latches too; `stormNoticeShown` is the display-side
@@ -226,6 +236,15 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
       "Quoll could not save an edit. Your text is still in this editor; Quoll will try again when you keep typing or leave the editor.",
     storm:
       "Quoll has repeatedly re-synced this document. Review your recent changes; some may not have been saved.",
+    // Kebab-case: the kind becomes a CSS class (quoll-notice-<kind>).
+    "format-unchanged": "Format Document: no changes were needed.",
+    "format-readonly": "Format Document: this document is read-only, so nothing was changed.",
+    "format-too-large":
+      "Format Document: the formatted result would exceed Quoll's size limit, so nothing was changed.",
+    // Deliberately NOT "nothing was changed": this also covers a dispatch that
+    // threw, which CodeMirror does not promise to roll back. The two refusals
+    // above are decided before any mutation, so their claim is proven.
+    "format-failed": "Format Document failed. Review the document before continuing.",
   } as const;
   type NoticeKind = keyof typeof NOTICE_TEXT;
   // Which claim wins the shared slot: higher is stronger. `Record<NoticeKind, …>`
@@ -237,7 +256,16 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   // copy of the check. A second copy at a call site isn't merely redundant:
   // it can shadow the real one and make it permanently unreachable, which is
   // exactly what happened here before this comment was corrected.
-  const NOTICE_PRIORITY: Record<NoticeKind, number> = { discard: 4, hold: 3, unsaved: 2, storm: 1 };
+  const NOTICE_PRIORITY: Record<NoticeKind, number> = {
+    discard: 4,
+    hold: 3,
+    unsaved: 2,
+    storm: 1,
+    "format-unchanged": 0,
+    "format-readonly": 0,
+    "format-too-large": 0,
+    "format-failed": 0,
+  };
   let noticeKind: NoticeKind | null = null;
   let stormNoticeShown = false;
   // Returns whether the slot now carries `kind`: false only for the priority
@@ -349,6 +377,15 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
     showNotice("discard");
     if (draft !== undefined) {
       offerDraftCopy();
+    }
+  }
+  // A Format Document that formatted: whatever an earlier run reported no
+  // longer describes the last one. Empties the slot only when it holds one of
+  // the format kinds — a loss notice is never cleared by a command.
+  function clearFormatNotice(): void {
+    if (noticeKind?.startsWith("format-")) {
+      noticeHost.replaceChildren();
+      noticeKind = null;
     }
   }
   function showHoldNotice(): boolean {
@@ -542,9 +579,20 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
       case "format-command":
         editor?.runFormatCommand(message.action);
         return;
-      case "format-document":
-        editor?.runFormatDocument();
+      case "format-document": {
+        const result = editor?.runFormatDocument();
+        if (result === undefined) {
+          return;
+        }
+        if (result === "formatted") {
+          clearFormatNotice();
+          return;
+        }
+        // The template type is exactly the four format kinds, so a new result
+        // value without a NOTICE_TEXT entry is a compile error.
+        showNotice(`format-${result}`);
         return;
+      }
       case "caret-apply":
         // One-shot caret handoff from the host (panel became active). Pure side
         // channel: it never enters the reducer (no docVersion / write-lock) — it

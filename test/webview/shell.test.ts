@@ -7,7 +7,12 @@ import {
   type HostSessionEvent,
   type HostSessionState,
 } from "../../src/extension/session/host-session-core.js";
-import { type HostToWebview, PROTOCOL_VERSION } from "../../src/shared/protocol.js";
+import * as fmtIndex from "../../src/markdown/format/index.js";
+import {
+  type HostToWebview,
+  MAX_CONTENT_LENGTH,
+  PROTOCOL_VERSION,
+} from "../../src/shared/protocol.js";
 import { EDITOR_PREF_CSS_VARS, editorPrefToCssValue } from "../../src/webview/cm/editor-prefs.js";
 import { addPendingAnchor } from "../../src/webview/cm/image/image-paste.js";
 import { proseLintEnabled } from "../../src/webview/cm/lint/index.js";
@@ -2049,6 +2054,114 @@ describe("shell — format-document routing", () => {
     deliver({ protocol: PROTOCOL_VERSION, type: "format-document" });
 
     expect(view.state.doc.toString()).toBe("1. a\n2. b\n");
+    // A format that changed the document says nothing.
+    expect(noticeCount()).toBe(0);
+  });
+});
+
+describe("shell — format-document feedback", () => {
+  const formatDocument = (): void => {
+    deliver({ protocol: PROTOCOL_VERSION, type: "format-document" });
+  };
+  const notice = (): HTMLElement => {
+    const el = (container as HTMLElement).querySelector<HTMLElement>(".quoll-resync-notice");
+    if (!el) {
+      throw new Error("no notice on screen");
+    }
+    return el;
+  };
+
+  it("says no changes were needed on an already-formatted document", async () => {
+    await mount();
+    deliver(buildDocument({ docVersion: 1, content: "1. a\n2. b\n" }));
+    formatDocument();
+    expect(noticeCount()).toBe(1);
+    expect(notice().textContent).toContain("no changes were needed");
+    expect(notice().textContent).not.toContain("failed");
+    expect(notice().classList.contains("quoll-notice-format-unchanged")).toBe(true);
+    expect(viewText()).toBe("1. a\n2. b\n");
+  });
+
+  it("says the document is read-only when it is", async () => {
+    await mount();
+    deliver(buildDocument({ docVersion: 1, content: "1. a\n1. b\n", canWrite: false }));
+    formatDocument();
+    expect(notice().textContent).toContain("read-only");
+    expect(notice().classList.contains("quoll-notice-format-readonly")).toBe(true);
+    expect(viewText()).toBe("1. a\n1. b\n");
+  });
+
+  it("says the result would exceed the size limit", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await mount();
+    deliver(buildDocument({ docVersion: 1, content: "a" }));
+    vi.spyOn(fmtIndex, "formatDocumentEdits").mockReturnValue([
+      { from: 0, to: 0, insert: "x".repeat(MAX_CONTENT_LENGTH + 1) },
+    ]);
+    formatDocument();
+    expect(notice().textContent).toContain("size limit");
+    expect(notice().classList.contains("quoll-notice-format-too-large")).toBe(true);
+    expect(viewText()).toBe("a");
+  });
+
+  it("a failure is reported without claiming that nothing was changed", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await mount();
+    deliver(buildDocument({ docVersion: 1, content: "1. a\n" }));
+    vi.spyOn(fmtIndex, "formatDocumentEdits").mockImplementation(() => {
+      throw new Error("boom");
+    });
+    formatDocument();
+    expect(notice().classList.contains("quoll-notice-format-failed")).toBe(true);
+    expect(notice().textContent).toContain("Format Document failed");
+    // "failed" also covers a dispatch that threw after updating the document.
+    expect(notice().textContent).not.toContain("nothing was changed");
+  });
+
+  it("a successful format clears an earlier format notice", async () => {
+    await mount();
+    deliver(buildDocument({ docVersion: 1, content: "1. a\n2. b\n" }));
+    formatDocument();
+    expect(noticeCount(".quoll-notice-format-unchanged")).toBe(1);
+    typeAtEnd("1. c\n");
+    formatDocument();
+    expect(viewText()).toBe("1. a\n2. b\n3. c\n");
+    expect(noticeCount()).toBe(0);
+  });
+
+  it("a newer format result replaces an older one", async () => {
+    await mount();
+    deliver(buildDocument({ docVersion: 1, content: "1. a\n2. b\n" }));
+    formatDocument();
+    expect(noticeCount(".quoll-notice-format-unchanged")).toBe(1);
+    deliver(buildDocument({ docVersion: 2, content: "1. a\n2. b\n", canWrite: false }));
+    formatDocument();
+    expect(noticeCount()).toBe(1);
+    expect(noticeCount(".quoll-notice-format-readonly")).toBe(1);
+  });
+
+  it("never displaces a loss notice, and a successful format does not clear one", async () => {
+    await mount();
+    vi.useFakeTimers();
+    deliver(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 11 }));
+    typeAtEnd("z"); // still in the debounce window when the foreign write lands
+    deliver(
+      buildDocument({
+        docVersion: 2,
+        content: "1. a\n2. b\n",
+        externalEpoch: 1,
+        epochGeneration: 11,
+      })
+    );
+    const discard = notice();
+    expect(discard.classList.contains("quoll-notice-discard")).toBe(true);
+    formatDocument(); // unchanged — declined behind the discard
+    expect(noticeCount()).toBe(1);
+    expect(notice()).toBe(discard);
+    typeAtEnd("1. c\n");
+    formatDocument(); // formatted — clears format notices only
+    expect(viewText()).toBe("1. a\n2. b\n3. c\n");
+    expect(notice()).toBe(discard);
   });
 });
 

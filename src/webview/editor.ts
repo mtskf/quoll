@@ -48,7 +48,10 @@ import { quollCodeHighlighting } from "./cm/fenced-code/fenced-code-highlight-la
 import { fencedCodeLanguagePicker } from "./cm/fenced-code/fenced-code-language-picker.js";
 import { quollFloatingToolbarScroll } from "./cm/floating-toolbar-scroll.js";
 import { quollFolding, reconcileReseedFolds } from "./cm/fold/index.js";
-import { runFormatDocument } from "./cm/format/format-document-command.js";
+import {
+  type FormatDocumentResult,
+  runFormatDocument,
+} from "./cm/format/format-document-command.js";
 import { frontmatterBlockField, frontmatterRevealKeymap } from "./cm/frontmatter/index.js";
 import { hostDocumentReseed } from "./cm/host-reseed.js";
 import { createImagePasteDrop, imageBlockField, quollResourceBaseUri } from "./cm/image/index.js";
@@ -225,8 +228,9 @@ export type EditorHandle = {
   runFormatCommand(action: FormatAction): void;
   /** Run the whole-document Format command as ONE transaction (single undo
    *  step). Rides the normal dispatch -> edit-sync pipeline; a no-op when the
-   *  view is read-only or the document is already in normal form. */
-  runFormatDocument(): void;
+   *  view is read-only or the document is already in normal form. Returns what
+   *  happened so the shell can say so (see `FormatDocumentResult`). */
+  runFormatDocument(): FormatDocumentResult;
   /** Apply a host-pushed caret (one-shot editor-switch handoff). Focuses the
    *  view — only when this webview already owns focus — so CodeMirror paints the
    *  cursor, then dispatches a selection-only transaction (no document mutation)
@@ -1309,7 +1313,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       runInlineFormat(view, action);
     },
     runFormatDocument() {
-      runFormatDocument(view);
+      return runFormatDocument(view);
     },
     applyRemoteCaret(caret) {
       const anchor = applyCaret(view.state.doc, caret);

@@ -332,7 +332,9 @@ html body {
    * once-per-session). shell.ts owns which one is in the slot; the modifier
    * classes exist for that distinction and currently carry no rules of their
    * own — so a tweak HERE changes all three, including the certain-loss
-   * discard notice. Distinct from .quoll-banner:
+   * discard notice. (The Format Document feedback kinds share the surface too;
+   * .quoll-notice-format-unchanged below is the one modifier with a rule.)
+   * Distinct from .quoll-banner:
    * NOT reducer-driven, and it carries its own dismiss control. Styled to
    * match the warning banner so the two read as one system. */
   .quoll-resync-notice {
@@ -345,6 +347,12 @@ html body {
     border-left: 3px solid var(--vscode-editorWarning-foreground);
     background-color: var(--vscode-inputValidation-warningBackground, transparent);
     color: var(--vscode-editor-foreground);
+  }
+
+  /* The slot is styled as a warning — right for a refused or failed Format
+   * Document, heavy for one that simply had nothing to do. */
+  .quoll-notice-format-unchanged {
+    border-left-color: var(--vscode-editorInfo-foreground);
   }
 
   .quoll-resync-notice-dismiss {

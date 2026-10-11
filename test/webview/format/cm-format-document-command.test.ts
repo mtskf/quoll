@@ -34,7 +34,7 @@ describe("runFormatDocument", () => {
   it("dispatches ONE transaction when formatting changes bytes", () => {
     const view = makeView("1. a\n1. b\n\n\n\nc  \n");
     const dispatched = countDispatch(view);
-    expect(runFormatDocument(view)).toBe(true);
+    expect(runFormatDocument(view)).toBe("formatted");
     expect(dispatched()).toBe(1);
     expect(view.state.doc.toString()).toBe("1. a\n2. b\n\nc  \n");
     view.destroy();
@@ -42,23 +42,23 @@ describe("runFormatDocument", () => {
   it("is a no-op (no dispatch) when already formatted", () => {
     const view = makeView("1. a\n2. b\n");
     const dispatched = countDispatch(view);
-    expect(runFormatDocument(view)).toBe(false);
+    expect(runFormatDocument(view)).toBe("unchanged");
     expect(dispatched()).toBe(0);
     view.destroy();
   });
   it("does nothing when read-only (would otherwise renumber)", () => {
     const view = makeView("1. a\n1. b\n", true);
-    expect(runFormatDocument(view)).toBe(false);
+    expect(runFormatDocument(view)).toBe("readonly");
     expect(view.state.doc.toString()).toBe("1. a\n1. b\n");
     view.destroy();
   });
-  it("catches a formatter throw: no crash, no mutation, returns false", () => {
+  it("catches a formatter throw: no crash, no mutation, reports failed", () => {
     const spy = vi.spyOn(fmtIndex, "formatDocumentEdits").mockImplementation(() => {
       throw new Error("boom");
     });
     const view = makeView("1. a\n");
     expect(() => runFormatDocument(view)).not.toThrow();
-    expect(runFormatDocument(view)).toBe(false);
+    expect(runFormatDocument(view)).toBe("failed");
     expect(view.state.doc.toString()).toBe("1. a\n");
     spy.mockRestore();
     view.destroy();
@@ -69,7 +69,7 @@ describe("runFormatDocument", () => {
       { from: 2, to: 4, insert: "Y" },
     ]);
     const view = makeView("abcdef");
-    expect(runFormatDocument(view)).toBe(false); // applyEdits throws -> caught
+    expect(runFormatDocument(view)).toBe("failed"); // applyEdits throws -> caught
     expect(view.state.doc.toString()).toBe("abcdef"); // no silent corruption
     spy.mockRestore();
     view.destroy();
@@ -80,7 +80,7 @@ describe("runFormatDocument", () => {
       .spyOn(fmtIndex, "formatDocumentEdits")
       .mockReturnValue([{ from: 0, to: 0, insert: big }]);
     const view = makeView("a");
-    expect(runFormatDocument(view)).toBe(false);
+    expect(runFormatDocument(view)).toBe("too-large");
     expect(view.state.doc.toString()).toBe("a");
     spy.mockRestore();
     view.destroy();
@@ -120,7 +120,7 @@ describe("runFormatDocument", () => {
         extensions: [quollDocumentEol.of("\r\n")],
       }),
     });
-    expect(runFormatDocument(view)).toBe(true);
+    expect(runFormatDocument(view)).toBe("formatted");
     // Header + delimiter + body + trailing empty line = 4 CM lines (NOT collapsed
     // into 1 by a stray embedded LF).
     expect(view.state.doc.lines).toBe(4);
@@ -138,9 +138,28 @@ describe("runFormatDocument", () => {
       .mockReturnValue([{ from: 0, to: 9999, insert: "X" }]);
     const view = makeView("abc");
     expect(() => runFormatDocument(view)).not.toThrow();
-    expect(runFormatDocument(view)).toBe(false);
+    expect(runFormatDocument(view)).toBe("failed");
     expect(view.state.doc.toString()).toBe("abc");
     spy.mockRestore();
+    view.destroy();
+  });
+  it("reports failed, not unchanged, when dispatch throws AFTER applying the edits", () => {
+    // CodeMirror gives no rollback guarantee for a dispatch that throws once the
+    // state is updated, so "failed" must not be read as "nothing was changed".
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const view = makeView("1. a\n1. b\n");
+    const orig = view.dispatch.bind(view);
+    view.dispatch = ((...a: Parameters<typeof orig>): void => {
+      orig(...a);
+      throw new Error("after update");
+    }) as typeof view.dispatch;
+    expect(runFormatDocument(view)).toBe("failed");
+    expect(view.state.doc.toString()).toBe("1. a\n2. b\n");
+    expect(consoleError).toHaveBeenCalledWith(
+      "[quoll] Format Document dispatch failed.",
+      expect.any(Error)
+    );
+    consoleError.mockRestore();
     view.destroy();
   });
 });
@@ -170,7 +189,7 @@ describe("runFormatDocument — the outbound size cap is measured in the documen
     const spy = vi
       .spyOn(fmtIndex, "formatDocumentEdits")
       .mockReturnValue([{ from: 0, to: view.state.doc.length, insert: big }]);
-    expect(runFormatDocument(view)).toBe(false);
+    expect(runFormatDocument(view)).toBe("too-large");
     expect(view.state.doc.toString()).toBe("a");
     spy.mockRestore();
     view.destroy();

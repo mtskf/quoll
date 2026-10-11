@@ -8,7 +8,8 @@
 // ChangeSet. No hasFocus guard (palette-invoked, no selection dependency);
 // read-only IS guarded (raw changes bypass the facet). Every failure path is
 // caught so a pathological document can neither crash the message loop nor
-// silently corrupt bytes.
+// silently corrupt bytes, and every outcome is REPORTED (FormatDocumentResult)
+// so the shell can tell the user why a format appeared to do nothing.
 import type { EditorView } from "@codemirror/view";
 import { applyEdits } from "../../../markdown/format/edit.js";
 import { formatDocumentEdits } from "../../../markdown/format/index.js";
@@ -35,9 +36,16 @@ export function outboundContentLength(text: string, eol: DocumentEol): number {
   return text.length + newlines * (eol.length - 1);
 }
 
-export function runFormatDocument(view: EditorView): boolean {
+/** What a Format Document run did. `readonly` and `too-large` are refusals
+ *  decided BEFORE any mutation, and `unchanged` found nothing to do, so all
+ *  three guarantee the document is untouched. `failed` does NOT: it also covers
+ *  a `view.dispatch` that threw, and CodeMirror gives no rollback guarantee for
+ *  a dispatch that throws after updating. */
+export type FormatDocumentResult = "formatted" | "unchanged" | "readonly" | "too-large" | "failed";
+
+export function runFormatDocument(view: EditorView): FormatDocumentResult {
   if (view.state.readOnly) {
-    return false;
+    return "readonly";
   }
   const source = view.state.doc.toString();
   let edits: ReturnType<typeof formatDocumentEdits>;
@@ -52,10 +60,10 @@ export function runFormatDocument(view: EditorView): boolean {
       "[quoll] Format Document aborted (formatter/edit error); no changes applied.",
       err
     );
-    return false;
+    return "failed";
   }
   if (edits.length === 0 || formatted === source) {
-    return false;
+    return "unchanged";
   }
   // The size check must read the DOCUMENT's EOL (state.facet(quollDocumentEol)):
   // the type rejects a plain `string`, but it cannot say WHICH of the two
@@ -65,7 +73,7 @@ export function runFormatDocument(view: EditorView): boolean {
     // and show the webview serialize-error banner, leaving the doc formatted but
     // unsaved. Bail before mutating instead.
     console.error("[quoll] Format Document aborted: result exceeds the content size limit.");
-    return false;
+    return "too-large";
   }
   // The formatter works in CM's LF-internal space and CM splits string inserts
   // with its own default /\r\n?|\n/ — EditorState.lineSeparator is deliberately
@@ -78,8 +86,10 @@ export function runFormatDocument(view: EditorView): boolean {
   try {
     view.dispatch({ changes: edits, userEvent: "quoll.formatDocument" });
   } catch (err) {
-    console.error("[quoll] Format Document dispatch failed; no changes applied.", err);
-    return false;
+    // Not "no changes applied": a dispatch that throws after updating the state
+    // is not rolled back.
+    console.error("[quoll] Format Document dispatch failed.", err);
+    return "failed";
   }
-  return true;
+  return "formatted";
 }
