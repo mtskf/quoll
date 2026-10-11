@@ -839,8 +839,9 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
           if (outcome === "cancelled") {
             return false; // teardown: nobody left to tell
           }
-          opts.onHandoffSynced?.(outcome === "settled");
-          return outcome === "settled";
+          const synced = outcome === "settled";
+          opts.onHandoffSynced?.(synced);
+          return synced;
         }),
         // Document outline navigator: a webview-native overlay panel (toggle
         // button + Mod-Alt-o) listing the doc's ATX headings; clicking one
