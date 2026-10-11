@@ -128,6 +128,7 @@ function mount(
     onDispatch?: (action: Action) => void;
     nonce?: string;
     onLocalEditDiscarded?: () => void;
+    onHandoffSynced?: (synced: boolean) => void;
   } = {}
 ): MountResult {
   let state = opts.state ?? makeState();
@@ -138,6 +139,7 @@ function mount(
     getState: () => state,
     dispatch,
     onLocalEditDiscarded: opts.onLocalEditDiscarded,
+    onHandoffSynced: opts.onHandoffSynced,
   });
   mounted.push(handle);
   const mountEl = container?.querySelector(".quoll-editor") as HTMLElement | null;
@@ -1074,6 +1076,39 @@ describe("editor — dispose cancels pending flush (k)", () => {
     handle.dispose();
     vi.advanceTimersByTime(1000);
     expect(postMessage).not.toHaveBeenCalled();
+  });
+});
+
+// dispose() also cancels a handoff still waiting on an ack: the wait must not
+// outlive the view, and a teardown is not reported to the shell as "unsynced".
+describe("editor — dispose cancels a waiting handoff", () => {
+  it("a handoff waiting at dispose posts nothing, tells the shell nothing, and leaves no timer", async () => {
+    const { runScopeHandlers } = await import("@codemirror/view");
+    vi.useFakeTimers();
+    const onHandoffSynced = vi.fn();
+    const { handle, view } = mount({ onHandoffSynced });
+    handle.applyDocument({ content: "seed", eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "x" } });
+    // happy-dom's CM platform detection is non-deterministic, so fire BOTH
+    // Ctrl-j and Cmd-j; exactly one resolves to Mod-j.
+    for (const mods of [{ ctrlKey: true }, { metaKey: true }]) {
+      runScopeHandlers(
+        view,
+        new KeyboardEvent("keydown", { key: "j", ...mods, bubbles: true, cancelable: true }),
+        "editor"
+      );
+    }
+    // The chord flushed the Edit; it is in flight, un-acked, so the handoff waits.
+    expect(editPosts().map((m) => (m as { content: string }).content)).toEqual(["seedx"]);
+    handle.dispose();
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(onHandoffSynced).not.toHaveBeenCalled();
+    expect(
+      postMessage.mock.calls.filter(
+        ([m]) => (m as { type?: string })?.type === "codex-context-handoff"
+      )
+    ).toEqual([]);
   });
 });
 
