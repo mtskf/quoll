@@ -212,6 +212,12 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   //
   // No auto-fade: a real byte loss that disappears on a timer is back to being
   // no signal at all.
+  //
+  // The discard notice carries ONE action, and only when the caller still had
+  // the lost text (a rejected draft an external write replaced): a Copy draft
+  // button that puts it on the clipboard. That text is held in one slot until
+  // the next such replacement overwrites it, the notice is dismissed, or the
+  // editor closes — it is a second chance, not a recovery store.
   const NOTICE_TEXT = {
     discard:
       "Quoll discarded pending edits while syncing this document. Review your recent changes and reapply anything missing; Undo cannot restore discarded edits.",
@@ -269,14 +275,81 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
     dismiss.addEventListener("click", () => {
       noticeHost.replaceChildren();
       noticeKind = null;
+      discardedDraft = null;
     });
     notice.append(text, dismiss);
     noticeHost.replaceChildren(notice);
     noticeKind = kind;
     return true;
   }
-  function showDiscardNotice(): void {
+  // The bytes of the most recent discarded draft whose caller still had them
+  // (editor.ts applyDocument: a rejected draft an external write replaced).
+  // ONE slot, latest wins; emptied by dismiss. A discard that carries no bytes
+  // (edit-sync) leaves it alone — that loss is a different, unrecoverable one,
+  // and it must not take a still-copyable draft away.
+  let discardedDraft: string | null = null;
+  // Last-attempt-wins guard for the Copy draft button's label. Bumped by every
+  // click AND by every relabel for a new draft, so a clipboard promise that
+  // settles late — after the slot moved to a newer draft, or after a later
+  // click on the same draft already settled — changes nothing. Same guard as
+  // the fenced-code copy button's `attempt`.
+  let copyAttempt = 0;
+  // Add the Copy draft button to the discard notice on screen, or relabel the
+  // one already there. The notice element itself is never re-created for a
+  // repeat discard (showNotice's aggregation), so this is the only thing that
+  // changes when a second draft replaces the first.
+  function offerDraftCopy(): void {
+    const dismiss = noticeHost.querySelector(".quoll-resync-notice-dismiss");
+    if (dismiss === null) {
+      return;
+    }
+    let copy = noticeHost.querySelector<HTMLButtonElement>(".quoll-resync-notice-copy");
+    if (copy === null) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "quoll-resync-notice-copy";
+      button.addEventListener("click", () => {
+        // Read at click time: the slot may hold a newer draft than the one this
+        // button was built for.
+        const draft = discardedDraft;
+        if (draft === null) {
+          return;
+        }
+        const attempt = ++copyAttempt;
+        const failed = (err: unknown): void => {
+          if (attempt !== copyAttempt) {
+            return;
+          }
+          console.warn("[quoll] copy draft failed", err);
+          button.textContent = "Copy failed";
+        };
+        try {
+          navigator.clipboard.writeText(draft).then(() => {
+            if (attempt === copyAttempt) {
+              button.textContent = "Copied";
+            }
+          }, failed);
+        } catch (err) {
+          // No clipboard API, or a synchronous refusal: the same outcome.
+          failed(err);
+        }
+      });
+      dismiss.before(button);
+      copy = button;
+    }
+    // Also on a relabel: "Copied" said of an older draft must not claim the
+    // new one, and a copy of the older draft still in flight must not either.
+    copyAttempt++;
+    copy.textContent = "Copy draft";
+  }
+  function showDiscardNotice(draft?: string): void {
+    if (draft !== undefined) {
+      discardedDraft = draft;
+    }
     showNotice("discard");
+    if (draft !== undefined) {
+      offerDraftCopy();
+    }
   }
   function showHoldNotice(): boolean {
     return showNotice("hold");

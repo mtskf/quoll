@@ -1257,6 +1257,203 @@ describe("shell — own-lineage Documents never rewind un-acked bytes", () => {
     }
   });
 
+  describe("Copy draft on the discard notice", () => {
+    const clipboardBefore = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    const writeText = vi.fn<(text: string) => Promise<void>>();
+    beforeEach(() => {
+      writeText.mockReset();
+      writeText.mockResolvedValue(undefined);
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText },
+      });
+    });
+    afterEach(() => {
+      if (clipboardBefore) {
+        Object.defineProperty(navigator, "clipboard", clipboardBefore);
+      } else {
+        Reflect.deleteProperty(navigator, "clipboard");
+      }
+    });
+
+    const copyButtons = (): HTMLButtonElement[] =>
+      Array.from(
+        (container as HTMLElement).querySelectorAll<HTMLButtonElement>(".quoll-resync-notice-copy")
+      );
+    const copyButton = (): HTMLButtonElement => {
+      const [button] = copyButtons();
+      if (!button) {
+        throw new Error("no Copy draft button");
+      }
+      return button;
+    };
+    // Let the clipboard promise's settle handlers run (promises are not faked).
+    const settled = async (): Promise<void> => {
+      await Promise.resolve();
+      await Promise.resolve();
+    };
+    function deferred() {
+      let resolve!: () => void;
+      let reject!: (err: unknown) => void;
+      const promise = new Promise<void>((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      return { promise, resolve, reject };
+    }
+    // Draft "a\nbx" replaced by "theirs": the notice is up with its button.
+    async function startWithReplacedDraft() {
+      const host = await startWithRejectedDraft();
+      host.externalWrite("theirs");
+      host.pump();
+      expect(viewText()).toBe("theirs");
+      return host;
+    }
+    // A SECOND draft ("theirsy") rejected and replaced while the notice is up.
+    function replaceSecondDraft(host: ReturnType<typeof realHost>): void {
+      typeAtEnd("y");
+      vi.advanceTimersByTime(300);
+      host.receive();
+      host.pump(); // edit-rejected
+      expect(viewText()).toBe("theirsy");
+      host.externalWrite("theirs again");
+      host.pump();
+      expect(viewText()).toBe("theirs again");
+    }
+    // A discard edit-sync reports itself, which carries no bytes: a keystroke
+    // still in the debounce window when a foreign write lands.
+    function draftlessDiscard(host: ReturnType<typeof realHost>, content: string): void {
+      typeAtEnd("z");
+      host.externalWrite(content);
+      host.pump();
+      expect(viewText()).toBe(content);
+    }
+
+    it("copies exactly the replaced draft and then reads Copied", async () => {
+      await startWithReplacedDraft();
+      const notice = (container as HTMLElement).querySelector(".quoll-notice-discard");
+      expect(notice?.querySelectorAll(".quoll-resync-notice-copy").length).toBe(1);
+      const button = copyButton();
+      expect(button.textContent).toBe("Copy draft");
+      // The dismiss control stays the last thing in the notice.
+      expect(notice?.lastElementChild?.classList.contains("quoll-resync-notice-dismiss")).toBe(
+        true
+      );
+      button.click();
+      expect(writeText).toHaveBeenCalledTimes(1);
+      expect(writeText).toHaveBeenCalledWith("a\nbx");
+      await settled();
+      expect(button.textContent).toBe("Copied");
+    });
+
+    it("a second replaced draft reuses the notice and its one button, which now copies the second draft", async () => {
+      const host = await startWithReplacedDraft();
+      const notice = (container as HTMLElement).querySelector(".quoll-notice-discard");
+      const button = copyButton();
+      button.click();
+      await settled();
+      expect(button.textContent).toBe("Copied");
+      replaceSecondDraft(host);
+      expect((container as HTMLElement).querySelector(".quoll-notice-discard")).toBe(notice);
+      expect(copyButtons()).toEqual([button]);
+      // "Copied" was about the first draft; it must not claim the second one.
+      expect(button.textContent).toBe("Copy draft");
+      button.click();
+      expect(writeText).toHaveBeenLastCalledWith("theirsy");
+    });
+
+    it("a discard that carries no bytes leaves the button and its draft in place", async () => {
+      const host = await startWithReplacedDraft();
+      const button = copyButton();
+      draftlessDiscard(host, "other");
+      expect(copyButtons()).toEqual([button]);
+      button.click();
+      expect(writeText).toHaveBeenCalledTimes(1);
+      expect(writeText).toHaveBeenCalledWith("a\nbx");
+    });
+
+    it("a discard that carries no bytes shows no Copy button on its own", async () => {
+      const host = await start("s");
+      draftlessDiscard(host, "other");
+      expect(noticeCount(".quoll-notice-discard")).toBe(1);
+      expect(copyButtons()).toEqual([]);
+    });
+
+    it("dismiss empties the draft: a later byte-less discard shows no Copy button", async () => {
+      const host = await startWithReplacedDraft();
+      expect(copyButtons().length).toBe(1);
+      (
+        (container as HTMLElement).querySelector(".quoll-resync-notice-dismiss") as HTMLElement
+      ).click();
+      expect(noticeCount()).toBe(0);
+      draftlessDiscard(host, "other");
+      expect(noticeCount(".quoll-notice-discard")).toBe(1);
+      expect(copyButtons()).toEqual([]);
+    });
+
+    it("reads Copy failed when the clipboard refuses, without an unhandled rejection", async () => {
+      const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const unhandled = vi.fn();
+      process.on("unhandledRejection", unhandled);
+      try {
+        await startWithReplacedDraft();
+        const refusal = new Error("denied");
+        writeText.mockRejectedValue(refusal);
+        const button = copyButton();
+        button.click();
+        await settled();
+        expect(button.textContent).toBe("Copy failed");
+        expect(consoleWarn).toHaveBeenCalledWith("[quoll] copy draft failed", refusal);
+        // A clipboard API that is missing altogether reads the same way.
+        Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+        button.textContent = "";
+        expect(() => button.click()).not.toThrow();
+        expect(button.textContent).toBe("Copy failed");
+        vi.useRealTimers();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(unhandled).not.toHaveBeenCalled();
+      } finally {
+        process.off("unhandledRejection", unhandled);
+      }
+    });
+
+    it.each([
+      "resolve",
+      "reject",
+    ] as const)("a copy of the first draft that settles (%s) after a second draft arrived does not label the second", async (outcome) => {
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      const host = await startWithReplacedDraft();
+      const first = deferred();
+      writeText.mockReturnValueOnce(first.promise);
+      const button = copyButton();
+      button.click();
+      replaceSecondDraft(host);
+      expect(button.textContent).toBe("Copy draft");
+      if (outcome === "resolve") {
+        first.resolve();
+      } else {
+        first.reject(new Error("late"));
+      }
+      await settled();
+      expect(button.textContent).toBe("Copy draft");
+    });
+
+    it("two clicks on one draft: a late rejection of the first does not undo the second's Copied", async () => {
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      await startWithReplacedDraft();
+      const first = deferred();
+      writeText.mockReturnValueOnce(first.promise);
+      const button = copyButton();
+      button.click();
+      button.click(); // resolves
+      await settled();
+      expect(button.textContent).toBe("Copied");
+      first.reject(new Error("late"));
+      await settled();
+      expect(button.textContent).toBe("Copied");
+    });
+  });
+
   describe("against the real host reducer", () => {
     // Against the REAL host, no legitimate own-lineage flow may read as
     // foreign: a discard notice in any of these columns means a Document

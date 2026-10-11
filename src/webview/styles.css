@@ -359,6 +359,24 @@ html body {
     cursor: pointer;
   }
 
+  /* The discard notice's one action (shell.ts offerDraftCopy), present only
+   * when the lost draft can still be copied. It sits immediately before the
+   * dismiss control and takes over the auto margin, so the pair stays at the
+   * far right with dismiss last. */
+  .quoll-resync-notice-copy {
+    flex: 0 0 auto;
+    margin-left: auto;
+    padding: 0.2em 0.6em;
+    border: none;
+    background: var(--vscode-button-secondaryBackground);
+    color: var(--vscode-button-secondaryForeground);
+    cursor: pointer;
+  }
+
+  .quoll-resync-notice-copy + .quoll-resync-notice-dismiss {
+    margin-left: 0;
+  }
+
   /* Decoration syntax reveal (C4a). Caret-on-token rendering — the syntax
    * marks (#, >, **, *, `, ~~) remain in the document but render dim so the
    * user can read AND edit them. Caret-off renders via Decoration.replace
