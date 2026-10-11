@@ -2163,6 +2163,71 @@ describe("shell — format-document feedback", () => {
     expect(viewText()).toBe("1. a\n2. b\n3. c\n");
     expect(notice()).toBe(discard);
   });
+
+  // The discard above is the top rank, so nothing could displace it anyway. The
+  // three weaker loss kinds are where the format kinds' rank actually decides.
+  // Each test puts `loss` on screen over a document Format Document would leave
+  // alone, then: a result that changes nothing is declined, and one that does
+  // format clears nothing.
+  const expectFormatLeaves = (loss: HTMLElement): void => {
+    const before = viewText();
+    formatDocument(); // changes nothing — declined behind the loss notice
+    expect(viewText()).toBe(before);
+    expect(noticeCount()).toBe(1);
+    expect(notice()).toBe(loss);
+    typeAtEnd("1. z\n");
+    formatDocument(); // formatted — clears format notices only
+    expect(viewText()).not.toBe(`${before}1. z\n`);
+    expect(noticeCount()).toBe(1);
+    expect(notice()).toBe(loss);
+  };
+
+  it("never displaces an unsaved notice, and a successful format does not clear it", async () => {
+    await mount();
+    vi.useFakeTimers();
+    deliver(buildDocument({ docVersion: 1, content: "1. a\n" }));
+    typeAtEnd("2. b\n");
+    vi.advanceTimersByTime(300); // posts — in flight
+    // The host repeats the base the Edit was posted on: a refusal.
+    deliver(buildDocument({ docVersion: 1, content: "1. a\n" }));
+    const unsaved = notice();
+    expect(unsaved.classList.contains("quoll-notice-unsaved")).toBe(true);
+    expectFormatLeaves(unsaved);
+  });
+
+  it("never displaces a hold notice, and a successful format does not clear it", async () => {
+    await mount();
+    vi.useFakeTimers();
+    deliver(buildDocument({ docVersion: 1, content: "1. a\n" }));
+    typeAtEnd("2. b\n");
+    vi.advanceTimersByTime(300); // posts — in flight
+    typeAtEnd("3. c\n");
+    vi.advanceTimersByTime(300); // buffers
+    deliver(buildDocument({ docVersion: 2, content: "1. a\n", canWrite: false }));
+    window.dispatchEvent(new Event("blur"));
+    const hold = notice();
+    expect(hold.classList.contains("quoll-notice-hold")).toBe(true);
+    formatDocument(); // read-only — declined behind the hold
+    expect(notice()).toBe(hold);
+    // Re-grant: the held bytes are replayed and acked; the notice stays.
+    deliver(buildDocument({ docVersion: 2, content: "1. a\n" }));
+    deliver(buildDocument({ docVersion: 3, content: "1. a\n2. b\n3. c\n" }));
+    expect(notice()).toBe(hold);
+    expectFormatLeaves(hold);
+  });
+
+  it("never displaces a storm notice, and a successful format does not clear it", async () => {
+    await mount();
+    vi.useFakeTimers();
+    deliver(buildDocument({ docVersion: 1, content: "1. a\n", epochGeneration: 1 }));
+    deliver(buildDocument({ docVersion: 1, content: "1. a\n", epochGeneration: 2 }));
+    deliver(buildDocument({ docVersion: 1, content: "1. a\n", epochGeneration: 3 }));
+    deliver(buildDocument({ docVersion: 1, content: "1. a\n", epochGeneration: 4 }));
+    await Promise.resolve(); // the storm renders one microtask late
+    const storm = notice();
+    expect(storm.classList.contains("quoll-notice-storm")).toBe(true);
+    expectFormatLeaves(storm);
+  });
 });
 
 describe("shell — format-command routing", () => {
