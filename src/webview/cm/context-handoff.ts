@@ -99,10 +99,15 @@ export function selectionToHandoff(state: EditorState): {
  *  or firing a platform-dependent synthetic key event. */
 export function contextHandoffCommand(host: HandoffHost, settle: () => Promise<boolean>): Command {
   return (view) => {
+    const pressed = view.state;
     void afterSettled(view, settle, () => {
-      // Captured AFTER the wait: the user may have typed or moved the selection
-      // while it ran, and line numbers taken before would point somewhere else.
-      const { hasSelection, startLine, endLine } = selectionToHandoff(view.state);
+      // Same document as at the key press: the selection the user had THEN is
+      // the request, and its line numbers still hold — moving or collapsing it
+      // during the wait must not turn a range into a whole-file reference.
+      // Document changed during the wait: the press-time line numbers are
+      // stale, so the current selection is used instead.
+      const state = view.state.doc.eq(pressed.doc) ? pressed : view.state;
+      const { hasSelection, startLine, endLine } = selectionToHandoff(state);
       const message: WebviewToHost = {
         protocol: PROTOCOL_VERSION,
         type: "context-handoff",

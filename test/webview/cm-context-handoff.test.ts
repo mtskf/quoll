@@ -201,7 +201,7 @@ describe("contextHandoffCommand", () => {
     expect(postMessage).not.toHaveBeenCalled();
   });
 
-  it("captures the selection after the wait, not before", async () => {
+  it("sends the press-time selection when only the selection moved during the wait", async () => {
     let release!: (ok: boolean) => void;
     const settle = () =>
       new Promise<boolean>((r) => {
@@ -211,11 +211,35 @@ describe("contextHandoffCommand", () => {
     const view = new EditorView({ state: stateWith(0, 3), parent: document.body }); // line 1
     try {
       contextHandoffCommand({ postMessage }, settle)(view);
-      view.dispatch({ selection: EditorSelection.single(12, 20) }); // lines 3-4
+      // Collapsed onto line 3: sent as-is this would be a whole-file reference.
+      view.dispatch({ selection: EditorSelection.cursor(12) });
       release(true);
       await flushMicrotasks();
       expect(postMessage).toHaveBeenCalledWith(
-        expect.objectContaining({ hasSelection: true, startLine: 3, endLine: 4 })
+        expect.objectContaining({ hasSelection: true, startLine: 1, endLine: 1 })
+      );
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("sends the current selection when the document changed during the wait", async () => {
+    let release!: (ok: boolean) => void;
+    const settle = () =>
+      new Promise<boolean>((r) => {
+        release = r;
+      });
+    const postMessage = vi.fn();
+    const view = new EditorView({ state: stateWith(0, 3), parent: document.body }); // line 1
+    try {
+      contextHandoffCommand({ postMessage }, settle)(view);
+      // A line typed above the selection: the mapped selection now sits on
+      // line 2, and the press-time "line 1" names the new line instead.
+      view.dispatch({ changes: { from: 0, insert: "line0\n" } });
+      release(true);
+      await flushMicrotasks();
+      expect(postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ hasSelection: true, startLine: 2, endLine: 2 })
       );
     } finally {
       view.destroy();
