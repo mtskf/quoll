@@ -330,10 +330,10 @@ export async function handleContextHandoff(
   // Save first so the on-disk reference matches the lines the webview saw. The
   // @-mention is a disk reference; a dirty buffer would point Claude Code at
   // stale bytes. A FAILED save (false / throw) means the disk is still stale —
-  // abort with a warning rather than hand off a misleading reference. (Note:
-  // an edit typed within edit-sync's 300 ms debounce window may not yet be in
-  // the TextDocument the save flushes — a documented v1 line-skew limitation,
-  // not closed here.)
+  // abort with a warning rather than hand off a misleading reference. (The
+  // webview posts this message only once the host has acked the text on
+  // screen — cm/context-handoff.ts `afterSettled` — so the TextDocument the
+  // save flushes already carries the user's latest keystrokes.)
   if (deps.isDirty) {
     const saved = await tryBool(deps.save, "document.save()");
     if (!saved) {
