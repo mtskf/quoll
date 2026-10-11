@@ -1939,6 +1939,9 @@ describe("editor — context-handoff keymap is registered", () => {
         "editor"
       );
     }
+    // The command posts once edit-sync reports the host holds the view's text
+    // (here: at once), from a promise continuation.
+    await new Promise<void>((r) => setTimeout(r, 0));
     const handoff = postMessage.mock.calls
       .map((c) => c[0])
       .find(
@@ -2339,6 +2342,8 @@ describe("editor — Codex context-handoff keymap is registered", () => {
         "editor"
       );
     }
+    // Posted from a promise continuation, once edit-sync reports settled.
+    await new Promise<void>((r) => setTimeout(r, 0));
     const codexHandoffs = postMessage.mock.calls
       .map((c) => c[0])
       .filter((m) => !!m && (m as { type?: unknown }).type === "codex-context-handoff");

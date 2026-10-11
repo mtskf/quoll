@@ -184,6 +184,9 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   // screen — while a newer format result replaces an older one (equal rank).
   // Not latched, no auto-dismiss: one stays until dismissed, replaced, or a
   // Format Document that DOES format, which clears it (clearFormatNotice).
+  // `handoff-unsynced` is the same family — feedback on the handoff chord the
+  // user just pressed — with the same rank and the same clear-on-success (a
+  // later attempt that finds the document synced clears it).
   //
   // The latches are INDEPENDENT. Storm is once-per-session and OUTLIVES a
   // dismiss (edit-sync latches too; `stormNoticeShown` is the display-side
@@ -245,6 +248,8 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
     // threw, which CodeMirror does not promise to roll back. The two refusals
     // above are decided before any mutation, so their claim is proven.
     "format-failed": "Format Document failed. Review the document before continuing.",
+    "handoff-unsynced":
+      "Quoll could not confirm that your latest edits were saved, so nothing was sent to the assistant. Try again — after your next edit if this repeats.",
   } as const;
   type NoticeKind = keyof typeof NOTICE_TEXT;
   // Which claim wins the shared slot: higher is stronger. `Record<NoticeKind, …>`
@@ -265,6 +270,7 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
     "format-readonly": 0,
     "format-too-large": 0,
     "format-failed": 0,
+    "handoff-unsynced": 0,
   };
   let noticeKind: NoticeKind | null = null;
   let stormNoticeShown = false;
@@ -386,6 +392,25 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
     if (noticeKind?.startsWith("format-")) {
       noticeHost.replaceChildren();
       noticeKind = null;
+    }
+  }
+  // The handoff chord's feedback, same family as the format kinds: "not synced"
+  // is shown unless a loss notice holds the slot (which already says the edits
+  // are not saved), and a later attempt that DOES find the document synced
+  // clears it. About the sync check only — a post that then fails in transport
+  // is logged by safePostMessage, not reported here.
+  function showHandoffSynced(synced: boolean): void {
+    if (synced) {
+      if (noticeKind === "handoff-unsynced") {
+        noticeHost.replaceChildren();
+        noticeKind = null;
+      }
+      return;
+    }
+    if (!showNotice("handoff-unsynced")) {
+      // Declined by a stronger notice. Leave a trace so "the chord did
+      // nothing" is triageable.
+      console.warn("[quoll] handoff not sent (unsynced); a stronger notice holds the slot");
     }
   }
   function showHoldNotice(): boolean {
@@ -529,6 +554,7 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
     onEditRefused: () => {
       showNotice("unsaved");
     },
+    onHandoffSynced: showHandoffSynced,
   });
 
   const unsubscribe = subscribeToHost((message) => {

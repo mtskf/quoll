@@ -14,6 +14,10 @@ import {
 
 const doc = "line1\nline2\nline3\nline4\nline5";
 
+// The commands post from a promise continuation; one macrotask drains it.
+const flushMicrotasks = () => new Promise<void>((r) => setTimeout(r, 0));
+const settled = async () => true;
+
 function stateWith(anchor: number, head: number): EditorState {
   return EditorState.create({
     doc,
@@ -102,14 +106,15 @@ describe("selectionToHandoff", () => {
 });
 
 describe("contextHandoffCommand", () => {
-  it("posts a context-handoff message for the current selection", () => {
+  it("posts a context-handoff message for the current selection", async () => {
     const postMessage = vi.fn();
     const parent = document.createElement("div");
     document.body.appendChild(parent);
     const view = new EditorView({ state: stateWith(6, 20), parent });
     try {
-      const handled = contextHandoffCommand({ postMessage }, () => {})(view);
+      const handled = contextHandoffCommand({ postMessage }, settled)(view);
       expect(handled).toBe(true);
+      await flushMicrotasks();
       expect(postMessage).toHaveBeenCalledWith({
         protocol: PROTOCOL_VERSION,
         type: "context-handoff",
@@ -122,27 +127,102 @@ describe("contextHandoffCommand", () => {
     }
   });
 
-  it("flushes pending edits before posting (no stale line refs on type-then-handoff)", () => {
-    // Reproduces the stale-line-reference bug: edit-sync debounces outbound
-    // Edits by 300 ms, so a handoff fired mid-window would reference host
-    // content that lacks the latest keystrokes unless we flush first. Mirrors
-    // the switch-editor precedent — pin the flush→post order (FIFO: the flushed
-    // Edit reaches the host before the handoff geometry).
-    const calls: string[] = [];
-    const flush = vi.fn(() => calls.push("flush"));
-    const postMessage = vi.fn(() => calls.push("post"));
-    const parent = document.createElement("div");
-    document.body.appendChild(parent);
-    const view = new EditorView({ state: stateWith(6, 20), parent });
+  it("posts only after settle resolves true", async () => {
+    let release!: (ok: boolean) => void;
+    const settle = vi.fn(
+      () =>
+        new Promise<boolean>((r) => {
+          release = r;
+        })
+    );
+    const postMessage = vi.fn();
+    const view = new EditorView({ state: stateWith(6, 20), parent: document.body });
     try {
-      contextHandoffCommand({ postMessage }, flush)(view);
-      expect(calls).toEqual(["flush", "post"]);
+      expect(contextHandoffCommand({ postMessage }, settle)(view)).toBe(true);
+      expect(settle).toHaveBeenCalledTimes(1); // synchronously, inside the key dispatch
+      await flushMicrotasks();
+      expect(postMessage).not.toHaveBeenCalled();
+      release(true);
+      await flushMicrotasks();
+      expect(postMessage).toHaveBeenCalledTimes(1);
+      expect(postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "context-handoff" })
+      );
     } finally {
       view.destroy();
     }
   });
 
-  it("returns true even when postMessage throws (chord is claimed)", () => {
+  it("does not post when settle resolves false (unsynced / cancelled)", async () => {
+    const postMessage = vi.fn();
+    const view = new EditorView({ state: stateWith(6, 20), parent: document.body });
+    try {
+      expect(contextHandoffCommand({ postMessage }, async () => false)(view)).toBe(true);
+      await flushMicrotasks();
+      expect(postMessage).not.toHaveBeenCalled();
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("does not post, and does not throw, when settle throws or rejects", async () => {
+    const postMessage = vi.fn();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const view = new EditorView({ state: stateWith(6, 20), parent: document.body });
+    try {
+      const throws = () => {
+        throw new Error("boom");
+      };
+      expect(contextHandoffCommand({ postMessage }, throws)(view)).toBe(true);
+      expect(
+        contextHandoffCommand({ postMessage }, () => Promise.reject(new Error("boom")))(view)
+      ).toBe(true);
+      await flushMicrotasks();
+      expect(postMessage).not.toHaveBeenCalled();
+      expect(errorSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      errorSpy.mockRestore();
+      view.destroy();
+    }
+  });
+
+  it("does not post when the view was destroyed while it waited", async () => {
+    let release!: (ok: boolean) => void;
+    const settle = () =>
+      new Promise<boolean>((r) => {
+        release = r;
+      });
+    const postMessage = vi.fn();
+    const view = new EditorView({ state: stateWith(6, 20), parent: document.body });
+    contextHandoffCommand({ postMessage }, settle)(view);
+    view.destroy();
+    release(true); // a settle that did not notice the teardown
+    await flushMicrotasks();
+    expect(postMessage).not.toHaveBeenCalled();
+  });
+
+  it("captures the selection after the wait, not before", async () => {
+    let release!: (ok: boolean) => void;
+    const settle = () =>
+      new Promise<boolean>((r) => {
+        release = r;
+      });
+    const postMessage = vi.fn();
+    const view = new EditorView({ state: stateWith(0, 3), parent: document.body }); // line 1
+    try {
+      contextHandoffCommand({ postMessage }, settle)(view);
+      view.dispatch({ selection: EditorSelection.single(12, 20) }); // lines 3-4
+      release(true);
+      await flushMicrotasks();
+      expect(postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ hasSelection: true, startLine: 3, endLine: 4 })
+      );
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("returns true even when postMessage throws (chord is claimed)", async () => {
     const postMessage = vi.fn(() => {
       throw new Error("transport gone");
     });
@@ -150,25 +230,9 @@ describe("contextHandoffCommand", () => {
     document.body.appendChild(parent);
     const view = new EditorView({ state: stateWith(0, 0), parent });
     try {
-      expect(contextHandoffCommand({ postMessage }, () => {})(view)).toBe(true);
-    } finally {
-      view.destroy();
-    }
-  });
-
-  it("does not throw out of the command when flushPendingEdit throws", () => {
-    // The flush precedes the post; a throw from flush must not unwind the
-    // keymap command (mirrors the postMessage-throws posture).
-    const postMessage = vi.fn();
-    const flush = vi.fn(() => {
-      throw new Error("flush gone");
-    });
-    const parent = document.createElement("div");
-    document.body.appendChild(parent);
-    const view = new EditorView({ state: stateWith(0, 0), parent });
-    try {
-      expect(contextHandoffCommand({ postMessage }, flush)(view)).toBe(true);
-      expect(postMessage).toHaveBeenCalled();
+      expect(contextHandoffCommand({ postMessage }, settled)(view)).toBe(true);
+      await flushMicrotasks(); // the post runs, and its throw stays inside
+      expect(postMessage).toHaveBeenCalledTimes(1);
     } finally {
       view.destroy();
     }
@@ -191,15 +255,16 @@ describe("CODEX_CONTEXT_HANDOFF_KEY", () => {
 });
 
 describe("codexContextHandoffCommand", () => {
-  it("posts a codex-context-handoff envelope with no selection geometry", () => {
+  it("posts a codex-context-handoff envelope with no selection geometry", async () => {
     const postMessage = vi.fn();
     const parent = document.createElement("div");
     document.body.appendChild(parent);
     // Selection present — must NOT leak into the Codex message (whole-file).
     const view = new EditorView({ state: stateWith(6, 20), parent });
     try {
-      const handled = codexContextHandoffCommand({ postMessage }, () => {})(view);
+      const handled = codexContextHandoffCommand({ postMessage }, settled)(view);
       expect(handled).toBe(true);
+      await flushMicrotasks();
       expect(postMessage).toHaveBeenCalledWith({
         protocol: PROTOCOL_VERSION,
         type: "codex-context-handoff",
@@ -209,25 +274,81 @@ describe("codexContextHandoffCommand", () => {
     }
   });
 
-  it("flushes pending edits before posting (whole-file handoff sees latest keystrokes)", () => {
-    // Codex adds the WHOLE file via addFileToThread; without a flush the host
-    // saves stale bytes (isDirty only covers already-dirty docs, not
-    // webview-only edits). Pin flush→post, same barrier as the Claude path.
-    const calls: string[] = [];
-    const flush = vi.fn(() => calls.push("flush"));
-    const postMessage = vi.fn(() => calls.push("post"));
-    const parent = document.createElement("div");
-    document.body.appendChild(parent);
-    const view = new EditorView({ state: stateWith(6, 20), parent });
+  it("posts only after settle resolves true", async () => {
+    let release!: (ok: boolean) => void;
+    const settle = vi.fn(
+      () =>
+        new Promise<boolean>((r) => {
+          release = r;
+        })
+    );
+    const postMessage = vi.fn();
+    const view = new EditorView({ state: stateWith(6, 20), parent: document.body });
     try {
-      codexContextHandoffCommand({ postMessage }, flush)(view);
-      expect(calls).toEqual(["flush", "post"]);
+      expect(codexContextHandoffCommand({ postMessage }, settle)(view)).toBe(true);
+      expect(settle).toHaveBeenCalledTimes(1); // synchronously, inside the key dispatch
+      await flushMicrotasks();
+      expect(postMessage).not.toHaveBeenCalled();
+      release(true);
+      await flushMicrotasks();
+      expect(postMessage).toHaveBeenCalledTimes(1);
+      expect(postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "codex-context-handoff" })
+      );
     } finally {
       view.destroy();
     }
   });
 
-  it("returns true even when postMessage throws (chord is claimed)", () => {
+  it("does not post when settle resolves false (unsynced / cancelled)", async () => {
+    const postMessage = vi.fn();
+    const view = new EditorView({ state: stateWith(6, 20), parent: document.body });
+    try {
+      expect(codexContextHandoffCommand({ postMessage }, async () => false)(view)).toBe(true);
+      await flushMicrotasks();
+      expect(postMessage).not.toHaveBeenCalled();
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("does not post, and does not throw, when settle throws or rejects", async () => {
+    const postMessage = vi.fn();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const view = new EditorView({ state: stateWith(6, 20), parent: document.body });
+    try {
+      const throws = () => {
+        throw new Error("boom");
+      };
+      expect(codexContextHandoffCommand({ postMessage }, throws)(view)).toBe(true);
+      expect(
+        codexContextHandoffCommand({ postMessage }, () => Promise.reject(new Error("boom")))(view)
+      ).toBe(true);
+      await flushMicrotasks();
+      expect(postMessage).not.toHaveBeenCalled();
+      expect(errorSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      errorSpy.mockRestore();
+      view.destroy();
+    }
+  });
+
+  it("does not post when the view was destroyed while it waited", async () => {
+    let release!: (ok: boolean) => void;
+    const settle = () =>
+      new Promise<boolean>((r) => {
+        release = r;
+      });
+    const postMessage = vi.fn();
+    const view = new EditorView({ state: stateWith(6, 20), parent: document.body });
+    codexContextHandoffCommand({ postMessage }, settle)(view);
+    view.destroy();
+    release(true); // a settle that did not notice the teardown
+    await flushMicrotasks();
+    expect(postMessage).not.toHaveBeenCalled();
+  });
+
+  it("returns true even when postMessage throws (chord is claimed)", async () => {
     const postMessage = vi.fn(() => {
       throw new Error("transport gone");
     });
@@ -235,23 +356,9 @@ describe("codexContextHandoffCommand", () => {
     document.body.appendChild(parent);
     const view = new EditorView({ state: stateWith(0, 0), parent });
     try {
-      expect(codexContextHandoffCommand({ postMessage }, () => {})(view)).toBe(true);
-    } finally {
-      view.destroy();
-    }
-  });
-
-  it("does not throw out of the command when flushPendingEdit throws", () => {
-    const postMessage = vi.fn();
-    const flush = vi.fn(() => {
-      throw new Error("flush gone");
-    });
-    const parent = document.createElement("div");
-    document.body.appendChild(parent);
-    const view = new EditorView({ state: stateWith(0, 0), parent });
-    try {
-      expect(codexContextHandoffCommand({ postMessage }, flush)(view)).toBe(true);
-      expect(postMessage).toHaveBeenCalled();
+      expect(codexContextHandoffCommand({ postMessage }, settled)(view)).toBe(true);
+      await flushMicrotasks(); // the post runs, and its throw stays inside
+      expect(postMessage).toHaveBeenCalledTimes(1);
     } finally {
       view.destroy();
     }
