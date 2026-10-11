@@ -50,7 +50,48 @@ export async function getHarness(): Promise<TestHarnessShape> {
       "Extension activated but did not return a __test harness — is ExtensionMode.Test active?"
     );
   }
+  suppressRescuedDrafts(api.__test.harness);
   return api.__test.harness;
+}
+
+// Closing a Quoll tab with a write-gate rejection pending reopens the rejected
+// draft as a DIRTY untitled document. Left on, that side effect would leak into
+// every suite: the untitled tab steals the active editor from the next test, a
+// plain close of it raises a save prompt the headless host cannot answer, and
+// `cleanupBetweenTests`' own close can start one after a test failed half-way —
+// so no per-test "wait, then discard" could cover it. Routing the open through
+// a no-op keeps the rescue out of every suite that is not about it. Installed
+// by every `getHarness()` call, so a suite that wants the real path (or a
+// recorder) must set `openRescuedDraftOverride` AFTER its last `getHarness()`.
+export function suppressRescuedDrafts(harness: TestHarnessShape): void {
+  harness.openRescuedDraftOverride = () => Promise.resolve();
+}
+
+export const untitledTextTabs = (): vscode.Tab[] =>
+  vscode.window.tabGroups.all
+    .flatMap((g) => g.tabs)
+    .filter((t) => t.input instanceof vscode.TabInputText && t.input.uri.scheme === "untitled");
+
+/** Discard every untitled text tab without a save prompt (focus it, then the
+ *  "Don't Save" close). A plain close of a dirty untitled document blocks on a
+ *  modal the headless host cannot answer, so this runs BEFORE any close-all. */
+export async function discardUntitledTabs(): Promise<void> {
+  for (let i = 0; i < 10; i++) {
+    const tab = untitledTextTabs()[0];
+    if (!tab) {
+      return;
+    }
+    const doc = await vscode.workspace.openTextDocument((tab.input as vscode.TabInputText).uri);
+    await vscode.window.showTextDocument(doc, {
+      viewColumn: tab.group.viewColumn,
+      preserveFocus: false,
+    });
+    await vscode.commands.executeCommand("workbench.action.revertAndCloseActiveEditor");
+    await tick(50);
+  }
+  if (untitledTextTabs().length > 0) {
+    throw new Error("discardUntitledTabs: untitled tabs still open after 10 attempts");
+  }
 }
 
 export function fixtureUri(filename: string): vscode.Uri {
@@ -106,10 +147,19 @@ export function tick(ms = 50): Promise<void> {
 // from a prior test's panel leak into the next test's `waitForEvent`
 // queue — see [DBG-TEST] showing seed.docVersion=3 from a leftover
 // temp-file panel polluting failed-applyedit-surfaced.
+//
+// Rejected-draft rescue: suppression is (re)installed FIRST so the close below
+// can never start a real rescue — even when the failing test left the override
+// at `null` — and again after `reset()`, which clears every override. Untitled
+// tabs are discarded before the close-all as a backstop, so a real rescued
+// draft never meets a plain close (see `suppressRescuedDrafts`).
 export async function cleanupBetweenTests(harness: TestHarnessShape): Promise<void> {
+  suppressRescuedDrafts(harness);
+  await discardUntitledTabs();
   await closeAllEditors();
   await tick(50);
   harness.reset();
+  suppressRescuedDrafts(harness);
 }
 
 /** Hide the Quoll editor by opening (and focusing) another document

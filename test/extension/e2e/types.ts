@@ -265,6 +265,7 @@ export interface TestHarnessShape {
   diskConflictPromptOverride:
     | ((message: string, ...actions: string[]) => Thenable<string | undefined>)
     | null;
+  openRescuedDraftOverride: ((content: string) => Thenable<unknown>) | null;
   // Read-only: the host writes `lastError` (via recordError); tests only
   // observe it. Mirrors the getter-only surface on the real TestHarness so
   // a test that tries `harness.lastError = null` (which would corrupt the

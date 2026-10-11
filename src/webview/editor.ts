@@ -48,7 +48,10 @@ import { quollCodeHighlighting } from "./cm/fenced-code/fenced-code-highlight-la
 import { fencedCodeLanguagePicker } from "./cm/fenced-code/fenced-code-language-picker.js";
 import { quollFloatingToolbarScroll } from "./cm/floating-toolbar-scroll.js";
 import { quollFolding, reconcileReseedFolds } from "./cm/fold/index.js";
-import { runFormatDocument } from "./cm/format/format-document-command.js";
+import {
+  type FormatDocumentResult,
+  runFormatDocument,
+} from "./cm/format/format-document-command.js";
 import { frontmatterBlockField, frontmatterRevealKeymap } from "./cm/frontmatter/index.js";
 import { hostDocumentReseed } from "./cm/host-reseed.js";
 import { createImagePasteDrop, imageBlockField, quollResourceBaseUri } from "./cm/image/index.js";
@@ -146,8 +149,12 @@ export type EditorOptions = {
    *  once per drain. The shell wires it to a user-visible notice (edit-sync's
    *  console.warn is devtools-only, which is no signal for a normal user).
    *  The full rule lives on `EditSyncOptions.onLocalEditDiscarded` (cm/edit-sync.ts)
-   *  — do not restate it here; this is a pass-through. */
-  onLocalEditDiscarded?: () => void;
+   *  — do not restate it here; this is a pass-through.
+   *
+   *  `draft` is the pre-replace text, passed only by a caller that still has it
+   *  (`applyDocument`, when an external write replaces a rejected draft).
+   *  edit-sync's own call sites pass none. */
+  onLocalEditDiscarded?: (draft?: string) => void;
   /** Fired when edit-sync is holding un-posted edits under a readonly document
    *  (shown at most once per readonly episode). The shell wires it to a
    *  user-visible notice and returns whether that notice was shown — `false`
@@ -221,8 +228,9 @@ export type EditorHandle = {
   runFormatCommand(action: FormatAction): void;
   /** Run the whole-document Format command as ONE transaction (single undo
    *  step). Rides the normal dispatch -> edit-sync pipeline; a no-op when the
-   *  view is read-only or the document is already in normal form. */
-  runFormatDocument(): void;
+   *  view is read-only or the document is already in normal form. Returns what
+   *  happened so the shell can say so (see `FormatDocumentResult`). */
+  runFormatDocument(): FormatDocumentResult;
   /** Apply a host-pushed caret (one-shot editor-switch handoff). Focuses the
    *  view — only when this webview already owns focus — so CodeMirror paints the
    *  cursor, then dispatches a selection-only transaction (no document mutation)
@@ -1236,7 +1244,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // skip the shell's `document` dispatch and leave the reducer behind the
         // view the replace above already installed.
         try {
-          opts.onLocalEditDiscarded?.();
+          opts.onLocalEditDiscarded?.(liveDoc);
         } catch (err) {
           console.error("[quoll] onLocalEditDiscarded threw", err);
         }
@@ -1305,7 +1313,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       runInlineFormat(view, action);
     },
     runFormatDocument() {
-      runFormatDocument(view);
+      return runFormatDocument(view);
     },
     applyRemoteCaret(caret) {
       const anchor = applyCaret(view.state.doc, caret);

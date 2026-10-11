@@ -7,7 +7,12 @@ import {
   type HostSessionEvent,
   type HostSessionState,
 } from "../../src/extension/session/host-session-core.js";
-import { type HostToWebview, PROTOCOL_VERSION } from "../../src/shared/protocol.js";
+import * as fmtIndex from "../../src/markdown/format/index.js";
+import {
+  type HostToWebview,
+  MAX_CONTENT_LENGTH,
+  PROTOCOL_VERSION,
+} from "../../src/shared/protocol.js";
 import { EDITOR_PREF_CSS_VARS, editorPrefToCssValue } from "../../src/webview/cm/editor-prefs.js";
 import { addPendingAnchor } from "../../src/webview/cm/image/image-paste.js";
 import { proseLintEnabled } from "../../src/webview/cm/lint/index.js";
@@ -1257,6 +1262,203 @@ describe("shell — own-lineage Documents never rewind un-acked bytes", () => {
     }
   });
 
+  describe("Copy draft on the discard notice", () => {
+    const clipboardBefore = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    const writeText = vi.fn<(text: string) => Promise<void>>();
+    beforeEach(() => {
+      writeText.mockReset();
+      writeText.mockResolvedValue(undefined);
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText },
+      });
+    });
+    afterEach(() => {
+      if (clipboardBefore) {
+        Object.defineProperty(navigator, "clipboard", clipboardBefore);
+      } else {
+        Reflect.deleteProperty(navigator, "clipboard");
+      }
+    });
+
+    const copyButtons = (): HTMLButtonElement[] =>
+      Array.from(
+        (container as HTMLElement).querySelectorAll<HTMLButtonElement>(".quoll-resync-notice-copy")
+      );
+    const copyButton = (): HTMLButtonElement => {
+      const [button] = copyButtons();
+      if (!button) {
+        throw new Error("no Copy draft button");
+      }
+      return button;
+    };
+    // Let the clipboard promise's settle handlers run (promises are not faked).
+    const settled = async (): Promise<void> => {
+      await Promise.resolve();
+      await Promise.resolve();
+    };
+    function deferred() {
+      let resolve!: () => void;
+      let reject!: (err: unknown) => void;
+      const promise = new Promise<void>((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      return { promise, resolve, reject };
+    }
+    // Draft "a\nbx" replaced by "theirs": the notice is up with its button.
+    async function startWithReplacedDraft() {
+      const host = await startWithRejectedDraft();
+      host.externalWrite("theirs");
+      host.pump();
+      expect(viewText()).toBe("theirs");
+      return host;
+    }
+    // A SECOND draft ("theirsy") rejected and replaced while the notice is up.
+    function replaceSecondDraft(host: ReturnType<typeof realHost>): void {
+      typeAtEnd("y");
+      vi.advanceTimersByTime(300);
+      host.receive();
+      host.pump(); // edit-rejected
+      expect(viewText()).toBe("theirsy");
+      host.externalWrite("theirs again");
+      host.pump();
+      expect(viewText()).toBe("theirs again");
+    }
+    // A discard edit-sync reports itself, which carries no bytes: a keystroke
+    // still in the debounce window when a foreign write lands.
+    function draftlessDiscard(host: ReturnType<typeof realHost>, content: string): void {
+      typeAtEnd("z");
+      host.externalWrite(content);
+      host.pump();
+      expect(viewText()).toBe(content);
+    }
+
+    it("copies exactly the replaced draft and then reads Copied", async () => {
+      await startWithReplacedDraft();
+      const notice = (container as HTMLElement).querySelector(".quoll-notice-discard");
+      expect(notice?.querySelectorAll(".quoll-resync-notice-copy").length).toBe(1);
+      const button = copyButton();
+      expect(button.textContent).toBe("Copy draft");
+      // The dismiss control stays the last thing in the notice.
+      expect(notice?.lastElementChild?.classList.contains("quoll-resync-notice-dismiss")).toBe(
+        true
+      );
+      button.click();
+      expect(writeText).toHaveBeenCalledTimes(1);
+      expect(writeText).toHaveBeenCalledWith("a\nbx");
+      await settled();
+      expect(button.textContent).toBe("Copied");
+    });
+
+    it("a second replaced draft reuses the notice and its one button, which now copies the second draft", async () => {
+      const host = await startWithReplacedDraft();
+      const notice = (container as HTMLElement).querySelector(".quoll-notice-discard");
+      const button = copyButton();
+      button.click();
+      await settled();
+      expect(button.textContent).toBe("Copied");
+      replaceSecondDraft(host);
+      expect((container as HTMLElement).querySelector(".quoll-notice-discard")).toBe(notice);
+      expect(copyButtons()).toEqual([button]);
+      // "Copied" was about the first draft; it must not claim the second one.
+      expect(button.textContent).toBe("Copy draft");
+      button.click();
+      expect(writeText).toHaveBeenLastCalledWith("theirsy");
+    });
+
+    it("a discard that carries no bytes leaves the button and its draft in place", async () => {
+      const host = await startWithReplacedDraft();
+      const button = copyButton();
+      draftlessDiscard(host, "other");
+      expect(copyButtons()).toEqual([button]);
+      button.click();
+      expect(writeText).toHaveBeenCalledTimes(1);
+      expect(writeText).toHaveBeenCalledWith("a\nbx");
+    });
+
+    it("a discard that carries no bytes shows no Copy button on its own", async () => {
+      const host = await start("s");
+      draftlessDiscard(host, "other");
+      expect(noticeCount(".quoll-notice-discard")).toBe(1);
+      expect(copyButtons()).toEqual([]);
+    });
+
+    it("dismiss empties the draft: a later byte-less discard shows no Copy button", async () => {
+      const host = await startWithReplacedDraft();
+      expect(copyButtons().length).toBe(1);
+      (
+        (container as HTMLElement).querySelector(".quoll-resync-notice-dismiss") as HTMLElement
+      ).click();
+      expect(noticeCount()).toBe(0);
+      draftlessDiscard(host, "other");
+      expect(noticeCount(".quoll-notice-discard")).toBe(1);
+      expect(copyButtons()).toEqual([]);
+    });
+
+    it("reads Copy failed when the clipboard refuses, without an unhandled rejection", async () => {
+      const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const unhandled = vi.fn();
+      process.on("unhandledRejection", unhandled);
+      try {
+        await startWithReplacedDraft();
+        const refusal = new Error("denied");
+        writeText.mockRejectedValue(refusal);
+        const button = copyButton();
+        button.click();
+        await settled();
+        expect(button.textContent).toBe("Copy failed");
+        expect(consoleWarn).toHaveBeenCalledWith("[quoll] copy draft failed", refusal);
+        // A clipboard API that is missing altogether reads the same way.
+        Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+        button.textContent = "";
+        expect(() => button.click()).not.toThrow();
+        expect(button.textContent).toBe("Copy failed");
+        vi.useRealTimers();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(unhandled).not.toHaveBeenCalled();
+      } finally {
+        process.off("unhandledRejection", unhandled);
+      }
+    });
+
+    it.each([
+      "resolve",
+      "reject",
+    ] as const)("a copy of the first draft that settles (%s) after a second draft arrived does not label the second", async (outcome) => {
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      const host = await startWithReplacedDraft();
+      const first = deferred();
+      writeText.mockReturnValueOnce(first.promise);
+      const button = copyButton();
+      button.click();
+      replaceSecondDraft(host);
+      expect(button.textContent).toBe("Copy draft");
+      if (outcome === "resolve") {
+        first.resolve();
+      } else {
+        first.reject(new Error("late"));
+      }
+      await settled();
+      expect(button.textContent).toBe("Copy draft");
+    });
+
+    it("two clicks on one draft: a late rejection of the first does not undo the second's Copied", async () => {
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      await startWithReplacedDraft();
+      const first = deferred();
+      writeText.mockReturnValueOnce(first.promise);
+      const button = copyButton();
+      button.click();
+      button.click(); // resolves
+      await settled();
+      expect(button.textContent).toBe("Copied");
+      first.reject(new Error("late"));
+      await settled();
+      expect(button.textContent).toBe("Copied");
+    });
+  });
+
   describe("against the real host reducer", () => {
     // Against the REAL host, no legitimate own-lineage flow may read as
     // foreign: a discard notice in any of these columns means a Document
@@ -1852,6 +2054,179 @@ describe("shell — format-document routing", () => {
     deliver({ protocol: PROTOCOL_VERSION, type: "format-document" });
 
     expect(view.state.doc.toString()).toBe("1. a\n2. b\n");
+    // A format that changed the document says nothing.
+    expect(noticeCount()).toBe(0);
+  });
+});
+
+describe("shell — format-document feedback", () => {
+  const formatDocument = (): void => {
+    deliver({ protocol: PROTOCOL_VERSION, type: "format-document" });
+  };
+  const notice = (): HTMLElement => {
+    const el = (container as HTMLElement).querySelector<HTMLElement>(".quoll-resync-notice");
+    if (!el) {
+      throw new Error("no notice on screen");
+    }
+    return el;
+  };
+
+  it("says no changes were needed on an already-formatted document", async () => {
+    await mount();
+    deliver(buildDocument({ docVersion: 1, content: "1. a\n2. b\n" }));
+    formatDocument();
+    expect(noticeCount()).toBe(1);
+    expect(notice().textContent).toContain("no changes were needed");
+    expect(notice().textContent).not.toContain("failed");
+    expect(notice().classList.contains("quoll-notice-format-unchanged")).toBe(true);
+    expect(viewText()).toBe("1. a\n2. b\n");
+  });
+
+  it("says the document is read-only when it is", async () => {
+    await mount();
+    deliver(buildDocument({ docVersion: 1, content: "1. a\n1. b\n", canWrite: false }));
+    formatDocument();
+    expect(notice().textContent).toContain("read-only");
+    expect(notice().classList.contains("quoll-notice-format-readonly")).toBe(true);
+    expect(viewText()).toBe("1. a\n1. b\n");
+  });
+
+  it("says the result would exceed the size limit", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await mount();
+    deliver(buildDocument({ docVersion: 1, content: "a" }));
+    vi.spyOn(fmtIndex, "formatDocumentEdits").mockReturnValue([
+      { from: 0, to: 0, insert: "x".repeat(MAX_CONTENT_LENGTH + 1) },
+    ]);
+    formatDocument();
+    expect(notice().textContent).toContain("size limit");
+    expect(notice().classList.contains("quoll-notice-format-too-large")).toBe(true);
+    expect(viewText()).toBe("a");
+  });
+
+  it("a failure is reported without claiming that nothing was changed", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await mount();
+    deliver(buildDocument({ docVersion: 1, content: "1. a\n" }));
+    vi.spyOn(fmtIndex, "formatDocumentEdits").mockImplementation(() => {
+      throw new Error("boom");
+    });
+    formatDocument();
+    expect(notice().classList.contains("quoll-notice-format-failed")).toBe(true);
+    expect(notice().textContent).toContain("Format Document failed");
+    // "failed" also covers a dispatch that threw after updating the document.
+    expect(notice().textContent).not.toContain("nothing was changed");
+  });
+
+  it("a successful format clears an earlier format notice", async () => {
+    await mount();
+    deliver(buildDocument({ docVersion: 1, content: "1. a\n2. b\n" }));
+    formatDocument();
+    expect(noticeCount(".quoll-notice-format-unchanged")).toBe(1);
+    typeAtEnd("1. c\n");
+    formatDocument();
+    expect(viewText()).toBe("1. a\n2. b\n3. c\n");
+    expect(noticeCount()).toBe(0);
+  });
+
+  it("a newer format result replaces an older one", async () => {
+    await mount();
+    deliver(buildDocument({ docVersion: 1, content: "1. a\n2. b\n" }));
+    formatDocument();
+    expect(noticeCount(".quoll-notice-format-unchanged")).toBe(1);
+    deliver(buildDocument({ docVersion: 2, content: "1. a\n2. b\n", canWrite: false }));
+    formatDocument();
+    expect(noticeCount()).toBe(1);
+    expect(noticeCount(".quoll-notice-format-readonly")).toBe(1);
+  });
+
+  it("never displaces a loss notice, and a successful format does not clear one", async () => {
+    await mount();
+    vi.useFakeTimers();
+    deliver(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 11 }));
+    typeAtEnd("z"); // still in the debounce window when the foreign write lands
+    deliver(
+      buildDocument({
+        docVersion: 2,
+        content: "1. a\n2. b\n",
+        externalEpoch: 1,
+        epochGeneration: 11,
+      })
+    );
+    const discard = notice();
+    expect(discard.classList.contains("quoll-notice-discard")).toBe(true);
+    formatDocument(); // unchanged — declined behind the discard
+    expect(noticeCount()).toBe(1);
+    expect(notice()).toBe(discard);
+    typeAtEnd("1. c\n");
+    formatDocument(); // formatted — clears format notices only
+    expect(viewText()).toBe("1. a\n2. b\n3. c\n");
+    expect(notice()).toBe(discard);
+  });
+
+  // The discard above is the top rank, so nothing could displace it anyway. The
+  // three weaker loss kinds are where the format kinds' rank actually decides.
+  // Each test puts `loss` on screen over a document Format Document would leave
+  // alone, then: a result that changes nothing is declined, and one that does
+  // format clears nothing.
+  const expectFormatLeaves = (loss: HTMLElement): void => {
+    const before = viewText();
+    formatDocument(); // changes nothing — declined behind the loss notice
+    expect(viewText()).toBe(before);
+    expect(noticeCount()).toBe(1);
+    expect(notice()).toBe(loss);
+    typeAtEnd("1. z\n");
+    formatDocument(); // formatted — clears format notices only
+    expect(viewText()).not.toBe(`${before}1. z\n`);
+    expect(noticeCount()).toBe(1);
+    expect(notice()).toBe(loss);
+  };
+
+  it("never displaces an unsaved notice, and a successful format does not clear it", async () => {
+    await mount();
+    vi.useFakeTimers();
+    deliver(buildDocument({ docVersion: 1, content: "1. a\n" }));
+    typeAtEnd("2. b\n");
+    vi.advanceTimersByTime(300); // posts — in flight
+    // The host repeats the base the Edit was posted on: a refusal.
+    deliver(buildDocument({ docVersion: 1, content: "1. a\n" }));
+    const unsaved = notice();
+    expect(unsaved.classList.contains("quoll-notice-unsaved")).toBe(true);
+    expectFormatLeaves(unsaved);
+  });
+
+  it("never displaces a hold notice, and a successful format does not clear it", async () => {
+    await mount();
+    vi.useFakeTimers();
+    deliver(buildDocument({ docVersion: 1, content: "1. a\n" }));
+    typeAtEnd("2. b\n");
+    vi.advanceTimersByTime(300); // posts — in flight
+    typeAtEnd("3. c\n");
+    vi.advanceTimersByTime(300); // buffers
+    deliver(buildDocument({ docVersion: 2, content: "1. a\n", canWrite: false }));
+    window.dispatchEvent(new Event("blur"));
+    const hold = notice();
+    expect(hold.classList.contains("quoll-notice-hold")).toBe(true);
+    formatDocument(); // read-only — declined behind the hold
+    expect(notice()).toBe(hold);
+    // Re-grant: the held bytes are replayed and acked; the notice stays.
+    deliver(buildDocument({ docVersion: 2, content: "1. a\n" }));
+    deliver(buildDocument({ docVersion: 3, content: "1. a\n2. b\n3. c\n" }));
+    expect(notice()).toBe(hold);
+    expectFormatLeaves(hold);
+  });
+
+  it("never displaces a storm notice, and a successful format does not clear it", async () => {
+    await mount();
+    vi.useFakeTimers();
+    deliver(buildDocument({ docVersion: 1, content: "1. a\n", epochGeneration: 1 }));
+    deliver(buildDocument({ docVersion: 1, content: "1. a\n", epochGeneration: 2 }));
+    deliver(buildDocument({ docVersion: 1, content: "1. a\n", epochGeneration: 3 }));
+    deliver(buildDocument({ docVersion: 1, content: "1. a\n", epochGeneration: 4 }));
+    await Promise.resolve(); // the storm renders one microtask late
+    const storm = notice();
+    expect(storm.classList.contains("quoll-notice-storm")).toBe(true);
+    expectFormatLeaves(storm);
   });
 });
 

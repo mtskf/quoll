@@ -665,12 +665,19 @@ describe("host-session-core: applyEditSettled drain", () => {
     expect(r.effects).toEqual([{ type: "showError", message: "Failed to save: boom" }]);
   });
 
-  it("POST-DISPOSE ok but external-mismatch WITH a stash → logWarn only, no toast (external won, webview-bound effects suppressed)", () => {
+  it("POST-DISPOSE ok but external-mismatch WITH a stash → showError (cause-neutral) THEN logWarn: the dropped edit is not silent", () => {
+    // Post-dispose the stash is the edit's only carrier (no webview, no replay
+    // buffer), so an observed mismatch that refuses the drain is the same loss
+    // as the unobserved one, just with a different cause.
     const r = core.transition(
       lockedWithStash("edit1", "edit1plus", { disposed: true }),
       settled({ settledVersion: 2, currentContent: "external" })
     );
     expect(r.effects).toEqual([
+      {
+        type: "showError",
+        message: expect.stringContaining(ctx.fsPath),
+      },
       {
         type: "logWarn",
         message:
@@ -678,6 +685,65 @@ describe("host-session-core: applyEditSettled drain", () => {
         detail: { stashBase: 1, settledDocVersion: 2 },
       },
     ]);
+    const toast = r.effects[0] as { message: string };
+    expect(toast.message).toContain("was dropped");
+    // Cause-neutral on purpose: a mismatch is not necessarily an external write.
+    expect(toast.message).not.toContain("external");
+  });
+
+  it.each([
+    ["byte-identical", "edit1plus", "edit1plus"],
+    ["EOL-only difference", "a\nb", "a\r\nb"],
+  ])("POST-DISPOSE ok-but-mismatch, observed document already carries the stash (%s) → NO toast, logWarn stays", (_label, text, observedText) => {
+    // The other writer wrote the same bytes: nothing was lost.
+    const r = core.transition(
+      lockedWithStash("edit1", text, { disposed: true }),
+      settled({ settledVersion: 2, currentContent: observedText })
+    );
+    expect(r.effects.some((e) => e.type === "showError")).toBe(false);
+    expect(
+      r.effects.some((e) => e.type === "logWarn" && e.message.includes("ok-but-mismatch"))
+    ).toBe(true);
+  });
+
+  it("POST-DISPOSE divergedAfterApply WITH a stash, observed differs → exactly one showError + the diverged logWarn", () => {
+    const r = core.transition(
+      lockedWithStash("edit1", "edit1plus", { disposed: true }),
+      settled({ settledVersion: 2, currentContent: "external", divergedAfterApply: true })
+    );
+    expect(r.effects.filter((e) => e.type === "showError")).toHaveLength(1);
+    expect(
+      r.effects.some((e) => e.type === "logWarn" && e.message.includes("divergedAfterApply"))
+    ).toBe(true);
+  });
+
+  it("POST-DISPOSE divergedAfterApply WITH a stash, observed equals the stash → NO toast", () => {
+    const r = core.transition(
+      lockedWithStash("edit1", "edit1plus", { disposed: true }),
+      settled({ settledVersion: 2, currentContent: "edit1plus", divergedAfterApply: true })
+    );
+    expect(r.effects.some((e) => e.type === "showError")).toBe(false);
+  });
+
+  it("POST-DISPOSE divergedAfterApply WITH a stash, NOT observed → exactly one showError, the neutral text (not 'could not verify')", () => {
+    // No observation cannot prove nothing was lost, so it reports; and it is
+    // not the unobserved-drop arm (divergedAfterApply excludes that).
+    const r = core.transition(
+      lockedWithStash("edit1", "edit1plus", { disposed: true }),
+      settled({ settledVersion: 2, currentContent: null, divergedAfterApply: true })
+    );
+    const toasts = r.effects.filter((e) => e.type === "showError");
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0]).toMatchObject({ message: expect.not.stringContaining("could not verify") });
+    expect(toasts[0]).toMatchObject({ message: expect.stringContaining("was dropped") });
+  });
+
+  it("ALIVE ok-but-mismatch WITH a stash → NO toast (the webview replay buffer still carries it)", () => {
+    const r = core.transition(
+      lockedWithStash("edit1", "edit1plus"),
+      settled({ settledVersion: 2, currentContent: "external" })
+    );
+    expect(r.effects.some((e) => e.type === "showError")).toBe(false);
   });
 
   it("POST-DISPOSE UNOBSERVED settle WITH a stash → showError: the dropped edit is not silent", () => {
@@ -721,15 +787,17 @@ describe("host-session-core: applyEditSettled drain", () => {
     ).toBe(true);
   });
 
-  it("POST-DISPOSE ok-but-MISMATCH settle WITH a stash → still NO toast (external won is a resolution, not a loss)", () => {
-    // Non-vacuity for the new toast's CONDITION, not just its presence: the
-    // neighbouring post-dispose drop arm must stay silent. Widening the gate to
-    // "any post-dispose stash drop" turns this red.
+  it("POST-DISPOSE ok-but-MISMATCH settle WITH a stash → exactly ONE toast, and it is NOT the unobserved text", () => {
+    // Non-vacuity for `unobservedStashDrop`'s CONDITION: widening it to any
+    // post-dispose stash drop would make this settle fire the "could not verify"
+    // toast as well (two toasts) or instead of the mismatch one.
     const r = core.transition(
       lockedWithStash("edit1", "edit1plus", { disposed: true }),
       settled({ settledVersion: 2, currentContent: "external" })
     );
-    expect(r.effects.some((e) => e.type === "showError")).toBe(false);
+    const toasts = r.effects.filter((e) => e.type === "showError");
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0]).toMatchObject({ message: expect.not.stringContaining("could not verify") });
   });
 
   it("POST-DISPOSE REJECTED settle (unobserved) WITH a stash → the 'Failed to save' toast ONLY, never both", () => {
