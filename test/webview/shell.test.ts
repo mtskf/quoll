@@ -1075,6 +1075,29 @@ describe("shell — readonly hold notice", () => {
       vi.useRealTimers();
     }
   });
+
+  it("a synced handoff posts and leaves a loss notice on screen", async () => {
+    await mount();
+    vi.useFakeTimers();
+    try {
+      deliver(buildDocument({ docVersion: 1, content: "s" }));
+      const view = mountedView();
+      view.dispatch({ changes: { from: view.state.doc.length, insert: "x" } });
+      vi.advanceTimersByTime(300); // posts — in flight
+      deliver(buildDocument({ docVersion: 1, content: "s" })); // a refusal → `unsaved`
+      const unsaved = container?.querySelector(".quoll-notice-unsaved");
+      expect(unsaved).not.toBeNull();
+      view.dispatch({ changes: { from: view.state.doc.length, insert: "y" } });
+      vi.advanceTimersByTime(300); // the retry
+      deliver(buildDocument({ docVersion: 2, content: "sxy" })); // acked
+      pressCodexChord(); // synced: only its own notice kind is its to clear
+      await vi.advanceTimersByTimeAsync(0);
+      expect(handoffsPosted()).toBe(1);
+      expect(container?.querySelector(".quoll-resync-notice")).toBe(unsaved);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 // The host does not answer Edits one-to-one: the ack of an EARLIER Edit, a stale
