@@ -5,6 +5,7 @@ All notable changes to Quoll are documented here.
 ## 0.1.86 — 2026-10-07
 
 ### Fixed
+- surface rejected-draft and stash losses, and say what Format Document did (#459)
 
 - In a file with Windows line endings (CRLF), copying or cutting whole lines with several cursors and no selection now pastes them back as whole lines. They used to be spliced into the middle of the lines the cursors were on.
 
