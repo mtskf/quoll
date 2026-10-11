@@ -81,6 +81,7 @@ import { toLintDiagnostics } from "../lint/lint-diagnostics.js";
 import { LintMirror } from "../lint/lint-mirror.js";
 import type { StatusBarSlots } from "../status-bar.js";
 import { openInQuollEditor } from "../surface/open-in-quoll.js";
+import { rescueRejectedDraft } from "../surface/rejected-draft-rescue.js";
 import {
   REJECTION_BLOCKS_SWITCH_MESSAGE,
   registerPendingRejection,
@@ -1203,6 +1204,11 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       // BEFORE the disposed transition clears the lock (prepareDispose reads
       // isWriteLockHeld(state) NOW). MUST run before dispatch({ type: "disposed" }).
       revertRescueWiring.prepareDispose();
+      // Snapshot the pending rejection for the rejected-draft rescue below. The
+      // `disposed` transition does not touch `rejection` today, so this position
+      // is not ordering-critical; reading it beside the other dispose-time
+      // snapshot is defensive only (it keeps working if that arm ever clears it).
+      const rejectionAtDispose = state.rejection;
       // Set the local guard FIRST (arms the executor / listener guards), then drive
       // the core's `disposed` transition (clears the write lock so any late
       // settlement is a no-op), then tear down. The edit-settled barrier does
@@ -1239,6 +1245,28 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       // disposed webview), and the surviving editor keeps the document alive so
       // applyEdit is not a no-op. Uses the write-lock snapshot from prepareDispose.
       revertRescueWiring.rescueOnDispose();
+      // A draft the write-gate refused never reached the TextDocument, so VS
+      // Code raised no save prompt and revert-rescue above cannot see it: once
+      // the webview is gone the reducer state holds the only copy. Reopen it as
+      // an untitled document (see surface/rejected-draft-rescue.ts).
+      rescueRejectedDraft(rejectionAtDispose, document.uri.fsPath, {
+        openUntitled: (content) => {
+          // Test mode routes the open through the harness so E2E suites that are
+          // not about the rescue never get a dirty untitled document. Branch on
+          // the override being installed, never on what it returns.
+          const override = this.harness?.openRescuedDraftOverride;
+          if (override) {
+            return override(content);
+          }
+          // showTextDocument is the text-editor API, so the untitled document
+          // never routes back into the Quoll custom editor.
+          return workspace
+            .openTextDocument({ language: "markdown", content })
+            .then((doc) => window.showTextDocument(doc, { preview: false }));
+        },
+        showWarning: (message) =>
+          showSafely(window.showWarningMessage(message), "showWarningMessage"),
+      });
       if (QUOLL_PERF) {
         perfReport("host:session");
       }
