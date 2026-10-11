@@ -210,6 +210,9 @@ export type EditSyncOptions = {
   onReadonlyHold?: () => boolean;
 };
 
+/** What `awaitSettled` resolved with. */
+export type SettleOutcome = "settled" | "unsynced" | "cancelled";
+
 export type EditSync = {
   /** Editor content changed locally (CM updateListener docChanged). */
   onLocalChange: () => void;
@@ -363,6 +366,32 @@ export type EditSync = {
    *  panel may dispose and the host stash / retained buffer are the last
    *  authorities. No-op when nothing was typed in the debounce window. */
   flushIfIdle: () => void;
+  /** Resolves `"settled"` once the host holds what the view shows: no debounce
+   *  pending, no Edit in flight, and the view's text equal to the last
+   *  Document's (EOL aside) — judged AFTER the ack's drain, so a buffer that
+   *  drain replays counts as in flight. For a caller that must not read host
+   *  content behind the user's keystrokes (the AI handoffs); call `flushIfIdle`
+   *  first or the debounce is waited out.
+   *  The question is about TEXT, not about the holders: `flush` retains a copy
+   *  of bytes the host already has, and a readonly hold sits under a view that
+   *  already equals the host's, so "nothing held" is not the property a reader
+   *  of host content needs. Before the first Document nothing is known, and
+   *  the wait continues.
+   *  `"unsynced"` when waiting will not get the text there — nothing is on its
+   *  way and the view is ahead (a refusal, a closed gate, a failed post), the
+   *  held bytes lost to a foreign lineage, or `timeoutMs` passed.
+   *  `"cancelled"` by `cancelSettleWaits`. Rejects only if `getDoc` throws
+   *  while the verdict is first read (the caller's catch handles that).
+   *  NOT an end-to-end revision check: it compares against the last Document
+   *  this webview accepted. In particular the Document the host sends to SHOW
+   *  a write-gate-rejected draft reads as settled (it cannot be told from an
+   *  ack — residual (b) in `replayIfNeeded`); the host's own pending-rejection
+   *  gate is what refuses a handoff then. */
+  awaitSettled: (timeoutMs: number) => Promise<SettleOutcome>;
+  /** Resolve every pending `awaitSettled` as `"cancelled"` and clear its
+   *  timeout. Teardown calls this: a waiter that outlived the view would act on
+   *  a destroyed editor. */
+  cancelSettleWaits: () => void;
   /** Is the VIEW showing the newest bytes this webview still holds un-acked, on
    *  a lineage that still leads? TWO conditions, deliberately answered by ONE
    *  call so a caller cannot check half of it:
@@ -787,6 +816,32 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
     }
   };
 
+  let settleWaiters: ((outcome: SettleOutcome) => void)[] = [];
+  const resolveSettleWaiters = (outcome: SettleOutcome): void => {
+    // Swap first: each waiter removes itself, and must not see a half-walked list.
+    const waiters = settleWaiters;
+    settleWaiters = [];
+    for (const finish of waiters) {
+      finish(outcome);
+    }
+  };
+  // `null` = still moving. See `awaitSettled` for why this reads text, not holders.
+  const settleVerdict = (): SettleOutcome | null => {
+    if (!seeded || timer !== null || editInFlight) {
+      return null;
+    }
+    return sameTextIgnoringEol(opts.getDoc(), hostContent) ? "settled" : "unsynced";
+  };
+  const rejudgeSettleWaiters = (): void => {
+    if (settleWaiters.length === 0) {
+      return; // before the verdict: it serialises the document
+    }
+    const verdict = settleVerdict();
+    if (verdict !== null) {
+      resolveSettleWaiters(verdict);
+    }
+  };
+
   const schedule = (run: () => void): void => {
     if (opts.scheduleFlush) {
       opts.scheduleFlush(run);
@@ -974,6 +1029,10 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
       buffered = null;
     }
     if (lostSubject !== null) {
+      // The reseed has already made the view the host's text, which the verdict
+      // would call settled — for a user who just lost what they typed. Let them
+      // re-issue the handoff knowingly.
+      resolveSettleWaiters("unsynced");
       if (droppedBuffer === null) {
         // The OTHER holder. A surviving buffer can never be the lost subject —
         // `lostToSupersession`'s first conjunct IS the drop predicate — so
@@ -1087,7 +1146,13 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
   };
 
   return {
-    onLocalChange: () => schedule(trySend),
+    onLocalChange: () =>
+      schedule(() => {
+        trySend();
+        // trySend can end without posting (closed gate, readonly drop, failed
+        // post), and then no reducer commit follows to wake a waiter.
+        rejudgeSettleWaiters();
+      }),
     onHostSnapshot: (d) => {
       const transition = isIdentityTransition(d.externalEpoch, d.epochGeneration);
       // Generation-aware acceptance ordering (S3b): version order is meaningful
@@ -1205,6 +1270,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
       const settledInFlight = inFlight;
       inFlight = null;
       replayIfNeeded(settledInFlight);
+      rejudgeSettleWaiters();
     },
     // Capture the latest doc into the buffer BEFORE clearing the timer.
     // onLocalChange always DEBOUNCES, so a keystroke typed inside the
@@ -1298,6 +1364,22 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
         trySend();
       }
     },
+    awaitSettled: (timeoutMs) =>
+      new Promise((resolve) => {
+        const verdict = settleVerdict();
+        if (verdict !== null) {
+          resolve(verdict);
+          return;
+        }
+        const finish = (outcome: SettleOutcome): void => {
+          clearTimeout(timeout);
+          settleWaiters = settleWaiters.filter((w) => w !== finish);
+          resolve(outcome);
+        };
+        const timeout = setTimeout(() => finish("unsynced"), timeoutMs);
+        settleWaiters.push(finish);
+      }),
+    cancelSettleWaits: () => resolveSettleWaiters("cancelled"),
     // Ground the fold on the very holder whose survival it predicts: replay
     // drops `buffered` iff supersedesIdentity({from: buffered, to: recorded}),
     // so reading that stamp against the incoming pair makes display and replay

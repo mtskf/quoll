@@ -1975,6 +1975,276 @@ describe("cm edit-sync — flushIfIdle", () => {
   });
 });
 
+describe("cm edit-sync — awaitSettled", () => {
+  const make = (over: Partial<EditSyncOptions> = {}, canWrite = true) => {
+    const s = { doc: "seed", posted: [] as string[] };
+    const sync = createEditSync({
+      getDoc: () => s.doc,
+      post: (content) => {
+        s.posted.push(content);
+        return true;
+      },
+      ...over,
+    });
+    sync.onHostSnapshot(1, canWrite, 0, 1, "seed");
+    return { s, sync };
+  };
+  const track = (p: Promise<string>) => {
+    const box: { outcome: string | null } = { outcome: null };
+    void p.then((o) => {
+      box.outcome = o;
+    });
+    return box;
+  };
+
+  it("resolves settled immediately when the view is the host's text", async () => {
+    const { sync } = make();
+    await expect(sync.awaitSettled(1000)).resolves.toBe("settled");
+  });
+
+  it("settles a readonly document and a closed gate when nothing is ahead", async () => {
+    await expect(make({}, false).sync.awaitSettled(1000)).resolves.toBe("settled");
+    await expect(make({ canPost: () => false }).sync.awaitSettled(1000)).resolves.toBe("settled");
+  });
+
+  it("waits for the in-flight Edit's ack", async () => {
+    vi.useFakeTimers();
+    try {
+      const { s, sync } = make();
+      s.doc = "a";
+      sync.onLocalChange();
+      sync.flushIfIdle(); // posts "a", in flight
+      const box = track(sync.awaitSettled(1000));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(box.outcome).toBeNull();
+      sync.onHostSnapshot(2, true, 0, 1, "a");
+      sync.onReducerCommit(false);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(box.outcome).toBe("settled");
+      expect(vi.getTimerCount()).toBe(0); // the wait's own timeout is cleared
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits for the replayed buffer's ack, not the first ack", async () => {
+    vi.useFakeTimers();
+    try {
+      const { s, sync } = make();
+      s.doc = "a";
+      sync.onLocalChange();
+      vi.advanceTimersByTime(300); // "a" in flight
+      s.doc = "ab";
+      sync.onLocalChange();
+      sync.flushIfIdle(); // buffers "ab"
+      const box = track(sync.awaitSettled(1000));
+      sync.onHostSnapshot(2, true, 0, 1, "a");
+      sync.onReducerCommit(false); // acks "a", drain replays "ab"
+      await vi.advanceTimersByTimeAsync(0);
+      expect(s.posted).toEqual(["a", "ab"]);
+      expect(box.outcome).toBeNull(); // "ab" not acked yet
+      sync.onHostSnapshot(3, true, 0, 1, "ab");
+      sync.onReducerCommit(false);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(box.outcome).toBe("settled");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps waiting through a debounce the caller did not flush", async () => {
+    vi.useFakeTimers();
+    try {
+      const { s, sync } = make();
+      s.doc = "a";
+      sync.onLocalChange(); // timer pending
+      const box = track(sync.awaitSettled(1000));
+      await vi.advanceTimersByTimeAsync(300); // fires → posts → in flight
+      expect(s.posted).toEqual(["a"]);
+      expect(box.outcome).toBeNull();
+      sync.onHostSnapshot(2, true, 0, 1, "a");
+      sync.onReducerCommit(false);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(box.outcome).toBe("settled");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("is unsynced as soon as a debounce fire cannot post (no commit will come)", async () => {
+    vi.useFakeTimers();
+    try {
+      let open = true;
+      const { s, sync } = make({ canPost: () => open });
+      s.doc = "a";
+      sync.onLocalChange();
+      const box = track(sync.awaitSettled(1000));
+      open = false;
+      await vi.advanceTimersByTimeAsync(300); // fires → gate closed → held, not posted
+      expect(s.posted).toEqual([]);
+      expect(box.outcome).toBe("unsynced"); // at 300 ms, not at the 1000 ms timeout
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("is unsynced on refusal (host judged the Edit at its own base, bytes not shown)", async () => {
+    vi.useFakeTimers();
+    try {
+      const { s, sync } = make();
+      s.doc = "a";
+      sync.onLocalChange();
+      sync.flushIfIdle();
+      const box = track(sync.awaitSettled(1000));
+      sync.onHostSnapshot(1, true, 0, 1, "seed"); // same version, Edit judged, not applied
+      sync.onReducerCommit(false);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(box.outcome).toBe("unsynced");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("is unsynced immediately when the view is ahead and nothing is on its way", async () => {
+    const { s, sync } = make({ canPost: () => false });
+    s.doc = "a";
+    sync.onLocalChange();
+    sync.flushIfIdle(); // gate closed → held, nothing in flight
+    await expect(sync.awaitSettled(1000)).resolves.toBe("unsynced");
+  });
+
+  it("a commit that finds the view ahead with no debounce scheduled is NOT settled", async () => {
+    // A property of the verdict, not a scenario the editor produces today: a
+    // commit that finds empty holders must still not be read as "the host has it".
+    vi.useFakeTimers();
+    try {
+      const { s, sync } = make();
+      s.doc = "a";
+      sync.onLocalChange();
+      sync.flushIfIdle();
+      const box = track(sync.awaitSettled(1000));
+      sync.onHostSnapshot(2, true, 0, 1, "a");
+      s.doc = "ab"; // typed, onLocalChange not yet called
+      sync.onReducerCommit(false);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(box.outcome).toBe("unsynced");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("is unsynced when the held bytes lose to a foreign lineage, even though the reseed made view == host", async () => {
+    vi.useFakeTimers();
+    try {
+      const { s, sync } = make();
+      s.doc = "a";
+      sync.onLocalChange();
+      sync.flushIfIdle();
+      const box = track(sync.awaitSettled(1000));
+      // Same shape as "foreign, in flight: unknown text at an advanced version".
+      sync.onHostSnapshot(2, true, 0, 1, "X", 1);
+      s.doc = "X"; // the reseed
+      sync.onReducerCommit(false);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(box.outcome).toBe("unsynced");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("is unsynced at the timeout, and a late ack is a no-op", async () => {
+    vi.useFakeTimers();
+    try {
+      const { s, sync } = make();
+      s.doc = "a";
+      sync.onLocalChange();
+      sync.flushIfIdle();
+      const box = track(sync.awaitSettled(1000));
+      await vi.advanceTimersByTimeAsync(999);
+      expect(box.outcome).toBeNull();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(box.outcome).toBe("unsynced");
+      sync.onHostSnapshot(2, true, 0, 1, "a");
+      expect(() => sync.onReducerCommit(false)).not.toThrow();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancelSettleWaits resolves cancelled and clears the timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const { s, sync } = make();
+      s.doc = "a";
+      sync.onLocalChange();
+      sync.flushIfIdle();
+      const box = track(sync.awaitSettled(1000));
+      sync.cancelSettleWaits();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(box.outcome).toBe("cancelled");
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits for the first Document instead of comparing two empty strings", async () => {
+    vi.useFakeTimers();
+    try {
+      let doc = "";
+      const sync = createEditSync({ getDoc: () => doc, post: () => true });
+      const box = track(sync.awaitSettled(1000));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(box.outcome).toBeNull();
+      sync.onHostSnapshot(1, true, 0, 1, "seed");
+      doc = "seed"; // the seed
+      sync.onReducerCommit(false);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(box.outcome).toBe("settled");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reads the host's rejected-draft Document as settled — the HOST refuses that handoff", async () => {
+    // The host shows a write-gate-rejected draft by sending it back as a
+    // Document (effect-executor `postRejectedDraft`), then `edit-rejected`. The
+    // webview cannot tell that Document from an ack, so it is NOT the authority
+    // here: context-handoff-wiring's pending-rejection gate is. Do not "fix"
+    // this by reading canPost() — the waiter resolves on this commit, before
+    // `edit-rejected` closes the gate.
+    vi.useFakeTimers();
+    try {
+      const { s, sync } = make();
+      s.doc = "bad";
+      sync.onLocalChange();
+      sync.flushIfIdle();
+      const box = track(sync.awaitSettled(1000));
+      sync.onHostSnapshot(1, true, 0, 1, "bad"); // the draft, version unchanged, Edit judged
+      sync.onReducerCommit(false);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(box.outcome).toBe("settled");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not serialise the document on a commit when nobody is waiting", () => {
+    let reads = 0;
+    const sync = createEditSync({
+      getDoc: () => {
+        reads++;
+        return "seed";
+      },
+      post: () => true,
+    });
+    sync.onHostSnapshot(1, true, 0, 1, "seed");
+    reads = 0;
+    sync.onReducerCommit(false);
+    expect(reads).toBe(0);
+  });
+});
+
 // onHostSnapshot captures (externalEpoch, epochGeneration) alongside the
 // version; S3b's buffer-validity + acceptance logic consumes it (the behaviour
 // tests live in the S3b block below). These pins keep the RECORDING contract
