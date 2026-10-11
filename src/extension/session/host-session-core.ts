@@ -1088,9 +1088,12 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
           //     would be a fabricated diagnosis, and an unobserved snapshot is not
           //     a mismatch.
           // None is a save failure, so none adds a showError (the ok baseEffects
-          // carry none) — an unverified landing is not a failed save. Arm 2
-          // POST-DISPOSE is the exception and gets its own toast below: there the
-          // log is the whole signal and nobody is left to read it.
+          // carry none) — an unverified landing is not a failed save. ALIVE they
+          // stay log-only. POST-DISPOSE is the exception for all three arms
+          // (arm 2 via `unobservedStashDrop`, arms 1 and 3 via
+          // `observedStashDrop`): there the log is the whole signal and nobody
+          // is left to read it, so a stash that was dropped gets its own toast
+          // below — unless the observed document already carries its text.
           //
           // There is deliberately no fourth arm for "the content matched but the
           // ack label was never observed": that configuration DRAINS (see
@@ -1100,6 +1103,22 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
             stash !== null &&
             event.outcome.kind === "ok" &&
             observed === null;
+          // The stash was dropped on an `ok` settlement although the document WAS
+          // observed (or the executor reported a divergence): something other
+          // than the in-flight edit is on the document, so the drain was
+          // refused. Post-dispose the stash is the edit's only carrier, exactly
+          // as for `unobservedStashDrop`, so this is the same loss with a
+          // different cause. Silent when the observed document already carries
+          // the stash's text — nothing was lost. A divergence with NO
+          // observation cannot prove that, so it reports. (`ok` + stash +
+          // `!unobservedStashDrop` + `observed === null` can only be
+          // `divergedAfterApply`: that flag is the sole thing the unobserved
+          // predicate excludes.)
+          const observedStashDrop =
+            stash !== null &&
+            event.outcome.kind === "ok" &&
+            !unobservedStashDrop &&
+            (observed === null || !contentMatches(observed, stash.content));
           // Arms 2 and 3 share one guard — a stash present on an `ok`
           // settlement — stated ONCE below; only the observation splits them.
           let extraEffects: HostSessionEffect[] = [];
@@ -1187,6 +1206,14 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
                       {
                         type: "showError" as const,
                         message: `Quoll saved your change to ${state.context.fsPath} but could not verify it before the editor closed, so a later unsaved edit was dropped. Reopen the file to check its contents.`,
+                      },
+                    ]
+                  : []),
+                ...(observedStashDrop
+                  ? [
+                      {
+                        type: "showError" as const,
+                        message: `Quoll could not save a later edit to ${state.context.fsPath} before the editor closed: the document no longer matched the change Quoll had just written, so that edit was dropped. Reopen the file to check its contents.`,
                       },
                     ]
                   : []),
