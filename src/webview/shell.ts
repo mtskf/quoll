@@ -371,11 +371,9 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
     copy.textContent = "Copy draft";
   }
   function showDiscardNotice(draft?: string): void {
-    if (draft !== undefined) {
-      discardedDraft = draft;
-    }
     showNotice("discard");
     if (draft !== undefined) {
+      discardedDraft = draft;
       offerDraftCopy();
     }
   }
