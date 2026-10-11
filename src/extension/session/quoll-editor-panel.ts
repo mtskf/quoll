@@ -1210,6 +1210,8 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       // untitled document (see surface/rejected-draft-rescue.ts). Runs BEFORE
       // the teardown below, so a step that throws there cannot take the draft
       // with it; the rescue reads `state.rejection` and touches nothing else.
+      // Only a rejection pending NOW is covered: a stash the write-gate refuses
+      // on a drain after dispose keeps its `Cannot save: …` toast only.
       rescueRejectedDraft(state.rejection, document.uri.fsPath, {
         openUntitled: (content) => {
           // Test mode routes the open through the harness so E2E suites that are

@@ -276,13 +276,15 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
     }
     // Choke point for NOTICE_PRIORITY: every writer (showDiscardNotice,
     // showHoldNotice, showStormNotice's deferred render, the onEditRefused
-    // wiring, and any future notice producer) calls through here, so this is
+    // wiring, the format-document result, and any future notice producer)
+    // calls through here, so this is
     // the one place the ranking has to be checked for it to actually govern who
     // may claim the slot — re-deriving the check at each call site would let a
     // future call site forget it (and, as happened once, shadow this one — see
-    // the NOTICE_PRIORITY comment above). Today this declines a storm under
-    // discard / hold / unsaved, an unsaved under discard / hold, and a hold
-    // under a discard — shell.test.ts pins the storm-under-discard case as
+    // the NOTICE_PRIORITY comment above). Today this declines a format-* kind
+    // under any of the four loss kinds, a storm under discard / hold /
+    // unsaved, an unsaved under discard / hold, and a hold under a discard —
+    // shell.test.ts pins the storm-under-discard case as
     // "never inserts the storm notice … when a discard coincides".
     // showDiscardNotice itself is never declined here: discard is already the
     // max priority in the current kind set, so no noticeKind can outrank it —

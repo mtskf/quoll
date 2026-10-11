@@ -1061,9 +1061,11 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
           // edit raced the apply→settle window). Suppress webview-bound effects
           // (the webview is gone) but KEEP a failed save's `showError`: after a
           // close there is no editor left to retry, so the toast matters more,
-          // not less. A clean `ok` settle has no showError → []; a failure →
-          // [showError]; an ok-but-mismatch (external won) is a valid
-          // resolution, not a failure → also []. Alive: full effects.
+          // not less. What `baseEffects` contributes post-dispose: an `ok`
+          // settle (clean or ok-but-mismatch) carries no showError → nothing; a
+          // failure → its showError. That is NOT the whole post-dispose output:
+          // a stash dropped on an `ok` settle gets its own toast from
+          // unobservedStashDrop / observedStashDrop below. Alive: full effects.
           const baseEffects = settlementEffects(
             event.outcome,
             settled,

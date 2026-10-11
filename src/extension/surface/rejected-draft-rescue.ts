@@ -5,12 +5,15 @@
 // TextDocument never held them. So closing the tab raises no "Save changes?"
 // prompt, and revert-rescue (which compares TextDocument bytes) cannot see the
 // draft either. Once the webview is gone, `rejection.content` is the only copy,
-// so on dispose it is reopened as an untitled Markdown document and the user is
-// told.
+// so a rejection still pending when the tab closes is reopened as an untitled
+// Markdown document and the user is told.
 //
 // Scope of the guarantee: an ordinary tab close in a live window. Window close
 // or reload is best effort — `onDidDispose` is a plain Event<void> that nothing
 // awaits, so the host may be torn down before the untitled document opens.
+// Not covered: a stash the write-gate refuses when it drains AFTER dispose
+// (host-session-core's post-dispose `parse-failed` arm) is not pending at close
+// time, so it keeps its `Cannot save: …` toast only.
 //
 // The module takes its effects through `deps` and imports only types, so it
 // stays unit-testable without a VS Code host (the panel supplies the real
