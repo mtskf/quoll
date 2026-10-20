@@ -1,13 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { RejectionState } from "../../../src/extension/session/host-session-core.js";
-import { rescueRejectedDraft } from "../../../src/extension/surface/rejected-draft-rescue.js";
+import {
+  type RescuableDraft,
+  rescueRejectedDraft,
+} from "../../../src/extension/surface/rejected-draft-rescue.js";
 
 const FS_PATH = "/ws/notes.md";
 
-const none: RejectionState = { kind: "none" };
-const pending: RejectionState = {
-  kind: "pending",
-  id: 1,
+const pending: RescuableDraft = {
   content: "draft",
   error: { code: "unsafe_url", message: "bad link" },
 };
@@ -38,13 +37,6 @@ afterEach(() => {
 });
 
 describe("rescueRejectedDraft", () => {
-  it("does nothing when no rejection is pending", () => {
-    const { open, warn, deps } = setup();
-    rescueRejectedDraft(none, FS_PATH, deps);
-    expect(open).not.toHaveBeenCalled();
-    expect(warn).not.toHaveBeenCalled();
-  });
-
   it("opens the draft and warns once after the open fulfils", async () => {
     const { open, warn, deps } = setup();
     rescueRejectedDraft(pending, FS_PATH, deps);
@@ -125,6 +117,54 @@ describe("rescueRejectedDraft", () => {
       await new Promise((r) => setTimeout(r, 0));
       expect(warn).toHaveBeenCalledTimes(1);
       expect(errorSpy).toHaveBeenCalled();
+      expect(unhandled.spy).not.toHaveBeenCalled();
+    } finally {
+      unhandled.remove();
+    }
+  });
+
+  // A throwing console must not skip the warning or leak an unhandled rejection
+  // from the discarded `.then()`.
+  const throwingConsole = (errorSpy: ReturnType<typeof setup>["errorSpy"]) =>
+    errorSpy.mockImplementation(() => {
+      throw new Error("console broken");
+    });
+
+  it("still warns once when console.error throws and openUntitled rejects", async () => {
+    const { warn, errorSpy, deps } = setup(() => Promise.reject(new Error("boom")));
+    throwingConsole(errorSpy);
+    const unhandled = captureUnhandled();
+    try {
+      rescueRejectedDraft(pending, FS_PATH, deps);
+      await new Promise((r) => setTimeout(r, 0));
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]?.[0] as string).toContain("could not reopen");
+      expect(unhandled.spy).not.toHaveBeenCalled();
+    } finally {
+      unhandled.remove();
+    }
+  });
+
+  it("still warns once when console.error throws and openUntitled throws synchronously", () => {
+    const { warn, errorSpy, deps } = setup(() => {
+      throw new Error("sync boom");
+    });
+    throwingConsole(errorSpy);
+    expect(() => rescueRejectedDraft(pending, FS_PATH, deps)).not.toThrow();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0] as string).toContain("could not reopen");
+  });
+
+  it("a throwing showWarning plus a throwing console.error warns once and leaks nothing", async () => {
+    const { warn, errorSpy, deps } = setup(undefined, () => {
+      throw new Error("toast failed");
+    });
+    throwingConsole(errorSpy);
+    const unhandled = captureUnhandled();
+    try {
+      rescueRejectedDraft(pending, FS_PATH, deps);
+      await new Promise((r) => setTimeout(r, 0));
+      expect(warn).toHaveBeenCalledTimes(1);
       expect(unhandled.spy).not.toHaveBeenCalled();
     } finally {
       unhandled.remove();

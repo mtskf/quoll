@@ -18,7 +18,8 @@
 // ONLY where the panel closure had it: `post`'s early-return + its `.then` OK
 // arm (NOT the false/reject arms — those log unconditionally), and
 // `sendEditRejected`'s early-return + BOTH `.then` arms. `runEffects` itself is
-// NEVER wrapped in a disposed guard, and `runApplyEdit`'s `applyEditSettled`
+// NEVER wrapped in a disposed guard (nor are the `showError` and
+// `rescueRejectedDraft` cases), and `runApplyEdit`'s `applyEditSettled`
 // dispatch fires EVEN post-dispose in every arm (ok / refused / rejected, plus
 // the pipeline-rejection arm) — the core is the decision authority and needs the
 // settlement to drain a stashed last-keystroke edit (the
@@ -39,6 +40,7 @@ import type {
   DocumentWriteOutcome,
 } from "../document-write/execute-write.js";
 import { executeDocumentWrite } from "../document-write/execute-write.js";
+import type { RescuableDraft } from "../surface/rejected-draft-rescue.js";
 import type {
   ApplyEditOutcome,
   HostSessionEffect,
@@ -95,6 +97,9 @@ export interface EffectExecutorDeps<TEdit> {
   /** harness?.recordEvent ?? noop — called only on an accepted (ok=true) send. */
   recordEvent: (message: HostToWebview) => void;
   showError: (message: string) => void;
+  /** Reopen a refused draft as an untitled document. Required: an absent dep
+   *  would silently lose the post-dispose draft. */
+  rescueRejectedDraft: (draft: RescuableDraft) => void;
   canWrite: () => boolean;
   /** The panel's lineage answer for the live text (session/edit-lineage.ts),
    *  carried on the edit-rejected recovery dispatches. Never throws: the
@@ -1005,6 +1010,20 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
               console.error(
                 "[quoll] showError threw while running settlement effects",
                 effect.message,
+                err
+              )
+            );
+          }
+          break;
+        case "rescueRejectedDraft":
+          // UNGUARDED by `isDisposed` (see the header). Contained like
+          // `showError`, including the thunk-form log.
+          try {
+            deps.rescueRejectedDraft({ content: effect.content, error: effect.error });
+          } catch (err) {
+            reportContained(() =>
+              console.error(
+                "[quoll] rescueRejectedDraft threw while running settlement effects",
                 err
               )
             );

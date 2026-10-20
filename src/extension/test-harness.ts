@@ -218,13 +218,15 @@ interface TestOverrides {
   diskConflictPrompt:
     | ((message: string, ...actions: string[]) => Thenable<string | undefined>)
     | null;
-  /** When non-null, the panel routes the dispose-time rejected-draft rescue's
-   *  document open through this instead of `workspace.openTextDocument` +
-   *  `window.showTextDocument`. The E2E harness installs a no-op here by
-   *  default: the real rescue leaves a DIRTY untitled document behind every
-   *  tab close with a rejection pending, which would steal the active editor
-   *  from the next test and raise a save prompt the headless host cannot
-   *  answer. Only the rescue's own suite clears it to exercise the real path. */
+  /** When non-null, the panel routes the rejected-draft rescue's document open
+   *  through this instead of `workspace.openTextDocument` +
+   *  `window.showTextDocument`. Both entry points go through it: the
+   *  dispose-time rescue and the post-dispose drain rescue. The E2E harness
+   *  installs a no-op here by default: the real rescue leaves a DIRTY untitled
+   *  document behind every tab close with a rejection pending, which would
+   *  steal the active editor from the next test and raise a save prompt the
+   *  headless host cannot answer. Only the rescue's own suite clears it to
+   *  exercise the real path. */
   openRescuedDraft: ((content: string) => Thenable<unknown>) | null;
 }
 
@@ -390,8 +392,9 @@ export class TestHarness {
     this._overrides.diskConflictPrompt = override;
   }
 
-  /** Read by the panel's `onDidDispose` to route the rejected-draft rescue's
-   *  document open through a test override — see `TestOverrides.openRescuedDraft`. */
+  /** Read by the panel's shared rescue helper (at dispose and on a post-dispose
+   *  drain) to route the rejected-draft rescue's document open through a test
+   *  override — see `TestOverrides.openRescuedDraft`. */
   get openRescuedDraftOverride(): ((content: string) => Thenable<unknown>) | null {
     return this._overrides.openRescuedDraft;
   }

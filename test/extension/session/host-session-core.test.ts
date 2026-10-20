@@ -610,13 +610,13 @@ describe("host-session-core: applyEditSettled drain", () => {
     expect(r.effects).toEqual([{ type: "applyEdit", content: "edit1plus", baseDocVersion: 2 }]);
   });
 
-  it("POST-DISPOSE drain parse-failed → showError only (postEditRejected suppressed)", () => {
+  it("POST-DISPOSE drain parse-failed → rescueRejectedDraft only (webview post suppressed, no duplicate toast)", () => {
     const r = core.transition(
       lockedWithStash("edit1", "hasBAD", { disposed: true }),
       settled({ settledVersion: 2, currentContent: "edit1" })
     );
-    expect(r.effects).toHaveLength(1);
-    expect(r.effects[0]).toMatchObject({ type: "showError" });
+    expect(r.effects).toEqual([{ type: "rescueRejectedDraft", content: "hasBAD", error: unsafe }]);
+    expect(r.state.rejection).toMatchObject({ kind: "pending", content: "hasBAD" });
   });
 
   it("POST-DISPOSE drain readonly, stash DIFFERS from the settled document → showError once: the dropped edit is not silent", () => {
@@ -985,6 +985,13 @@ describe("host-session-core: misc transitions", () => {
     const r = core.transition(base({ pendingApplyBaseVersion: 1 }), { type: "disposed" });
     expect(r.state.disposed).toBe(true);
     expect(r.state.pendingApplyBaseVersion).toBeNull();
+    expect(r.effects).toEqual([]);
+  });
+  it("disposed with a rejection pending → no effects (the disposed arm never rescues)", () => {
+    const r = core.transition(
+      base({ rejection: { kind: "pending", id: 1, content: "d", error: unsafe } }),
+      { type: "disposed" }
+    );
     expect(r.effects).toEqual([]);
   });
   it("any event after disposed (except disposed) → no effects", () => {
