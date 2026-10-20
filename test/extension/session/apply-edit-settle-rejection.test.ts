@@ -163,6 +163,7 @@ function harness(options: HarnessOptions = {}) {
         throw new Error("toast failed");
       }
     },
+    rescueRejectedDraft: () => undefined,
     canWrite: () => true,
     readLineageSince: () => null,
     // Gated on the SAME `settleFailure` flag as `readCanonical` on purpose: in

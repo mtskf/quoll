@@ -132,6 +132,7 @@ describe("stale-version Document post: executor pairs live version with live byt
       },
       recordEvent: () => {},
       showError: () => {},
+      rescueRejectedDraft: () => undefined,
       canWrite: () => true,
       readLineageSince: () => null,
       // Mirrors the production panel closure: live bytes + the effect's version

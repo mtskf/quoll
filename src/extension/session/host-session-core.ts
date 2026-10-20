@@ -323,6 +323,14 @@ export type HostSessionEffect =
   | { readonly type: "postTheme"; readonly themeKind: ThemeKind }
   | { readonly type: "applyEdit"; readonly content: string; readonly baseDocVersion: number }
   | { readonly type: "showError"; readonly message: string }
+  // Post-dispose drain refused by the write-gate: reopen the stash as an
+  // untitled document. Never emitted by the `disposed` arm (the panel rescues a
+  // pending rejection at close; the two are mutually exclusive).
+  | {
+      readonly type: "rescueRejectedDraft";
+      readonly content: string;
+      readonly error: MarkdownError;
+    }
   | { readonly type: "logWarn"; readonly message: string; readonly detail: Record<string, unknown> }
   | { readonly type: "openExternal"; readonly href: string }
   // User-visible signal for a withheld settlement ack; the executor latches it
@@ -1309,7 +1317,8 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
                 rejection: { kind: "pending", id, content: stash.content, error: verdict.error },
                 nextRejectionId: id + 1,
               },
-              // showError survives dispose (VS Code toast). The banner post is
+              // Post-dispose: `rescueRejectedDraft` instead of a toast (its own
+              // warning carries the reason). The banner post is
               // webview-bound — suppressed post-dispose (post() would drop it
               // anyway); when alive it REDELIVERS the draft as a Document at the
               // SETTLED version (postRejectedDraft), not a bare postEditRejected.
@@ -1338,7 +1347,13 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
               // provenance + observed-version catch-up — its own slice, tracked in
               // the follow-up TODO entry.
               effects: state.disposed
-                ? [{ type: "showError", message: `Cannot save: ${verdict.error.message}` }]
+                ? [
+                    {
+                      type: "rescueRejectedDraft",
+                      content: stash.content,
+                      error: verdict.error,
+                    },
+                  ]
                 : [
                     ...staleReBaseWarn,
                     {
@@ -1370,10 +1385,10 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
             // POST-DISPOSE a `readonly` verdict is the one LOSS in this arm: alive,
             // the repost shows the user their edit reverting; disposed, the stash
             // was the keystroke's only carrier (no webview, no replay buffer), so
-            // it gets a toast like the parse-failed arm above. `decideEdit` checks
-            // readonly BEFORE content equality, so the stash may already carry the
-            // settled text — nothing was lost then, and the toast would be a false
-            // alarm. `stale` (unreachable here, the base is current by
+            // it gets a toast, where the parse-failed arm above gets a rescue.
+            // `decideEdit` checks readonly BEFORE content equality, so the stash
+            // may already carry the settled text — nothing was lost then, and
+            // the toast would be a false alarm. `stale` (unreachable here, the base is current by
             // construction) and `no-op` stay silent. The wording does not claim
             // the file IS read-only: `canWrite: false` also covers the executor's
             // fallback for a writability read that threw, and the reducer cannot

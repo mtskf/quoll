@@ -30,6 +30,7 @@ function makeDeps(over: Partial<EffectExecutorDeps<FakeEdit>> = {}): EffectExecu
     send: vi.fn(async () => true),
     recordEvent: vi.fn(),
     showError: vi.fn(),
+    rescueRejectedDraft: vi.fn(),
     canWrite: () => true,
     readLineageSince: () => null,
     buildSeedDocument: (v, externalEpoch, epochGeneration, settledEditId) => ({
@@ -1272,6 +1273,68 @@ describe("effect-executor runEffects other cases", () => {
     const { runEffects } = createEffectExecutor(makeDeps({ showError }));
     runEffects([{ type: "showError", message: "nope" }]);
     expect(showError).toHaveBeenCalledWith("nope");
+  });
+
+  // `rescueRejectedDraft` is deliberately UNGUARDED by `isDisposed`: it exists for
+  // the post-dispose drain, where the webview is gone but the draft is not.
+  const rescueError = { code: "unsafe_url" as const, message: "bad link" };
+
+  it("rescueRejectedDraft: runs the dep with { content, error } even when disposed", () => {
+    const rescue = vi.fn();
+    const { runEffects } = createEffectExecutor(
+      makeDeps({ isDisposed: () => true, rescueRejectedDraft: rescue })
+    );
+    runEffects([{ type: "rescueRejectedDraft", content: "draft", error: rescueError }]);
+    expect(rescue).toHaveBeenCalledOnce();
+    expect(rescue).toHaveBeenCalledWith({ content: "draft", error: rescueError });
+  });
+
+  it("rescueRejectedDraft: a throwing dep is contained — logged, and the following effects still run", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const showError = vi.fn();
+      const rescue = vi.fn(() => {
+        throw new Error("rescue failed");
+      });
+      const { runEffects } = createEffectExecutor(
+        makeDeps({ rescueRejectedDraft: rescue, showError })
+      );
+      expect(() =>
+        runEffects([
+          { type: "rescueRejectedDraft", content: "draft", error: rescueError },
+          { type: "showError", message: "after" },
+        ])
+      ).not.toThrow();
+      expect(rescue).toHaveBeenCalledOnce();
+      expect(showError).toHaveBeenCalledWith("after");
+      expect(errorSpy).toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("rescueRejectedDraft: the dep AND console.error both throwing still runs the following effects", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {
+      throw new Error("console broken");
+    });
+    try {
+      const showError = vi.fn();
+      const rescue = vi.fn(() => {
+        throw new Error("rescue failed");
+      });
+      const { runEffects } = createEffectExecutor(
+        makeDeps({ rescueRejectedDraft: rescue, showError })
+      );
+      expect(() =>
+        runEffects([
+          { type: "rescueRejectedDraft", content: "draft", error: rescueError },
+          { type: "showError", message: "after" },
+        ])
+      ).not.toThrow();
+      expect(showError).toHaveBeenCalledWith("after");
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   // `runEffects` MUST NOT UNWIND. The reducer emits every non-ok settlement as

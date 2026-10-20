@@ -81,7 +81,7 @@ import { toLintDiagnostics } from "../lint/lint-diagnostics.js";
 import { LintMirror } from "../lint/lint-mirror.js";
 import type { StatusBarSlots } from "../status-bar.js";
 import { openInQuollEditor } from "../surface/open-in-quoll.js";
-import { rescueRejectedDraft } from "../surface/rejected-draft-rescue.js";
+import { type RescuableDraft, rescueRejectedDraft } from "../surface/rejected-draft-rescue.js";
 import {
   REJECTION_BLOCKS_SWITCH_MESSAGE,
   registerPendingRejection,
@@ -457,6 +457,29 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     const liveLineageSince = (readLiveText: () => string): number | null =>
       isWriteLockHeld(state) ? null : lineage.lineageSince(readLiveText);
 
+    // The one rescue path for a refused draft: `onDidDispose` (rejection pending
+    // at close) and the executor's `rescueRejectedDraft` effect (post-dispose drain).
+    const rescueDraft = (draft: RescuableDraft): void =>
+      rescueRejectedDraft(draft, document.uri.fsPath, {
+        openUntitled: (content) => {
+          // Test mode routes the open through the harness so E2E suites that are
+          // not about the rescue never get a dirty untitled document. Branch on
+          // the override being installed, never on what it returns. LAZY: read at
+          // call time — the E2E suites swap the override after construction.
+          const override = this.harness?.openRescuedDraftOverride;
+          if (override) {
+            return override(content);
+          }
+          // showTextDocument is the text-editor API, so the untitled document
+          // never routes back into the Quoll custom editor.
+          return workspace
+            .openTextDocument({ language: "markdown", content })
+            .then((doc) => window.showTextDocument(doc, { preview: false }));
+        },
+        showWarning: (message) =>
+          showSafely(window.showWarningMessage(message), "showWarningMessage"),
+      });
+
     // Effect executor — owns `post`, `sendEditRejected`, `runApplyEdit`, and
     // `runEffects` (extracted to src/extension/session/effect-executor.ts so the
     // dispose / lifecycle branches get direct unit tests). It stays vscode-free:
@@ -486,6 +509,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       // posts, not tell which webview a command reached.
       recordEvent: (m) => this.harness?.recordEvent(m, document.uri.toString()),
       showError,
+      rescueRejectedDraft: rescueDraft,
       canWrite: canWriteNow,
       readLineageSince: () => liveLineageSince(() => canonicalDocumentText(document)),
       buildSeedDocument: (docVersion, externalEpoch, epochGeneration, settledEditId) => {
@@ -1210,26 +1234,12 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       // untitled document (see surface/rejected-draft-rescue.ts). Runs BEFORE
       // the teardown below, so a step that throws there cannot take the draft
       // with it; the rescue reads `state.rejection` and touches nothing else.
-      // Only a rejection pending NOW is covered: a stash the write-gate refuses
-      // on a drain after dispose keeps its `Cannot save: …` toast only.
-      rescueRejectedDraft(state.rejection, document.uri.fsPath, {
-        openUntitled: (content) => {
-          // Test mode routes the open through the harness so E2E suites that are
-          // not about the rescue never get a dirty untitled document. Branch on
-          // the override being installed, never on what it returns.
-          const override = this.harness?.openRescuedDraftOverride;
-          if (override) {
-            return override(content);
-          }
-          // showTextDocument is the text-editor API, so the untitled document
-          // never routes back into the Quoll custom editor.
-          return workspace
-            .openTextDocument({ language: "markdown", content })
-            .then((doc) => window.showTextDocument(doc, { preview: false }));
-        },
-        showWarning: (message) =>
-          showSafely(window.showWarningMessage(message), "showWarningMessage"),
-      });
+      // Only a rejection pending NOW is covered here: a stash the write-gate
+      // refuses on a drain after dispose reaches the same `rescueDraft` through
+      // the `rescueRejectedDraft` effect (the two are mutually exclusive).
+      if (state.rejection.kind === "pending") {
+        rescueDraft(state.rejection);
+      }
       // Set the local guard FIRST (arms the executor / listener guards), then drive
       // the core's `disposed` transition (clears the write lock so any late
       // settlement is a no-op), then tear down. The edit-settled barrier does

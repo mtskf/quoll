@@ -28,6 +28,9 @@ import {
 // mechanism, and mirrors the real case where the post-dispose drain matters:
 // the file is open in another editor, so it outlives the Quoll tab. A lone-tab
 // close-without-save has no bytes to preserve in the first place.
+//
+// A drained stash the write-gate REFUSES is reopened as an untitled document
+// (the dispose-time rescue's twin), not just toasted: the second case below.
 describe("pending-edit-dispose-drain", function () {
   this.timeout(20000);
 
@@ -128,5 +131,77 @@ describe("pending-edit-dispose-drain", function () {
 
     assert.strictEqual(doc.getText(), drained, "stashed edit #2 bytes must reach the TextDocument");
     assert.ok(doc.isDirty, "the drained write must leave the document dirty (unsaved)");
+  });
+
+  it("reopens a stash the write-gate refuses on the post-dispose drain as an untitled draft", async () => {
+    const harness = await getHarness();
+    await openFixtureWithQuoll("sample.md");
+    const seed = await harness.waitForEvent(isDocumentEvent, 8000);
+
+    const panel = harness.activePanel;
+    assert.ok(panel, "no active panel after open");
+    const doc = panel.document;
+
+    await vscode.window.showTextDocument(doc, {
+      viewColumn: vscode.ViewColumn.Beside,
+      preserveFocus: true,
+    });
+
+    // Same setup as above: edit #1 applies for real, its settlement is gated so
+    // the lock stays held and edit #2 is stashed.
+    const gate = deferred<boolean>();
+    let calls = 0;
+    harness.applyEditOverride = (edit) => {
+      calls += 1;
+      if (calls === 1) {
+        return vscode.workspace.applyEdit(edit).then((ok) => gate.promise.then(() => ok));
+      }
+      return vscode.workspace.applyEdit(edit);
+    };
+    // Installed AFTER the last getHarness(): the suite-wide no-op override is
+    // re-applied by getHarness().
+    const rescued: string[] = [];
+    harness.openRescuedDraftOverride = (content) => {
+      rescued.push(content);
+      return Promise.resolve();
+    };
+
+    panel.simulateInbound({
+      protocol: PROTOCOL_VERSION,
+      type: "edit",
+      editId: 1,
+      content: "first",
+      baseDocVersion: seed.message.docVersion,
+    });
+    assert.strictEqual(calls, 1, "edit #1 must acquire the write lock (applyEdit called)");
+    const applied1Deadline = Date.now() + 3000;
+    while (doc.getText() !== "first" && Date.now() < applied1Deadline) {
+      await tick(20);
+    }
+    assert.strictEqual(doc.getText(), "first", "edit #1 must land on the document while in flight");
+
+    // Edit #2 carries a link the write-gate refuses; it is stashed, not validated.
+    const refused = `# T\n\n[bad](javascript:alert(1))\n\nRESCUE-${Math.random().toString(36).slice(2)}\n`;
+    panel.simulateInbound({
+      protocol: PROTOCOL_VERSION,
+      type: "edit",
+      editId: 2,
+      content: refused,
+      baseDocVersion: seed.message.docVersion,
+    });
+
+    panel.webviewPanel.dispose();
+    await tick(50);
+    // No rejection was pending at close, so the dispose-time path rescued nothing.
+    assert.deepStrictEqual(rescued, [], "nothing may be rescued before the stash drains");
+
+    gate.resolve(true);
+    const deadline = Date.now() + 3000;
+    while (rescued.length < 1 && Date.now() < deadline) {
+      await tick(20);
+    }
+    assert.deepStrictEqual(rescued, [refused], "the refused stash must be reopened exactly once");
+    assert.strictEqual(calls, 1, "a refused stash must not be written to the document");
+    assert.strictEqual(doc.getText(), "first");
   });
 });

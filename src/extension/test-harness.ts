@@ -390,8 +390,9 @@ export class TestHarness {
     this._overrides.diskConflictPrompt = override;
   }
 
-  /** Read by the panel's `onDidDispose` to route the rejected-draft rescue's
-   *  document open through a test override — see `TestOverrides.openRescuedDraft`. */
+  /** Read by the panel's shared rescue helper (at dispose and on a post-dispose
+   *  drain) to route the rejected-draft rescue's document open through a test
+   *  override — see `TestOverrides.openRescuedDraft`. */
   get openRescuedDraftOverride(): ((content: string) => Thenable<unknown>) | null {
     return this._overrides.openRescuedDraft;
   }
