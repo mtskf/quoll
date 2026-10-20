@@ -1318,9 +1318,9 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
                 nextRejectionId: id + 1,
               },
               // Post-dispose: `rescueRejectedDraft` instead of a toast (its own
-              // warning carries the reason). The banner post is
-              // webview-bound — suppressed post-dispose (post() would drop it
-              // anyway); when alive it REDELIVERS the draft as a Document at the
+              // warning carries the reason). The banner post is webview-bound —
+              // suppressed post-dispose (post() would drop it anyway); when
+              // alive it REDELIVERS the draft as a Document at the
               // SETTLED version (postRejectedDraft), not a bare postEditRejected.
               // The drained-over apply already advanced lastAppliedDocVersion, so
               // a bare rejection would leave the webview on the pre-A version →
@@ -1388,8 +1388,8 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
             // it gets a toast, where the parse-failed arm above gets a rescue.
             // `decideEdit` checks readonly BEFORE content equality, so the stash
             // may already carry the settled text — nothing was lost then, and
-            // the toast would be a false alarm. `stale` (unreachable here, the base is current by
-            // construction) and `no-op` stay silent. The wording does not claim
+            // the toast would be a false alarm. `stale` (unreachable here, the
+            // base is current by construction) and `no-op` stay silent. The wording does not claim
             // the file IS read-only: `canWrite: false` also covers the executor's
             // fallback for a writability read that threw, and the reducer cannot
             // tell the two apart.
