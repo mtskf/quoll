@@ -7,10 +7,11 @@
 # pnpm >= 10.16; unit is MINUTES.
 #
 # Escape hatch for an urgent security-fix bump that is itself younger than the
-# window: add the package (name, glob, or name@version) to minimumReleaseAgeExclude
-# below, install, and keep the entry until the release is OLDER than the window —
-# removing it as soon as the pin lands in the lockfile breaks frozen-lockfile CI
-# (see above). Prefer this over lifting the global setting.
+# window: add a top-level `minimumReleaseAgeExclude:` list (entries: name, glob,
+# or name@version) next to this setting, install, and keep the entry until the
+# release is OLDER than the window — removing it as soon as the pin lands in the
+# lockfile breaks frozen-lockfile CI (see above). Delete the key once it is empty.
+# Prefer this over lifting the global setting.
 minimumReleaseAge: 10080
 # Security-motivated version overrides. pnpm 11 no longer reads the `pnpm`
 # block from package.json — top-level `overrides:` here is its new home.
