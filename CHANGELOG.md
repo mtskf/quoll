@@ -2,21 +2,26 @@
 
 All notable changes to Quoll are documented here.
 
-## 0.1.86 — 2026-10-07
+## 0.1.86 — 2026-11-03
+
+### Added
+
+- Blockquotes and callouts longer than 10 lines now show their first 10 lines and a "Show N more lines" bar, like long code blocks. Click it to expand the quote; "Show less" collapses it again. The file itself is not changed.
 
 ### Fixed
-- surface rejected-draft and stash losses, and say what Format Document did (#459)
 
-- If you close a Quoll tab right after an edit that cannot be saved (for example, one with an unsafe link), that edit now reopens as an untitled Markdown document even when Quoll was still saving your previous edit. It used to be lost, leaving only a "Cannot save" notice.
-
+- If you close a Quoll tab right after an edit that cannot be saved (for example, one with an unsafe link), that edit now reopens as an untitled Markdown document, even when Quoll was still saving your previous edit. It used to be lost, leaving only a "Cannot save" notice.
+- When an edit that could not be saved is replaced because another program changed the file, Quoll now tells you, and a "Copy draft" button puts your unsaved text on the clipboard. It used to disappear without a word.
+- Text you type while Quoll is still saving, or while the file is briefly read-only, is no longer rewound or lost. If an edit really is dropped, a notice now says so instead of failing silently.
 - Sending the document to Claude Code or Codex right after typing now waits until your latest edits have reached the file, so the assistant no longer sees a version that is missing them. If Quoll cannot confirm that within two seconds, nothing is sent and a notice says so.
-
 - If switching a Quoll tab to the text editor is refused or does not finish (for example, while an edit is waiting on a "Cannot save" notice, or when you cancel closing the Quoll tab), Quoll now keeps remembering Quoll as the editor for that file. It used to remember the text editor, so the file reopened as plain text next time.
-
+- Pasting a link whose address contains `&amp;`-style text, backslashes or angle brackets now keeps the address exactly as copied. The link used to point somewhere else, or the paste could not be saved.
 - In a file with Windows line endings (CRLF), copying or cutting whole lines with several cursors and no selection now pastes them back as whole lines. They used to be spliced into the middle of the lines the cursors were on.
 
 ### Changed
 
+- Format Document now tells you whether it changed anything, found nothing to change, or could not run, instead of giving the same message for all three.
+- Headings and lists inside a blockquote no longer show a fold chevron.
 - Copying, cutting or dragging text out of a CRLF file now puts Unix line endings (LF) on the clipboard, as the code block copy button already did. The file itself is still saved with CRLF. VS Code's own text editor copies CRLF from such a file, so the two now differ. Not yet verified: what Windows actually places on the native clipboard, and how every paste target reacts — VS Code, its terminal and current Notepad accept LF, but older Windows controls or byte-sensitive targets may show the lines run together.
 
 ## 0.1.85 — 2026-10-06
