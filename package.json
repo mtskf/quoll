@@ -345,17 +345,17 @@
     "@types/node": "20.16.0",
     "@types/vscode": "1.94.0",
     "@types/vscode-webview": "^1.57.0",
-    "@vitest/browser-playwright": "^4.1.10",
-    "@vitest/coverage-v8": "^4.1.10",
+    "@vitest/browser-playwright": "^4.1.12",
+    "@vitest/coverage-v8": "^4.1.12",
     "@vscode/test-electron": "^3.0.0",
     "@vscode/vsce": "^4.0.0",
     "esbuild": "^0.25.0",
-    "happy-dom": "^20.10.6",
+    "happy-dom": "^21.0.4",
     "mocha": "^11",
     "ovsx": "1.0.2",
     "playwright": "^1.61.1",
     "typescript": "^5.9.3",
-    "vite": "^7.3.6",
-    "vitest": "^4.1.10"
+    "vite": "^7.3.7",
+    "vitest": "^4.1.12"
   }
 }
