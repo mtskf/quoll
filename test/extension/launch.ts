@@ -10,6 +10,15 @@ import { createRunTempRoot, RUN_TEMP_ROOT_ENV } from "./temp-root";
 
 const VS_CODE_VERSION = "1.94.0";
 
+// Opt-in escape hatch from the pin: `QUOLL_E2E_VSCODE_VERSION=stable` (or any
+// version @vscode/test-electron accepts) runs the suite against a newer host.
+// The pin cannot notice an upstream change to an undocumented behaviour we
+// lean on — e.g. finalizeForwardSwap assumes the target tab's open event
+// reaches the ext host before the `openWith` reply — so this is the manual
+// probe for that. Unset or empty keeps the pin; CI never sets it, so its
+// cache key (grepped from the constant above) stays valid.
+export const VSCODE_VERSION_ENV = "QUOLL_E2E_VSCODE_VERSION";
+
 // Preflight: fixtures directory must exist before we spawn Electron.
 // Mirrors test/extension/e2e/harness.ts FIXTURES_DIR (kept in sync
 // manually — harness.ts cannot be imported here because it depends on
@@ -100,10 +109,16 @@ export async function runE2E(
   // run keeping its own single root is the accepted outcome.
   try {
     const extensionDevelopmentPath = path.resolve(__dirname, "../..");
-    const extensionTestsPath = path.resolve(__dirname, "./e2e/index");
+    // Explicit `.js`: newer hosts load this path with ESM `import()`, which
+    // does no extension probing (1.144 fails "Cannot find module …/e2e/index").
+    const extensionTestsPath = path.resolve(__dirname, "./e2e/index.js");
+    const override = process.env[VSCODE_VERSION_ENV];
+    if (override) {
+      console.log(`[e2e] ${VSCODE_VERSION_ENV}=${override} — not the pinned ${VS_CODE_VERSION}`);
+    }
 
     await deps.runTests({
-      version: VS_CODE_VERSION,
+      version: override || VS_CODE_VERSION,
       extensionDevelopmentPath,
       extensionTestsPath,
       extensionTestsEnv: { [RUN_TEMP_ROOT_ENV]: run.root },
