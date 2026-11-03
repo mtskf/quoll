@@ -1113,9 +1113,10 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
                 // async window from open-resolve through the actual close. It
                 // returns the shared refusal message as the abort REASON so
                 // finalizeForwardSwap surfaces it (the SAME message the
-                // drain-time / async-window checks above show; check 3 renders it
-                // as a warning — nothing failed, the swap was refused to protect
-                // the draft — while those fast paths use an error toast).
+                // drain-time / async-window checks above show; this fourth,
+                // point-of-no-return check renders it as a warning — nothing
+                // failed, the swap was refused to protect the draft — while the
+                // earlier checks use an error toast).
                 void finalizeForwardSwap(document.uri, sourceTab, undefined, () =>
                   state.rejection.kind === "pending" ? REJECTION_BLOCKS_SWITCH_MESSAGE : null
                 );
