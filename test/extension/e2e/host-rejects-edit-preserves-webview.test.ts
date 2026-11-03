@@ -603,12 +603,15 @@ describe("host-rejects-edit-preserves-webview", function () {
     // Union-pin (deliberate): this asserts only the data-loss contract — the Quoll
     // tab is retained so the draft is not orphaned — the accepted convention the
     // sibling receipt-time / drain-time guard tests here also follow. It does NOT
-    // isolate the async-window re-check from the finalizeSurfaceSwap backstop: with
-    // the check deleted, the backstop still refuses the close (tab retained) and
-    // surface memory ends "text" either way (the restore watcher adopts the sibling
-    // text view — pinned by surface-memory.test.ts "surface-memory masking
-    // characterization"). Rationale + the early-stop/side-effect difference the
-    // suite intentionally leaves unpinned: docs/LEARNING.md 2026-07-29.
+    // isolate the async-window re-check from the finalize abort backstop, and
+    // retaining Quoll in surface memory does not isolate it either: with the ENTIRE
+    // check deleted the backstop still refuses the close (tab retained) and
+    // finalizeForwardSwap records "quoll" after the aborted finalize, while removing
+    // only the check's own memory write skips the wrapper via the early return and
+    // leaves the restore watcher's sibling-adopt "text" uncorrected (ARCH-06a-3).
+    // The fresh-reopen memory checks live in remember-last-editor-surface.test.ts.
+    // Rationale + the early-stop/side-effect difference the suite intentionally
+    // leaves unpinned: docs/LEARNING.md 2026-07-29.
     const tabs = allTabs();
     assert.ok(
       tabs.some(customTab(uri)),
@@ -622,11 +625,12 @@ describe("host-rejects-edit-preserves-webview", function () {
     // Command-path analogue of the webview async-open test above (PR #256
     // follow-up). reopenActiveQuollTabAsText is TAB-ONLY: its fast-path guard
     // runs synchronously (no rejection yet → passes), then it awaits
-    // openInTextEditor — an async openWith whose success continuation records the
-    // text surface and closes the Quoll tab a tick later. The webview stays live
-    // during that open, so a NEW invalid edit can flip state.rejection to
-    // "pending" in the gap AFTER the fast-path check. The command's async-window
-    // re-check + the shouldAbortClose predicate passed to finalizeSurfaceSwap
+    // openInTextEditor — an async openWith whose success continuation re-checks
+    // rejection, then delegates save/close and outcome recording to
+    // finalizeForwardSwap a tick later. The webview stays live during that open,
+    // so a NEW invalid edit can flip state.rejection to "pending" in the gap
+    // AFTER the fast-path check. The command's async-window re-check + the
+    // shouldAbortClose predicate passed to finalizeForwardSwap
     // must TOGETHER retain the Quoll tab so the just-rejected draft is not
     // orphaned. The opened text tab is a harmless second view of the clean disk
     // bytes here, so this asserts only the data-loss invariant (Quoll retained).

@@ -29,7 +29,7 @@ import { isRejectionPending, REJECTION_BLOCKS_SWITCH_MESSAGE } from "./rejection
 import { openInTextEditor } from "./reopen-text-editor.js";
 import { showSafely } from "./show-safely.js";
 import { noteSurface } from "./surface-memory.js";
-import { finalizeSurfaceSwap, findSourceTab } from "./surface-swap.js";
+import { finalizeForwardSwap, finalizeSurfaceSwap, findSourceTab } from "./surface-swap.js";
 
 export type SwitchTarget = "to-text" | "to-quoll" | "none";
 
@@ -88,7 +88,7 @@ export async function reopenActiveQuollTabAsText(): Promise<void> {
   // registry keyed by uri. This command path has THREE checkpoints against the
   // same window — fast path (here) / async-window re-check (after the open
   // resolves) / point-of-no-return (the shouldAbortClose predicate passed to
-  // finalizeSurfaceSwap below). Fast path: refuse before opening a pointless
+  // finalizeForwardSwap below). Fast path: refuse before opening a pointless
   // second tab. It is not sufficient on its own — a rejection can still land
   // during the async open / finalize awaits — so the later two cover the
   // remaining windows. (The in-webview switch-to-text arm mirrors this with a
@@ -108,28 +108,29 @@ export async function reopenActiveQuollTabAsText(): Promise<void> {
   try {
     await openInTextEditor(uri);
     // Async-window guard: openInTextEditor is async and the webview stays live
-    // until finalizeSurfaceSwap closes the Quoll tab, so a NEW edit failing the
+    // until finalizeForwardSwap closes the Quoll tab, so a NEW edit failing the
     // write-gate during the open can flip the rejection to pending AFTER the
-    // fast-path check. Re-check before recording intent / closing: retain the
-    // Quoll tab so the just-rejected draft is not orphaned (the opened text tab
-    // is a harmless second view of the clean disk bytes).
+    // fast-path check. Re-check before closing: retain the Quoll tab so the
+    // just-rejected draft is not orphaned (the opened text tab is a harmless
+    // second view of the clean disk bytes), and record "quoll" to override the
+    // restore watcher's sibling-adopt "text" written when that text tab opened.
     if (isRejectionPending(uri.toString())) {
+      noteSurface(uri.toString(), "quoll");
       showSafely(window.showErrorMessage(REJECTION_BLOCKS_SWITCH_MESSAGE), "showErrorMessage");
       return;
     }
-    // Record intent AFTER the open succeeds and BEFORE the source close, so the
-    // surface-restore watcher adopts "text" instead of bouncing this deliberate
-    // swap (and a failed open records nothing).
-    noteSurface(uri.toString(), "text");
-    // Point-of-no-return guard: finalizeSurfaceSwap still awaits openDoc (and
+    // finalizeForwardSwap records the outcome after finalization settles
+    // ("text" only if the source closed), overriding the restore watcher's
+    // sibling-adopt write (a failed open records nothing).
+    // Point-of-no-return guard: finalizeForwardSwap still awaits openDoc (and
     // maybe save) before the irreversible tab close, so a rejection landing in
     // THAT window would slip past the check above. Pass the same predicate so the
     // close is aborted synchronously right before it happens — returning the
-    // shared refusal message as the abort REASON so finalizeSurfaceSwap surfaces
+    // shared refusal message as the abort REASON so finalizeForwardSwap surfaces
     // it (the SAME message the two fast-path checks above show; check 3 renders
     // it as a warning — nothing failed, the swap was refused to protect the
     // draft — while the fast paths use an error toast).
-    await finalizeSurfaceSwap(uri, sourceTab, undefined, () =>
+    await finalizeForwardSwap(uri, sourceTab, undefined, () =>
       isRejectionPending(uri.toString()) ? REJECTION_BLOCKS_SWITCH_MESSAGE : null
     );
   } catch (err) {

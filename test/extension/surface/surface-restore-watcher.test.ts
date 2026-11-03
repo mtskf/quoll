@@ -457,8 +457,9 @@ describe("registerSurfaceRestoreWatcher in-flight guard", () => {
   it("does NOT restore when the doc is already open in the OTHER surface (side-by-side / mid-swap)", async () => {
     noteSurface(uriKey, "quoll");
     // A live Quoll tab for the same uri — the forward-toggle window in which the
-    // text tab opens BEFORE toggle-editor's noteSurface("text") has run. Without
-    // the sibling check the watcher would bounce it straight back to Quoll.
+    // text tab opens BEFORE the forward wrapper (finalizeForwardSwap) records the
+    // outcome after finalize. Without the sibling check the watcher would bounce
+    // it straight back to Quoll.
     stubTabGroups.push({
       tabs: [{ input: new TabInputCustom(restoreUri, "quoll.editMarkdown") }],
     });

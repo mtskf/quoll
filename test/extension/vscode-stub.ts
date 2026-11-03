@@ -83,9 +83,10 @@ export const commands = {
 };
 
 // Minimal Tabs-API surface. toggle-editor.ts does `import { TabInputCustom }`
-// and (in a callback the no-op registerCommand never invokes) reads
-// `window.tabGroups`. The import binding must resolve at module load; the
-// callback body is never run under vitest, so these can stay bare stubs.
+// and reads `window.tabGroups`. The import binding must resolve at module load.
+// toggle-editor.test.ts's forward-command cases drive reopenActiveQuollTabAsText
+// over these stubs: they set `window.tabGroups.activeTabGroup.activeTab` and the
+// real findSourceTab reads it (plus `all`), so keep both shapes intact.
 export class TabInputCustom {
   constructor(
     public readonly uri: StubUri,
