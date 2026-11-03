@@ -31,6 +31,9 @@ describe("runE2E wiring", () => {
     const opts = runTests.mock.calls[0][0];
     expect(opts.extensionTestsEnv).toEqual({ QUOLL_E2E_TEMP_ROOT: "/t/r" });
     expect(opts.launchArgs).toContain("--user-data-dir=/t/r/ud");
+    // The explicit `.js` is what the opt-in newer-host probe needs; the
+    // extensionless form still resolves on the pinned host, so nothing else notices.
+    expect(opts.extensionTestsPath).toMatch(/e2e[\\/]index\.js$/);
     expect(run.dispose).toHaveBeenCalledTimes(1);
     expect(process.exitCode).toBeUndefined();
   });
