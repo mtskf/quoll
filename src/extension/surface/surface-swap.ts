@@ -17,6 +17,7 @@ import {
   workspace,
 } from "vscode";
 import { showSafely } from "./show-safely.js";
+import { noteSurface } from "./surface-memory.js";
 
 /** Safety gate: close the source tab only when there is one AND the document is
  *  provably clean — either it was already clean, or it was dirty and the save
@@ -188,13 +189,20 @@ const REAL_SWAP_DEPS: FinalizeSwapDeps = {
  *  the abort is never a blank toast (no current caller returns "" — this is
  *  defence against a future one). Only `null` / `undefined` proceed to the
  *  close. This is the single refusal surface for every window this guard covers.
- *  Abort → both-open (safe), symmetric with the save-failure degradation. */
+ *  Abort → both-open (safe), symmetric with the save-failure degradation.
+ *
+ *  Resolves to the OUTCOME: `true` when the swap completed — the source tab was
+ *  closed, or was already gone at re-resolve (nothing left to close). `false`
+ *  when it did not: no captured source tab, the doc could not be made clean
+ *  (save false / throws / still dirty), `shouldAbortClose` aborted, `closeTab`
+ *  resolved false (cancelled), or anything threw (e.g. `openDoc`). Still never
+ *  throws. Forward swaps consume it through `finalizeForwardSwap`. */
 export async function finalizeSurfaceSwap(
   uri: Uri,
   sourceTab: Tab | undefined,
   deps: FinalizeSwapDeps = REAL_SWAP_DEPS,
   shouldAbortClose?: () => string | null
-): Promise<void> {
+): Promise<boolean> {
   try {
     const doc = await deps.openDoc(uri);
     const wasDirty = doc.isDirty;
@@ -231,7 +239,7 @@ export async function finalizeSurfaceSwap(
           "showWarningMessage"
         );
       }
-      return;
+      return false;
     }
     // sourceTab is defined here (shouldCloseSourceTab is false when it is not).
     // Re-resolve a LIVE tab for the same identity right before closing: Tab
@@ -263,15 +271,37 @@ export async function finalizeSurfaceSwap(
         `[quoll] surface-swap: close aborted by caller guard (${message}); leaving both surfaces open`
       );
       showSafely(window.showWarningMessage(message), "showWarningMessage");
-      return;
+      return false;
     }
     const closed = liveSourceTab ? await deps.closeTab(liveSourceTab) : true;
     if (!closed) {
       console.warn("[quoll] surface-swap: source tab close was cancelled; both surfaces remain");
     }
+    return closed;
   } catch (err) {
     console.error("[quoll] finalizeSurfaceSwap failed", err);
+    return false;
   }
+}
+
+/** FORWARD-only (Quoll → text) wrapper around `finalizeSurfaceSwap`: awaits the
+ *  outcome, then records it in surface memory — "text" when the swap completed,
+ *  "quoll" when it did not. The write is deliberately LAST: the restore watcher
+ *  already recorded "text" (sibling-adopt) the moment the target text tab opened
+ *  beside the still-open Quoll tab, so only a write after finalize settles can
+ *  correct a refused / failed swap back to "quoll". Same arguments as
+ *  `finalizeSurfaceSwap`; never throws. Known boundary: overlapping operations
+ *  on the same URI are not arbitrated — writing after finalize's awaits widens
+ *  the window in which an earlier swap can settle after a newer surface
+ *  selection and overwrite its memory (per-URI arbitration is ARCH-06a-2's). */
+export async function finalizeForwardSwap(
+  uri: Uri,
+  sourceTab: Tab | undefined,
+  deps: FinalizeSwapDeps = REAL_SWAP_DEPS,
+  shouldAbortClose?: () => string | null
+): Promise<void> {
+  const completed = await finalizeSurfaceSwap(uri, sourceTab, deps, shouldAbortClose);
+  noteSurface(uri.toString(), completed ? "text" : "quoll");
 }
 
 /** Close the pre-captured `sourceTab` ONLY if the shared doc is currently clean.

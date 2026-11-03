@@ -11,6 +11,8 @@ All notable changes to Quoll are documented here.
 
 - Sending the document to Claude Code or Codex right after typing now waits until your latest edits have reached the file, so the assistant no longer sees a version that is missing them. If Quoll cannot confirm that within two seconds, nothing is sent and a notice says so.
 
+- If switching a Quoll tab to the text editor is refused or does not finish (for example, while an edit is waiting on a "Cannot save" notice, or when you cancel closing the Quoll tab), Quoll now keeps remembering Quoll as the editor for that file. It used to remember the text editor, so the file reopened as plain text next time.
+
 - In a file with Windows line endings (CRLF), copying or cutting whole lines with several cursors and no selection now pastes them back as whole lines. They used to be spliced into the middle of the lines the cursors were on.
 
 ### Changed

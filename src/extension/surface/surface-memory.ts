@@ -9,9 +9,13 @@
 // the module-level store pattern of editor-switch-caret.ts.
 //
 // Two writers feed it (see surface-restore-watcher.ts + the switch handlers):
-//   - noteSurface: INTENT — a deliberate switch records the target surface once
-//     the open SUCCEEDS and before the source tab is closed, so the tab watcher
-//     adopts rather than bounces it.
+//   - noteSurface: the deliberate switch sites. A REVERSE swap (text → Quoll)
+//     records INTENT once the open SUCCEEDS and before the source tab is closed,
+//     so the tab watcher adopts rather than bounces it. A FORWARD swap
+//     (Quoll → text) records the OUTCOME after finalize settles, via
+//     finalizeForwardSwap ("text" only if the source closed, else "quoll"; its
+//     post-open rejection arm writes "quoll"), overriding the watcher's
+//     sibling-adopt "text" from when the target tab opened.
 //   - reconcileOpen: ENFORCEMENT — the tab watcher calls this for every newly
 //     opened `.md` tab; it records the shown surface (adopt) or asks the caller
 //     to reopen in the remembered surface (restore) without overwriting memory.
@@ -69,9 +73,11 @@ export function reconcileOpen(
 }
 
 /** Record `surface` as the remembered surface for `uriKey` (a `Uri.toString()`),
- *  overwriting any prior. Called by the deliberate switch sites once they have
- *  opened the target surface (and before they close the source), so the tab
- *  watcher sees a match and adopts it. */
+ *  overwriting any prior. Called by the deliberate switch sites: the reverse swap
+ *  once it has opened the target surface (and before it closes the source), so
+ *  the tab watcher sees a match and adopts it; forward swaps record the OUTCOME
+ *  after finalize via finalizeForwardSwap (and "quoll" from the post-open
+ *  rejection arm), overriding the watcher's sibling-adopt. */
 export function noteSurface(uriKey: string, surface: EditorSurface): void {
   surfaces.set(uriKey, surface);
 }

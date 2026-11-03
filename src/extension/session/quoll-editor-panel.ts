@@ -94,7 +94,7 @@ import {
 import { createRevertRescueWiring } from "../surface/revert-rescue-wiring.js";
 import { showSafely } from "../surface/show-safely.js";
 import { noteSurface } from "../surface/surface-memory.js";
-import { finalizeSurfaceSwap, findSourceTab } from "../surface/surface-swap.js";
+import { finalizeForwardSwap, findSourceTab } from "../surface/surface-swap.js";
 import type { PanelControls, TestHarness } from "../test-harness.js";
 import {
   buildLocalResourceRoots,
@@ -1023,19 +1023,19 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           // it does NOT replace it (E2E-probed 2026-07-10). We capture the
           // source custom tab now (before the barrier defers / the target
           // opens), apply the stashed caret to the freshly-opened text editor,
-          // then finalizeSurfaceSwap saves-if-dirty and closes the Quoll tab so
+          // then finalizeForwardSwap saves-if-dirty and closes the Quoll tab so
           // only one surface remains. Closing disposes THIS panel, so it is the
           // last action; caret apply + document.uri are closure locals, safe
-          // across the dispose. finalizeSurfaceSwap never throws and refuses to
+          // across the dispose. finalizeForwardSwap never throws and refuses to
           // close a doc it could not make clean (no revert / no data loss).
           //
           // Data-loss guard (rejection pending): a write-gate rejection leaves
           // the user's draft ONLY webview-side — the on-disk document is
           // unchanged (clean); the rejection banner is up (showing the error)
           // and the editor beneath it still shows the un-saved bytes, because
-          // CodeMirror was never reseeded. finalizeSurfaceSwap below would close
+          // CodeMirror was never reseeded. finalizeForwardSwap below would close
           // THIS Quoll tab and the text editor would open on the CLEAN disk
-          // snapshot, silently orphaning the typed draft (finalizeSurfaceSwap
+          // snapshot, silently orphaning the typed draft (finalizeForwardSwap
           // sees a clean doc, so its save-then-close is a no-op close — no
           // data-loss tripwire fires). Refuse the swap while a rejection is
           // pending: switch-to-text is a pure side channel that never reloaded
@@ -1075,25 +1075,28 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
               () => {
                 // Async-window guard: openInTextEditor is async, and the webview
                 // stays live (still focused, still able to emit edits) until
-                // finalizeSurfaceSwap closes the Quoll tab below. A NEW edit that
+                // finalizeForwardSwap closes the Quoll tab below. A NEW edit that
                 // arrives and fails the write-gate DURING this open sets
                 // state.rejection to "pending" AFTER both earlier checks passed.
                 // Re-check here, immediately before the surface is finalized: if
-                // a rejection landed, retain the Quoll tab (do NOT record the
-                // text-surface intent or close the source) so the just-rejected
-                // draft is not orphaned. The text editor that just opened is a
+                // a rejection landed, retain the Quoll tab (record "quoll",
+                // overriding the restore watcher's sibling-adopt "text" written
+                // when the text tab opened, and do NOT close the source) so the
+                // just-rejected draft is not orphaned. The text editor that just opened is a
                 // harmless second view of the clean on-disk bytes; the user
                 // resolves the highlighted problem in the Quoll tab, then
                 // switches. Same data-loss invariant as the two checks above —
                 // never finalize a swap that orphans typed bytes.
                 if (state.rejection.kind === "pending") {
+                  noteSurface(document.uri.toString(), "quoll");
                   showError(REJECTION_BLOCKS_SWITCH_MESSAGE);
                   return;
                 }
-                // Record intent AFTER the open succeeds and BEFORE the source
-                // close, so the surface-restore watcher adopts "text" for this
-                // deliberate Quoll→text swap (a failed open records nothing).
-                noteSurface(document.uri.toString(), "text");
+                // finalizeForwardSwap records the swap OUTCOME in surface memory
+                // LAST, after finalization settles ("text" only if the source
+                // closed), because the restore watcher already sibling-adopted
+                // "text" when the text tab opened; the rejection arm above
+                // overrides that adopt itself (a failed open records nothing).
                 if (caret !== null) {
                   const editor = window.visibleTextEditors.find(
                     (e) => e.document.uri.toString() === document.uri.toString()
@@ -1102,18 +1105,18 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
                     caretWiring.applyCaretToTextEditor(editor, caret);
                   }
                 }
-                // Point-of-no-return guard: finalizeSurfaceSwap still awaits
+                // Point-of-no-return guard: finalizeForwardSwap still awaits
                 // openDoc (and maybe save) before the irreversible tab close, so
                 // a rejection landing in THAT window would slip past the check
                 // above. Pass the same rejection predicate so the close is
                 // aborted synchronously right before it happens — closing every
                 // async window from open-resolve through the actual close. It
                 // returns the shared refusal message as the abort REASON so
-                // finalizeSurfaceSwap surfaces it (the SAME message the
+                // finalizeForwardSwap surfaces it (the SAME message the
                 // drain-time / async-window checks above show; check 3 renders it
                 // as a warning — nothing failed, the swap was refused to protect
                 // the draft — while those fast paths use an error toast).
-                void finalizeSurfaceSwap(document.uri, sourceTab, undefined, () =>
+                void finalizeForwardSwap(document.uri, sourceTab, undefined, () =>
                   state.rejection.kind === "pending" ? REJECTION_BLOCKS_SWITCH_MESSAGE : null
                 );
               },

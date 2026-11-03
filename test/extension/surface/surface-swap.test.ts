@@ -1,9 +1,15 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Tab, TextDocument, Uri } from "vscode";
 import { window } from "vscode";
 import {
+  __clearSurfaceMemoryForTest,
+  __getRememberedSurfaceForTest,
+  noteSurface,
+} from "../../../src/extension/surface/surface-memory.js";
+import {
   closeSourceTabIfClean,
   type FinalizeSwapDeps,
+  finalizeForwardSwap,
   finalizeSurfaceSwap,
   shouldCloseSourceTab,
 } from "../../../src/extension/surface/surface-swap.js";
@@ -116,7 +122,7 @@ describe("finalizeSurfaceSwap", () => {
   it("does NOT close the source tab when a dirty doc's save() returns false (data-loss guard)", async () => {
     const doc = fakeDoc(true, false);
     const { deps, closeTab, reresolve } = makeDeps(doc);
-    await finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps);
+    await expect(finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps)).resolves.toBe(false);
     expect(closeTab).not.toHaveBeenCalled();
     expect(reresolve).not.toHaveBeenCalled(); // gate refuses before re-resolving
   });
@@ -124,14 +130,14 @@ describe("finalizeSurfaceSwap", () => {
   it("does NOT close when save() throws (never reverts the shared working copy)", async () => {
     const doc = fakeDoc(true, "throw");
     const { deps, closeTab } = makeDeps(doc);
-    await finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps);
+    await expect(finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps)).resolves.toBe(false);
     expect(closeTab).not.toHaveBeenCalled();
   });
 
   it("saves a dirty doc clean, then closes the re-resolved live tab", async () => {
     const doc = fakeDoc(true, true);
     const { deps, closeTab, reresolve } = makeDeps(doc);
-    await finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps);
+    await expect(finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps)).resolves.toBe(true);
     expect(reresolve).toHaveBeenCalledWith(SENTINEL_TAB);
     expect(closeTab).toHaveBeenCalledWith(LIVE_TAB);
   });
@@ -139,15 +145,16 @@ describe("finalizeSurfaceSwap", () => {
   it("closes a clean doc's source tab without saving", async () => {
     const doc = fakeDoc(false, false);
     const { deps, closeTab } = makeDeps(doc);
-    await finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps);
+    await expect(finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps)).resolves.toBe(true);
     expect(doc.save as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
     expect(closeTab).toHaveBeenCalledWith(LIVE_TAB);
   });
 
   it("does NOT close (and never throws) when the source tab is gone at re-resolve time", async () => {
+    // Nothing left to close counts as a COMPLETED swap (outcome true).
     const doc = fakeDoc(false, false);
     const { deps, closeTab } = makeDeps(doc, { reresolveSourceTab: () => undefined });
-    await expect(finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps)).resolves.toBeUndefined();
+    await expect(finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps)).resolves.toBe(true);
     expect(closeTab).not.toHaveBeenCalled();
   });
 
@@ -155,15 +162,26 @@ describe("finalizeSurfaceSwap", () => {
     const doc = fakeDoc(false, false);
     const closeTab = vi.fn(async () => false);
     const { deps } = makeDeps(doc, { closeTab });
-    await expect(finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps)).resolves.toBeUndefined();
+    await expect(finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps)).resolves.toBe(false);
     expect(closeTab).toHaveBeenCalledWith(LIVE_TAB);
   });
 
   it("does nothing when there is no captured source tab", async () => {
     const doc = fakeDoc(false, false);
     const { deps, closeTab, reresolve } = makeDeps(doc);
-    await finalizeSurfaceSwap(fileUri, undefined, deps);
+    await expect(finalizeSurfaceSwap(fileUri, undefined, deps)).resolves.toBe(false);
     expect(reresolve).not.toHaveBeenCalled();
+    expect(closeTab).not.toHaveBeenCalled();
+  });
+
+  it("resolves false (and never throws) when openDoc rejects", async () => {
+    const doc = fakeDoc(false, false);
+    const { deps, closeTab } = makeDeps(doc, {
+      openDoc: async () => {
+        throw new Error("cannot open");
+      },
+    });
+    await expect(finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps)).resolves.toBe(false);
     expect(closeTab).not.toHaveBeenCalled();
   });
 });
@@ -176,7 +194,9 @@ describe("finalizeSurfaceSwap shouldAbortClose (point-of-no-return guard)", () =
     // overrides it (e.g. a write-gate rejection is pending → keep both open).
     const doc = fakeDoc(false, true);
     const { deps, closeTab } = makeDeps(doc);
-    await finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps, () => ABORT_REASON);
+    await expect(
+      finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps, () => ABORT_REASON)
+    ).resolves.toBe(false);
     expect(closeTab).not.toHaveBeenCalled();
   });
 
@@ -190,7 +210,9 @@ describe("finalizeSurfaceSwap shouldAbortClose (point-of-no-return guard)", () =
     const { deps, closeTab } = makeDeps(doc);
     const warn = vi.spyOn(window, "showWarningMessage");
     try {
-      await finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps, () => ABORT_REASON);
+      await expect(
+        finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps, () => ABORT_REASON)
+      ).resolves.toBe(false);
       expect(closeTab).not.toHaveBeenCalled();
       expect(warn).toHaveBeenCalledWith(ABORT_REASON);
     } finally {
@@ -211,7 +233,9 @@ describe("finalizeSurfaceSwap shouldAbortClose (point-of-no-return guard)", () =
         return doc;
       },
     });
-    await finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps, () => (pending ? ABORT_REASON : null));
+    await expect(
+      finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps, () => (pending ? ABORT_REASON : null))
+    ).resolves.toBe(false);
     expect(closeTab).not.toHaveBeenCalled();
   });
 
@@ -234,14 +258,16 @@ describe("finalizeSurfaceSwap shouldAbortClose (point-of-no-return guard)", () =
       }),
     } as unknown as TextDocument;
     const { deps, closeTab } = makeDeps(doc);
-    await finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps, () => (pending ? ABORT_REASON : null));
+    await expect(
+      finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps, () => (pending ? ABORT_REASON : null))
+    ).resolves.toBe(false);
     expect(closeTab).not.toHaveBeenCalled();
   });
 
   it("closes normally when shouldAbortClose returns null (guard does not block the happy path)", async () => {
     const doc = fakeDoc(false, true);
     const { deps, closeTab } = makeDeps(doc);
-    await finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps, () => null);
+    await expect(finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps, () => null)).resolves.toBe(true);
     expect(closeTab).toHaveBeenCalledWith(LIVE_TAB);
   });
 
@@ -265,7 +291,9 @@ describe("finalizeSurfaceSwap shouldAbortClose (point-of-no-return guard)", () =
     const { deps } = makeDeps(doc, { closeTab });
     const warn = vi.spyOn(window, "showWarningMessage");
     try {
-      await finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps, () => (pending ? ABORT_REASON : null));
+      await expect(
+        finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps, () => (pending ? ABORT_REASON : null))
+      ).resolves.toBe(true);
       // The synchronous pre-close check saw pending=false → the close proceeded
       // and committed; the during-close flip is out of scope by design.
       expect(closeTab).toHaveBeenCalledWith(LIVE_TAB);
@@ -287,7 +315,7 @@ describe("finalizeSurfaceSwap shouldAbortClose (point-of-no-return guard)", () =
     const { deps, closeTab } = makeDeps(doc);
     const warn = vi.spyOn(window, "showWarningMessage");
     try {
-      await finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps, () => "");
+      await expect(finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps, () => "")).resolves.toBe(false);
       expect(closeTab).not.toHaveBeenCalled();
       expect(warn).toHaveBeenCalledTimes(1);
       const shown = warn.mock.calls[0]?.[0] as string;
@@ -295,6 +323,145 @@ describe("finalizeSurfaceSwap shouldAbortClose (point-of-no-return guard)", () =
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+describe("finalizeForwardSwap (forward outcome → surface memory)", () => {
+  // The wrapper records the swap OUTCOME after finalize settles: "text" only
+  // when the swap completed, "quoll" otherwise — overriding the restore
+  // watcher's sibling-adopt "text" written when the target tab opened.
+  const KEY = fileUri.toString();
+  const ABORT_REASON = "Quoll: can't switch while a change was rejected — fix it first.";
+
+  beforeEach(() => __clearSurfaceMemoryForTest());
+
+  /** A promise plus its resolver, and an "entered" signal resolved when the
+   *  fake dep is first called — so mid-flight asserts wait on a real event,
+   *  never on a fixed microtask count. */
+  function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
+    let resolve!: (v: T) => void;
+    const promise = new Promise<T>((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  }
+
+  it.each([
+    ["a clean close", fakeDoc(false, false), {}],
+    ["a saved-then-closed dirty doc", fakeDoc(true, true), {}],
+    [
+      "a source tab already gone at re-resolve",
+      fakeDoc(false, false),
+      { reresolveSourceTab: () => undefined },
+    ],
+  ] as const)('records "text" after %s', async (_label, doc, overrides) => {
+    const { deps } = makeDeps(doc, overrides);
+    await finalizeForwardSwap(fileUri, SENTINEL_TAB, deps);
+    expect(__getRememberedSurfaceForTest(KEY)).toBe("text");
+  });
+
+  it('records "quoll" when a dirty doc\'s save() returns false', async () => {
+    const { deps } = makeDeps(fakeDoc(true, false));
+    await finalizeForwardSwap(fileUri, SENTINEL_TAB, deps);
+    expect(__getRememberedSurfaceForTest(KEY)).toBe("quoll");
+  });
+
+  it('records "quoll" when save() throws', async () => {
+    const { deps } = makeDeps(fakeDoc(true, "throw"));
+    await finalizeForwardSwap(fileUri, SENTINEL_TAB, deps);
+    expect(__getRememberedSurfaceForTest(KEY)).toBe("quoll");
+  });
+
+  it('records "quoll" when the close is cancelled', async () => {
+    const { deps } = makeDeps(fakeDoc(false, false), { closeTab: vi.fn(async () => false) });
+    await finalizeForwardSwap(fileUri, SENTINEL_TAB, deps);
+    expect(__getRememberedSurfaceForTest(KEY)).toBe("quoll");
+  });
+
+  it('records "quoll" when there is no captured source tab', async () => {
+    const { deps } = makeDeps(fakeDoc(false, false));
+    await finalizeForwardSwap(fileUri, undefined, deps);
+    expect(__getRememberedSurfaceForTest(KEY)).toBe("quoll");
+  });
+
+  it('records "quoll" when shouldAbortClose returns a reason', async () => {
+    const { deps, closeTab } = makeDeps(fakeDoc(false, true));
+    await finalizeForwardSwap(fileUri, SENTINEL_TAB, deps, () => ABORT_REASON);
+    expect(closeTab).not.toHaveBeenCalled();
+    expect(__getRememberedSurfaceForTest(KEY)).toBe("quoll");
+  });
+
+  it('records "quoll" when openDoc rejects', async () => {
+    const { deps } = makeDeps(fakeDoc(false, false), {
+      openDoc: async () => {
+        throw new Error("cannot open");
+      },
+    });
+    await finalizeForwardSwap(fileUri, SENTINEL_TAB, deps);
+    expect(__getRememberedSurfaceForTest(KEY)).toBe("quoll");
+  });
+
+  it('overwrites an earlier "text" (the watcher\'s sibling-adopt) with "quoll" on save false', async () => {
+    noteSurface(KEY, "text");
+    const { deps } = makeDeps(fakeDoc(true, false));
+    await finalizeForwardSwap(fileUri, SENTINEL_TAB, deps);
+    expect(__getRememberedSurfaceForTest(KEY)).toBe("quoll");
+  });
+
+  describe("writes only after finalize fully settles", () => {
+    it('does not touch memory while openDoc is pending (save false → "quoll")', async () => {
+      noteSurface(KEY, "text");
+      const entered = deferred<void>();
+      const open = deferred<TextDocument>();
+      const { deps } = makeDeps(fakeDoc(true, false), {
+        openDoc: () => {
+          entered.resolve();
+          return open.promise;
+        },
+      });
+      const run = finalizeForwardSwap(fileUri, SENTINEL_TAB, deps);
+      await entered.promise;
+      expect(__getRememberedSurfaceForTest(KEY)).toBe("text");
+      open.resolve(fakeDoc(true, false));
+      await run;
+      expect(__getRememberedSurfaceForTest(KEY)).toBe("quoll");
+    });
+
+    it('does not touch memory while closeTab is pending (close true → "text")', async () => {
+      noteSurface(KEY, "quoll");
+      const entered = deferred<void>();
+      const close = deferred<boolean>();
+      const { deps } = makeDeps(fakeDoc(false, false), {
+        closeTab: () => {
+          entered.resolve();
+          return close.promise;
+        },
+      });
+      const run = finalizeForwardSwap(fileUri, SENTINEL_TAB, deps);
+      await entered.promise;
+      expect(__getRememberedSurfaceForTest(KEY)).toBe("quoll");
+      close.resolve(true);
+      await run;
+      expect(__getRememberedSurfaceForTest(KEY)).toBe("text");
+    });
+
+    it('does not touch memory while closeTab is pending (close false → "quoll")', async () => {
+      noteSurface(KEY, "text");
+      const entered = deferred<void>();
+      const close = deferred<boolean>();
+      const { deps } = makeDeps(fakeDoc(false, false), {
+        closeTab: () => {
+          entered.resolve();
+          return close.promise;
+        },
+      });
+      const run = finalizeForwardSwap(fileUri, SENTINEL_TAB, deps);
+      await entered.promise;
+      expect(__getRememberedSurfaceForTest(KEY)).toBe("text");
+      close.resolve(false);
+      await run;
+      expect(__getRememberedSurfaceForTest(KEY)).toBe("quoll");
+    });
   });
 });
 
