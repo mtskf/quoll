@@ -627,10 +627,10 @@ describe("host-rejects-edit-preserves-webview", function () {
     // runs synchronously (no rejection yet → passes), then it awaits
     // openInTextEditor — an async openWith whose success continuation re-checks
     // rejection, then delegates save/close and outcome recording to
-    // finalizeForwardSwap a tick later. The webview stays live
-    // during that open, so a NEW invalid edit can flip state.rejection to
-    // "pending" in the gap AFTER the fast-path check. The command's async-window
-    // re-check + the shouldAbortClose predicate passed to finalizeSurfaceSwap
+    // finalizeForwardSwap a tick later. The webview stays live during that open,
+    // so a NEW invalid edit can flip state.rejection to "pending" in the gap
+    // AFTER the fast-path check. The command's async-window re-check + the
+    // shouldAbortClose predicate passed to finalizeForwardSwap
     // must TOGETHER retain the Quoll tab so the just-rejected draft is not
     // orphaned. The opened text tab is a harmless second view of the clean disk
     // bytes here, so this asserts only the data-loss invariant (Quoll retained).

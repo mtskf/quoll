@@ -1082,8 +1082,8 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
                 // a rejection landed, retain the Quoll tab (record "quoll",
                 // overriding the restore watcher's sibling-adopt "text" written
                 // when the text tab opened, and do NOT close the source) so the
-                // just-rejected draft is not orphaned. The text editor that just opened is a
-                // harmless second view of the clean on-disk bytes; the user
+                // just-rejected draft is not orphaned. The text editor that just
+                // opened is a harmless second view of the clean on-disk bytes; the user
                 // resolves the highlighted problem in the Quoll tab, then
                 // switches. Same data-loss invariant as the two checks above —
                 // never finalize a swap that orphans typed bytes.

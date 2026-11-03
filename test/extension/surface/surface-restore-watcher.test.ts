@@ -458,8 +458,8 @@ describe("registerSurfaceRestoreWatcher in-flight guard", () => {
     noteSurface(uriKey, "quoll");
     // A live Quoll tab for the same uri — the forward-toggle window in which the
     // text tab opens BEFORE the forward wrapper (finalizeForwardSwap) records the
-    // outcome after finalize. Without
-    // the sibling check the watcher would bounce it straight back to Quoll.
+    // outcome after finalize. Without the sibling check the watcher would bounce
+    // it straight back to Quoll.
     stubTabGroups.push({
       tabs: [{ input: new TabInputCustom(restoreUri, "quoll.editMarkdown") }],
     });

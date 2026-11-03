@@ -335,9 +335,9 @@ describe("finalizeForwardSwap (forward outcome → surface memory)", () => {
 
   beforeEach(() => __clearSurfaceMemoryForTest());
 
-  /** A promise plus its resolver, and an "entered" signal resolved when the
-   *  fake dep is first called — so mid-flight asserts wait on a real event,
-   *  never on a fixed microtask count. */
+  /** A promise plus its resolver. The cases below use one as an "entered"
+   *  signal (resolved when the fake dep is first called) so mid-flight asserts
+   *  wait on a real event, never on a fixed microtask count. */
   function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
     let resolve!: (v: T) => void;
     const promise = new Promise<T>((r) => {
