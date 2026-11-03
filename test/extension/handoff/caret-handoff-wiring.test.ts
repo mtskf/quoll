@@ -185,3 +185,49 @@ describe("caret-handoff wiring: activeEditorSub reveal guard", () => {
     expect(selection?.active.character).toBe(3);
   });
 });
+
+// applyCaretToTextEditor is BEST-EFFORT and must never throw: the panel's
+// switch-to-text fulfilled arm calls it right before finalizeForwardSwap, and a
+// throw there skips the finalize (surface memory stays on the restore watcher's
+// sibling-adopt "text", the Quoll tab is never closed) as an unhandled rejection
+// — `.then(f, r)`'s `r` does not catch a throw from `f`. Pinned here, at the
+// wiring, so every caller (that arm + the activeEditorSub tracker) inherits it.
+describe("caret-handoff wiring: applyCaretToTextEditor never throws", () => {
+  beforeEach(() => {
+    resetStubEditorListeners();
+  });
+
+  function makeThrowingEditor(): never {
+    return {
+      document: {
+        uri: { toString: () => DOC_URI },
+        lineCount: LINES.length,
+        lineAt: (line: number) => ({ text: LINES[line] ?? "" }),
+      },
+      set selection(_value: unknown) {
+        throw new Error("editor disposed");
+      },
+      revealRange: (): void => undefined,
+    } as never;
+  }
+
+  it("swallows a throw from the editor so the caller's next step still runs", () => {
+    const wiring = makeWiring(() => false);
+    const editor = makeThrowingEditor();
+    let finalized = false;
+    const switchToTextArm = (): void => {
+      wiring.applyCaretToTextEditor(editor, { line: 1, character: 2 });
+      finalized = true;
+    };
+
+    expect(switchToTextArm).not.toThrow();
+    expect(finalized).toBe(true);
+  });
+
+  it("swallows a throw on the activeEditorSub path too", () => {
+    const wiring = makeWiring(() => false);
+    wiring.reportCaret({ line: 1, character: 2, selectedChars: 0 });
+
+    expect(() => fireActiveTextEditor(makeThrowingEditor())).not.toThrow();
+  });
+});
