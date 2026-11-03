@@ -1097,6 +1097,8 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
                 // closed), because the restore watcher already sibling-adopted
                 // "text" when the text tab opened; the rejection arm above
                 // overrides that adopt itself (a failed open records nothing).
+                // applyCaretToTextEditor never throws, so a failed caret restore
+                // cannot skip that finalize.
                 if (caret !== null) {
                   const editor = window.visibleTextEditors.find(
                     (e) => e.document.uri.toString() === document.uri.toString()

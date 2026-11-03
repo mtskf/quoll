@@ -54,6 +54,7 @@ export interface CaretHandoffWiringDeps {
 
 export interface CaretHandoffWiring {
   getCaret(): Caret | null;
+  /** Best-effort: never throws (a failed restore is logged and dropped). */
   applyCaretToTextEditor(editor: TextEditor, caret: Caret): void;
   reportCaret(report: { line: number; character: number; selectedChars: number }): void;
   applySwitchCaretOnReady(): void;
@@ -147,12 +148,22 @@ export function createCaretHandoffWiring(deps: CaretHandoffWiringDeps): CaretHan
   // applied position can be off by the un-flushed delta. The clamp guarantees
   // a VALID position (never out of bounds); the residual skew is an accepted
   // limitation of a one-shot handoff with a flat {line, character} state.
+  //
+  // NEVER throws: a failed caret restore is logged and dropped. The panel's
+  // switch-to-text arm calls this right before finalizeForwardSwap inside a
+  // `.then(f, r)` fulfilled arm, where a throw would skip the finalize (surface
+  // memory left on the sibling-adopt "text", Quoll tab never closed) as an
+  // unhandled rejection — `r` does not catch a throw from `f`.
   const applyCaretToTextEditor = (editor: TextEditor, caret: Caret): void => {
-    const doc = editor.document;
-    const clamped = clampCaret(caret, doc.lineCount, (line) => doc.lineAt(line).text.length);
-    const pos = new Position(clamped.line, clamped.character);
-    editor.selection = new Selection(pos, pos);
-    editor.revealRange(new Range(pos, pos));
+    try {
+      const doc = editor.document;
+      const clamped = clampCaret(caret, doc.lineCount, (line) => doc.lineAt(line).text.length);
+      const pos = new Position(clamped.line, clamped.character);
+      editor.selection = new Selection(pos, pos);
+      editor.revealRange(new Range(pos, pos));
+    } catch (err) {
+      console.error("[quoll] caret handoff: applying the caret to the text editor failed", err);
+    }
   };
 
   // Track the caret while the DEFAULT text editor for this document is the
