@@ -35,7 +35,7 @@
 // The `!html` defer is unconditional: with no HTML flavour this handler has nothing
 // to insert either, so CM's own fallback behaviour is the whole story there.
 
-import { language } from "@codemirror/language";
+import { ensureSyntaxTree, language, syntaxTree } from "@codemirror/language";
 import { type EditorState, type Extension, Prec } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import type { Tree } from "@lezer/common";
@@ -97,7 +97,7 @@ function inlineNodesWithin(tree: Tree, start: number, end: number): string[] | n
 
 /** May the converted fragment go in at the caret as-is, instead of as its own
  *  block? Only a single paragraph, and only when the editor's own parser reads it
- *  the same way in place as alone: the line around the selection must neither
+ *  the same way in place as alone: the text around the selection must neither
  *  reach into the fragment (`!` before a link makes an image, a trailing `\`
  *  escapes the first marker, a `*` merges with an emphasis run) nor leave its
  *  syntax unparsed — CommonMark flanking rejects `hello**(a)**world`, a run
@@ -106,10 +106,20 @@ function inlineNodesWithin(tree: Tree, start: number, end: number): string[] | n
  *  keeps every such case covered by one test.
  *
  *  Every "no" falls back to the block insert, which is always safe: no Markdown
- *  language loaded, a multi-block fragment, any difference in place. The context is
- *  the selection's own line(s), not the whole paragraph, so a delimiter on an
- *  earlier line of the same paragraph can still pair with the fragment — the same
- *  thing typing those bytes would do. */
+ *  language loaded, a multi-block fragment, any difference in place.
+ *
+ *  "In place" is the top-level block(s) the selection sits in or between, plus one
+ *  more block each way, as whole lines from the editor's own tree. Blocks, not the
+ *  selection's line: an unclosed `**` on an earlier line of the same paragraph pairs
+ *  with the fragment. One neighbour, because a paste can dissolve its block into the
+ *  adjacent one (text typed into a setext underline turns it back into paragraph
+ *  text). Whole lines, because a block node starts at its first non-space character
+ *  and the indentation it skips is significant. Not the whole document: a full parse
+ *  costs ~110 ms per MB on every paste. ⚠️ That one neighbour always suffices is
+ *  argued (a single-paragraph fragment holds no blank line or block start, so it can
+ *  only reread its own block or merge it into an adjacent one) and matched against a
+ *  whole-document parse by a randomised differential — not proven. The
+ *  whole-document pin in cm-rich-html-paste.test.ts is the contract. */
 function insertsInline(state: EditorState, from: number, to: number, md: string): boolean {
   const parser = state.facet(language)?.parser;
   if (!parser) {
@@ -125,8 +135,13 @@ function insertsInline(state: EditorState, from: number, to: number, md: string)
   ) {
     return false;
   }
-  const head = state.doc.sliceString(state.doc.lineAt(from).from, from);
-  const tail = state.doc.sliceString(to, state.doc.lineAt(to).to);
+  const top = (ensureSyntaxTree(state, to, 50) ?? syntaxTree(state)).topNode;
+  const prev = top.childBefore(from);
+  const next = top.childAfter(to);
+  const first = (prev && top.childBefore(prev.from)) ?? prev;
+  const last = (next && top.childAfter(next.to)) ?? next;
+  const head = state.doc.sliceString(first ? state.doc.lineAt(first.from).from : 0, from);
+  const tail = state.doc.sliceString(to, last ? state.doc.lineAt(last.to).to : state.doc.length);
   const want = inlineNodesWithin(alone, 0, md.length);
   const got = inlineNodesWithin(
     parser.parse(head + md + tail),

@@ -1,8 +1,12 @@
 // @vitest-environment happy-dom
 import { markdown } from "@codemirror/lang-markdown";
+import { language } from "@codemirror/language";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
+import type { Tree } from "@lezer/common";
 import { describe, expect, it } from "vitest";
+import { quollMarkdownLanguage } from "../../../src/webview/cm/markdown.js";
+import { htmlToMarkdown } from "../../../src/webview/cm/paste/html-to-markdown.js";
 import { richHtmlPaste } from "../../../src/webview/cm/paste/rich-html-paste.js";
 import { type ClipboardFlavours, firePasteAt, IMAGE_FILE } from "../helpers/clipboard-double.js";
 
@@ -27,6 +31,17 @@ function mountMd(doc: string, canWrite = true) {
         EditorState.readOnly.of(!canWrite),
         richHtmlPaste({ canWrite: () => canWrite }),
       ],
+    }),
+  });
+}
+
+// The production language (GFM + Quoll's extensions), for the pins that compare the
+// handler against a parse of the whole document.
+function mountQuoll(doc: string) {
+  return new EditorView({
+    state: EditorState.create({
+      doc,
+      extensions: [quollMarkdownLanguage(), richHtmlPaste({ canWrite: () => true })],
     }),
   });
 }
@@ -122,6 +137,129 @@ describe("richHtmlPaste — handler", () => {
     view.dispatch({ selection: { anchor: 6 } });
     firePaste(view, { html: '<a href="https://example.com/">new</a>', text: "new" });
     expect(view.state.doc.toString()).toBe("hello!\n\n[new](https://example.com/)\n\nworld");
+    view.destroy();
+  });
+  it("replaces a non-empty selection with an inline run", () => {
+    const view = mountMd("hello old world");
+    view.dispatch({ selection: { anchor: 6, head: 9 } });
+    firePaste(view, { html: "<p><strong>new</strong></p>", text: "new" });
+    expect(view.state.doc.toString()).toBe("hello **new** world");
+    view.destroy();
+  });
+  it("nests an inline run inside an enclosing link label", () => {
+    // The link encloses the whole fragment: nesting, not interference.
+    const view = mountMd("[helloworld](https://example.com/)");
+    view.dispatch({ selection: { anchor: 6 } });
+    firePaste(view, { html: "<strong>new</strong>", text: "new" });
+    expect(view.state.doc.toString()).toBe("[hello**new**world](https://example.com/)");
+    view.destroy();
+  });
+  it.each([
+    // An unclosed delimiter on an earlier line of the same paragraph pairs with the
+    // fragment's opening marker, so `new` would not be bold in place.
+    [
+      "an earlier line of the paragraph",
+      "**foo\nbarbaz",
+      9,
+      "<strong>new</strong>",
+      "**foo\nbar\n\n**new**\n\nbaz",
+    ],
+    // The context starts at the container, not at the Paragraph node, whose raw
+    // slice would carry the continuation line's `> ` mark.
+    [
+      "an earlier line of a blockquote paragraph",
+      "> **foo\n> barbaz",
+      13,
+      "<strong>new</strong>",
+      "> **foo\n> bar\n\n**new**\n\nbaz",
+    ],
+    // A caret on the blank line between paragraphs still sees the line before it.
+    [
+      "the line before a blank-line caret",
+      "`foo\n\nbar",
+      5,
+      "<code>new</code>",
+      "`foo\n\n`new`\n\nbar",
+    ],
+    // Pasting into a setext underline dissolves it into the paragraph above, so a
+    // block beyond the caret's own decides the reading.
+    [
+      "a neighbouring block",
+      "b```\n---\n\\]```\nc**",
+      6,
+      "<strong>new</strong>",
+      "b```\n-\n\n**new**\n\n--\n\\]```\nc**",
+    ],
+  ])("keeps block framing when %s would pair with the fragment", (_, doc, caret, html, want) => {
+    const view = mountMd(doc);
+    view.dispatch({ selection: { anchor: caret } });
+    firePaste(view, { html, text: "new" });
+    expect(view.state.doc.toString()).toBe(want);
+    view.destroy();
+  });
+  // The handler reads only the blocks around the selection; a whole-document parse is
+  // the definition it must agree with. The oracle is restated here, independent of
+  // the implementation: inline iff the fragment's inline nodes are the same in the
+  // whole document as alone (none crossing its edges).
+  const inlineKeys = (tree: Tree, start: number, end: number): string | null => {
+    const keys: string[] = [];
+    let crosses = false;
+    tree.iterate({
+      enter: (node) => {
+        if (crosses || node.to <= start || node.from >= end) {
+          return false;
+        }
+        if (node.type.is("Block")) {
+          return;
+        }
+        if (node.from >= start && node.to <= end) {
+          keys.push(`${node.name}@${node.from - start}-${node.to - start}`);
+        } else if (node.from > start || node.to < end) {
+          crosses = true;
+          return false;
+        }
+      },
+    });
+    return crosses ? null : keys.join();
+  };
+  it.each([
+    ["helloworld", 5, 5, "<strong>new</strong>"],
+    ["helloworld", 5, 5, "<strong>(a)</strong>"],
+    ["hello!world", 6, 6, '<a href="https://example.com/">new</a>'],
+    ["hello old world", 6, 9, "<strong>new</strong>"],
+    ["[helloworld](https://example.com/)", 6, 6, "<strong>new</strong>"],
+    ["**foo\nbarbaz", 9, 9, "<strong>new</strong>"],
+    ["`foo\nbarbaz", 8, 8, "<code>new</code>"],
+    ["> **foo\n> barbaz", 13, 13, "<strong>new</strong>"],
+    ["- **foo\n  barbaz", 13, 13, "<strong>new</strong>"],
+    ["foo\n\nbar", 4, 4, "<strong>new</strong>"],
+    ["`foo\n\nbar", 5, 5, "<code>new</code>"],
+    ["**foo\n\nbar", 5, 5, "<strong>new</strong>"],
+    ["foo\n\n---", 4, 4, "<strong>new</strong>"],
+    ["foo\n", 4, 4, "<strong>new</strong>"],
+    ["", 0, 0, "<strong>new</strong>"],
+    ["hello\nworld", 6, 6, "<strong>new</strong>"],
+    ["| a | b |\n|---|---|\n| c | de |", 26, 26, "<strong>new</strong>"],
+    ["# helloworld", 7, 7, "<strong>new</strong>"],
+    ["hello\n\n- world", 3, 10, "<strong>new</strong>"],
+    ["hello\n===", 2, 2, "<strong>new</strong>"],
+    ["bar\n`foo", 3, 3, "<code>new</code>"],
+    ["b```\n---\n\\]```\nc**", 6, 6, "<strong>new</strong>"],
+    ["foo\n# h\nbar", 4, 4, "<strong>new</strong>"],
+  ])("decides inline exactly as a whole-document parse would (%j @%i-%i, %s)", (doc, from, to, html) => {
+    const view = mountQuoll(doc);
+    view.dispatch({ selection: { anchor: from, head: to } });
+    const md = htmlToMarkdown(html)?.markdown ?? "";
+    const parser = view.state.facet(language)?.parser;
+    if (!parser) {
+      throw new Error("no Markdown parser");
+    }
+    const before = doc.slice(0, from);
+    const alone = inlineKeys(parser.parse(md), 0, md.length);
+    const inPlace = inlineKeys(parser.parse(before + md + doc.slice(to)), from, from + md.length);
+    const oracleInline = alone !== null && inPlace === alone;
+    firePaste(view, { html, text: "new" });
+    expect(view.state.doc.toString() === before + md + doc.slice(to)).toBe(oracleInline);
     view.destroy();
   });
   it("keeps block framing when no Markdown language is loaded", () => {
