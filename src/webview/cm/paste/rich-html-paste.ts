@@ -35,10 +35,10 @@
 // The `!html` defer is unconditional: with no HTML flavour this handler has nothing
 // to insert either, so CM's own fallback behaviour is the whole story there.
 
-import { ensureSyntaxTree, language, syntaxTree } from "@codemirror/language";
+import { ensureSyntaxTree, language } from "@codemirror/language";
 import { type EditorState, type Extension, Prec } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import type { Tree } from "@lezer/common";
+import type { SyntaxNode, Tree } from "@lezer/common";
 
 // Cross-directory into cm/image/ deliberately: the "is this an image item"
 // question belongs to the handler that ingests them, and borrowing its definition
@@ -106,20 +106,25 @@ function inlineNodesWithin(tree: Tree, start: number, end: number): string[] | n
  *  keeps every such case covered by one test.
  *
  *  Every "no" falls back to the block insert, which is always safe: no Markdown
- *  language loaded, a multi-block fragment, any difference in place.
+ *  language loaded, no complete tree within 50 ms, a multi-block fragment, any
+ *  difference in place.
  *
- *  "In place" is the top-level block(s) the selection sits in or between, plus one
- *  more block each way, as whole lines from the editor's own tree. Blocks, not the
- *  selection's line: an unclosed `**` on an earlier line of the same paragraph pairs
- *  with the fragment. One neighbour, because a paste can dissolve its block into the
- *  adjacent one (text typed into a setext underline turns it back into paragraph
- *  text). Whole lines, because a block node starts at its first non-space character
+ *  "In place" is the top-level block(s) the selection sits in or between, extended
+ *  each way through every neighbour that no blank line separates, as whole lines
+ *  from the editor's own tree. Blocks, not the selection's line: an unclosed `**` on
+ *  an earlier line of the same paragraph pairs with the fragment. Through every
+ *  unseparated neighbour, because a paste can dissolve its block into the next one
+ *  and that merge chains (a heading turned paragraph text cannot be interrupted by
+ *  indented code, so the paragraph after that joins too). Up to a blank line,
+ *  because the leaf block that ends up holding the fragment cannot cross one, and
+ *  any container that does (a loose list, a fence) is a single top-level node taken
+ *  whole. Whole lines, because a block node starts at its first non-space character
  *  and the indentation it skips is significant. Not the whole document: a full parse
- *  costs ~110 ms per MB on every paste. ⚠️ That one neighbour always suffices is
- *  argued (a single-paragraph fragment holds no blank line or block start, so it can
- *  only reread its own block or merge it into an adjacent one) and matched against a
- *  whole-document parse by a randomised differential — not proven. The
- *  whole-document pin in cm-rich-html-paste.test.ts is the contract. */
+ *  costs ~110 ms per MB on every paste. ⚠️ That the blank-line bound suffices is
+ *  argued, not proven, and a backward chain of more than one block is believed
+ *  unable to change the answer (blocks before the selection's are fixed by earlier
+ *  lines), so that part of the walk is not pinned on its own. The whole-document pin
+ *  in cm-rich-html-paste.test.ts is the contract. */
 function insertsInline(state: EditorState, from: number, to: number, md: string): boolean {
   const parser = state.facet(language)?.parser;
   if (!parser) {
@@ -135,11 +140,23 @@ function insertsInline(state: EditorState, from: number, to: number, md: string)
   ) {
     return false;
   }
-  const top = (ensureSyntaxTree(state, to, 50) ?? syntaxTree(state)).topNode;
-  const blockBefore = top.childBefore(from);
-  const blockAfter = top.childAfter(to);
-  const firstBlock = (blockBefore && top.childBefore(blockBefore.from)) ?? blockBefore;
-  const lastBlock = (blockAfter && top.childAfter(blockAfter.to)) ?? blockAfter;
+  // A partial tree force-finishes its last container, which would cut the walk short.
+  const tree = ensureSyntaxTree(state, state.doc.length, 50);
+  if (!tree) {
+    return false;
+  }
+  const top = tree.topNode;
+  // No blank line between `a` and the later `b`.
+  const touches = (a: SyntaxNode, b: SyntaxNode) =>
+    state.doc.lineAt(a.to).number + 1 >= state.doc.lineAt(b.from).number;
+  let firstBlock = top.childBefore(from);
+  while (firstBlock?.prevSibling && touches(firstBlock.prevSibling, firstBlock)) {
+    firstBlock = firstBlock.prevSibling;
+  }
+  let lastBlock = top.childAfter(to);
+  while (lastBlock?.nextSibling && touches(lastBlock, lastBlock.nextSibling)) {
+    lastBlock = lastBlock.nextSibling;
+  }
   const contextFrom = firstBlock ? state.doc.lineAt(firstBlock.from).from : 0;
   const contextTo = lastBlock ? state.doc.lineAt(lastBlock.to).to : state.doc.length;
   const head = state.doc.sliceString(contextFrom, from);

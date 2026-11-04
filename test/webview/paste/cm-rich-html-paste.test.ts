@@ -222,6 +222,22 @@ describe("richHtmlPaste — handler", () => {
     });
     return crosses ? null : keys.join();
   };
+  const expectWholeDocumentAgreement = (doc: string, from: number, to: number, html: string) => {
+    const view = mountQuoll(doc);
+    view.dispatch({ selection: { anchor: from, head: to } });
+    const md = htmlToMarkdown(html)?.markdown ?? "";
+    const parser = view.state.facet(language)?.parser;
+    if (!parser) {
+      throw new Error("no Markdown parser");
+    }
+    const inlineDoc = doc.slice(0, from) + md + doc.slice(to);
+    const alone = inlineKeys(parser.parse(md), 0, md.length);
+    const inPlace = inlineKeys(parser.parse(inlineDoc), from, from + md.length);
+    const oracleInline = alone !== null && inPlace === alone;
+    firePaste(view, { html, text: "new" });
+    expect(view.state.doc.toString() === inlineDoc).toBe(oracleInline);
+    view.destroy();
+  };
   it.each([
     ["helloworld", 5, 5, "<strong>new</strong>"],
     ["helloworld", 5, 5, "<strong>(a)</strong>"],
@@ -246,21 +262,28 @@ describe("richHtmlPaste — handler", () => {
     ["bar\n`foo", 3, 3, "<code>new</code>"],
     ["b```\n---\n\\]```\nc**", 6, 6, "<strong>new</strong>"],
     ["foo\n# h\nbar", 4, 4, "<strong>new</strong>"],
+    // The heading turns into paragraph text, which the indented code cannot interrupt,
+    // so the paragraph after it joins too: a reading two blocks past the caret's own.
+    ["foo `\n# h\n    code\nbar `", 6, 6, "<strong>new</strong>"],
+    ["foo `\n# h\n    code\nbar `", 7, 7, "<strong>new</strong>"],
+    // The same merge looking back: the paragraph before the heading opens the code span.
+    ["`foo\n# h", 6, 6, "<code>new</code>"],
+    // The indented code block's node starts after its four spaces; read from there
+    // instead of its line's start, `code` would be paragraph text whose backtick
+    // opens a code span across the fragment.
+    ["    `code\n# h", 11, 11, "<code>new</code>"],
   ])("decides inline exactly as a whole-document parse would (%j @%i-%i, %s)", (doc, from, to, html) => {
-    const view = mountQuoll(doc);
-    view.dispatch({ selection: { anchor: from, head: to } });
-    const md = htmlToMarkdown(html)?.markdown ?? "";
-    const parser = view.state.facet(language)?.parser;
-    if (!parser) {
-      throw new Error("no Markdown parser");
-    }
-    const inlineDoc = doc.slice(0, from) + md + doc.slice(to);
-    const alone = inlineKeys(parser.parse(md), 0, md.length);
-    const inPlace = inlineKeys(parser.parse(inlineDoc), from, from + md.length);
-    const oracleInline = alone !== null && inPlace === alone;
-    firePaste(view, { html, text: "new" });
-    expect(view.state.doc.toString() === inlineDoc).toBe(oracleInline);
-    view.destroy();
+    expectWholeDocumentAgreement(doc, from, to, html);
+  });
+  it("decides inline as a whole-document parse would before the initial parse reaches the end", () => {
+    // EditorState.create parses only the first ~3000 characters, force-finishing the
+    // container open there; the list after the heading straddles that horizon and the
+    // closing backtick lies past it. Pasted at once, before any background parse.
+    const filler = "x\n\n".repeat(995);
+    const items = Array.from({ length: 40 }, (_, i) => `${i + 2}. item`).join("\n");
+    const doc = `${filler}foo \`\n# h\n${items} \``;
+    const caret = filler.length + "foo `\n".length;
+    expectWholeDocumentAgreement(doc, caret, caret, "<strong>new</strong>");
   });
   it("keeps block framing when no Markdown language is loaded", () => {
     // No parser to prove the boundary safe → the conservative block insert.
