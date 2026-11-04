@@ -136,12 +136,14 @@ function insertsInline(state: EditorState, from: number, to: number, md: string)
     return false;
   }
   const top = (ensureSyntaxTree(state, to, 50) ?? syntaxTree(state)).topNode;
-  const prev = top.childBefore(from);
-  const next = top.childAfter(to);
-  const first = (prev && top.childBefore(prev.from)) ?? prev;
-  const last = (next && top.childAfter(next.to)) ?? next;
-  const head = state.doc.sliceString(first ? state.doc.lineAt(first.from).from : 0, from);
-  const tail = state.doc.sliceString(to, last ? state.doc.lineAt(last.to).to : state.doc.length);
+  const blockBefore = top.childBefore(from);
+  const blockAfter = top.childAfter(to);
+  const firstBlock = (blockBefore && top.childBefore(blockBefore.from)) ?? blockBefore;
+  const lastBlock = (blockAfter && top.childAfter(blockAfter.to)) ?? blockAfter;
+  const contextFrom = firstBlock ? state.doc.lineAt(firstBlock.from).from : 0;
+  const contextTo = lastBlock ? state.doc.lineAt(lastBlock.to).to : state.doc.length;
+  const head = state.doc.sliceString(contextFrom, from);
+  const tail = state.doc.sliceString(to, contextTo);
   const want = inlineNodesWithin(alone, 0, md.length);
   const got = inlineNodesWithin(
     parser.parse(head + md + tail),

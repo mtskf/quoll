@@ -254,12 +254,12 @@ describe("richHtmlPaste — handler", () => {
     if (!parser) {
       throw new Error("no Markdown parser");
     }
-    const before = doc.slice(0, from);
+    const inlineDoc = doc.slice(0, from) + md + doc.slice(to);
     const alone = inlineKeys(parser.parse(md), 0, md.length);
-    const inPlace = inlineKeys(parser.parse(before + md + doc.slice(to)), from, from + md.length);
+    const inPlace = inlineKeys(parser.parse(inlineDoc), from, from + md.length);
     const oracleInline = alone !== null && inPlace === alone;
     firePaste(view, { html, text: "new" });
-    expect(view.state.doc.toString() === before + md + doc.slice(to)).toBe(oracleInline);
+    expect(view.state.doc.toString() === inlineDoc).toBe(oracleInline);
     view.destroy();
   });
   it("keeps block framing when no Markdown language is loaded", () => {
