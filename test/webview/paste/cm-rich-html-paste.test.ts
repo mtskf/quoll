@@ -285,6 +285,17 @@ describe("richHtmlPaste — handler", () => {
     const caret = filler.length + "foo `\n".length;
     expectWholeDocumentAgreement(doc, caret, caret, "<strong>new</strong>");
   });
+  it("inserts inline near the top of a document too large to parse in full within the budget", () => {
+    // CM's background parse stops about 100 KB past the viewport, so a tree for the
+    // whole document is never on hand here and cannot be built in 50 ms. The caret's
+    // neighbourhood ends at the next blank line, and only that much is asked for.
+    const doc = "para line\n\n".repeat(300000);
+    const view = mountQuoll(doc);
+    view.dispatch({ selection: { anchor: 4 } });
+    firePaste(view, { html: "<strong>new</strong>", text: "new" });
+    expect(view.state.doc.sliceString(0, 24)).toBe("para**new** line\n\npara l");
+    view.destroy();
+  });
   it("keeps block framing when no Markdown language is loaded", () => {
     // No parser to prove the boundary safe → the conservative block insert.
     const view = mount("helloworld");

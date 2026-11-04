@@ -106,8 +106,8 @@ function inlineNodesWithin(tree: Tree, start: number, end: number): string[] | n
  *  keeps every such case covered by one test.
  *
  *  Every "no" falls back to the block insert, which is always safe: no Markdown
- *  language loaded, no complete tree within 50 ms, a multi-block fragment, any
- *  difference in place.
+ *  language loaded, no tree reaching the end of that run within 50 ms, a
+ *  multi-block fragment, any difference in place.
  *
  *  "In place" is the top-level block(s) the selection sits in or between, extended
  *  each way through every neighbour that no blank line separates, as whole lines
@@ -117,10 +117,13 @@ function inlineNodesWithin(tree: Tree, start: number, end: number): string[] | n
  *  and that merge chains (a heading turned paragraph text cannot be interrupted by
  *  indented code, so the paragraph after that joins too). Up to a blank line,
  *  because the leaf block that ends up holding the fragment cannot cross one, and
- *  any container that does (a loose list, a fence) is a single top-level node taken
- *  whole. Whole lines, because a block node starts at its first non-space character
- *  and the indentation it skips is significant. Not the whole document: a full parse
- *  costs ~110 ms per MB on every paste. ⚠️ That the blank-line bound suffices is
+ *  any container that does (a loose list, a fence) is a single top-level node, read
+ *  as far as the tree reaches. Whole lines, because a block node starts at its first
+ *  non-space character and the indentation it skips is significant. Not the whole
+ *  document: CM's background parse stops about 100 KB past the viewport, so a tree
+ *  for all of it is never on hand in a large file and 50 ms cannot build one — every
+ *  paste there would fall back to the block insert. The tree is asked for only up to
+ *  the end of the run after the selection. ⚠️ That the blank-line bound suffices is
  *  argued, not proven, and a backward chain of more than one block is believed
  *  unable to change the answer (blocks before the selection's are fixed by earlier
  *  lines), so that part of the walk is not pinned on its own. The whole-document pin
@@ -140,8 +143,17 @@ function insertsInline(state: EditorState, from: number, to: number, md: string)
   ) {
     return false;
   }
-  // A partial tree force-finishes its last container, which would cut the walk short.
-  const tree = ensureSyntaxTree(state, state.doc.length, 50);
+  // The walk below reaches no further than the unseparated run after the selection
+  // (past the gap, if the selection sits in one). A partial tree force-finishes its
+  // last container, which would cut the walk short, so the tree must cover that run.
+  let bound = state.doc.lineAt(to);
+  while (bound.to < state.doc.length && bound.text.trim() === "") {
+    bound = state.doc.line(bound.number + 1);
+  }
+  while (bound.to < state.doc.length && bound.text.trim() !== "") {
+    bound = state.doc.line(bound.number + 1);
+  }
+  const tree = ensureSyntaxTree(state, bound.to, 50);
   if (!tree) {
     return false;
   }
