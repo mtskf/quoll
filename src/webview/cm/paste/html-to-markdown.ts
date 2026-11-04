@@ -1232,9 +1232,10 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
  *  rich-html-paste.ts. */
 export interface HtmlToMarkdownResult {
   /** NEVER the empty string — `htmlToMarkdown` returns `null` instead. The
-   *  consumer relies on this: it dispatches `blockPrefix + markdown + blockSuffix`
-   *  AFTER calling preventDefault(), so an empty `markdown` would replace a
-   *  non-empty selection with blank-line separators alone — a silent deletion.
+   *  consumer relies on this: it dispatches `markdown` (inline, or framed by
+   *  `blockPrefix` / `blockSuffix`) AFTER calling preventDefault(), so an empty
+   *  `markdown` would replace a non-empty selection with nothing or with blank-line
+   *  separators alone — a silent deletion.
    *  Keep the `out === ""` early return in place. */
   readonly markdown: string;
   readonly emittedMarkdownSyntax: boolean;

@@ -1,8 +1,12 @@
 // @vitest-environment happy-dom
 import { markdown } from "@codemirror/lang-markdown";
+import { language } from "@codemirror/language";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
+import type { Tree } from "@lezer/common";
 import { describe, expect, it } from "vitest";
+import { quollMarkdownLanguage } from "../../../src/webview/cm/markdown.js";
+import { htmlToMarkdown } from "../../../src/webview/cm/paste/html-to-markdown.js";
 import { richHtmlPaste } from "../../../src/webview/cm/paste/rich-html-paste.js";
 import { type ClipboardFlavours, firePasteAt, IMAGE_FILE } from "../helpers/clipboard-double.js";
 
@@ -27,6 +31,17 @@ function mountMd(doc: string, canWrite = true) {
         EditorState.readOnly.of(!canWrite),
         richHtmlPaste({ canWrite: () => canWrite }),
       ],
+    }),
+  });
+}
+
+// The production language (GFM + Quoll's extensions), for the pins that compare the
+// handler against a parse of the whole document.
+function mountQuoll(doc: string) {
+  return new EditorView({
+    state: EditorState.create({
+      doc,
+      extensions: [quollMarkdownLanguage(), richHtmlPaste({ canWrite: () => true })],
     }),
   });
 }
@@ -86,7 +101,203 @@ describe("richHtmlPaste — handler", () => {
     expect(view.state.doc.toString()).toBe("# Title\n\n**hi**\n");
     view.destroy();
   });
-  it("blank-line separates a converted fragment pasted mid-content", () => {
+  // A single paragraph lands inline when it parses the same in place as alone;
+  // everything else keeps the blank-line block framing. Pairs with the plain-path
+  // "inserts a plain-text-shaped fragment inline" at the bottom of this suite: bold
+  // text pasted into a sentence must not split it any more than plain text does.
+  const pasteAtFive = (html: string, text = "new"): string => {
+    const view = mountMd("helloworld");
+    view.dispatch({ selection: { anchor: 5 } });
+    firePaste(view, { html, text });
+    const doc = view.state.doc.toString();
+    view.destroy();
+    return doc;
+  };
+  it.each([
+    ["<strong>", "<p><strong>new</strong></p>", "hello**new**world"],
+    ["Chrome's styled <b>", '<b style="font-weight:700">new</b>', "hello**new**world"],
+    ["<a>", '<a href="https://example.com/">new</a>', "hello[new](https://example.com/)world"],
+    ["<code>", "<code>new</code>", "hello`new`world"],
+  ])("inserts a single inline run (%s) mid-line without splitting the sentence", (_, html, want) => {
+    expect(pasteAtFive(html)).toBe(want);
+  });
+  it.each([
+    // `hello**(a)**world`: the opening run is followed by punctuation and preceded by
+    // a letter, so it is not left-flanking and the bold would show as literal `**`.
+    ["a flanking-unsafe boundary", "<strong>(a)</strong>", "hello\n\n**(a)**\n\nworld"],
+    ["two paragraphs", "<p><strong>a</strong></p><p>b</p>", "hello\n\n**a**\n\nb\n\nworld"],
+    ["a heading", "<h2>new</h2>", "hello\n\n## new\n\nworld"],
+  ])("keeps block framing for %s", (_, html, want) => {
+    expect(pasteAtFive(html)).toBe(want);
+  });
+  it("keeps block framing when the context would absorb the fragment's syntax", () => {
+    // `!` before a link turns it into an image; the in-place parse differs from the
+    // fragment's own, so the fragment is not inserted inline.
+    const view = mountMd("hello!world");
+    view.dispatch({ selection: { anchor: 6 } });
+    firePaste(view, { html: '<a href="https://example.com/">new</a>', text: "new" });
+    expect(view.state.doc.toString()).toBe("hello!\n\n[new](https://example.com/)\n\nworld");
+    view.destroy();
+  });
+  it("replaces a non-empty selection with an inline run", () => {
+    const view = mountMd("hello old world");
+    view.dispatch({ selection: { anchor: 6, head: 9 } });
+    firePaste(view, { html: "<p><strong>new</strong></p>", text: "new" });
+    expect(view.state.doc.toString()).toBe("hello **new** world");
+    view.destroy();
+  });
+  it("nests an inline run inside an enclosing link label", () => {
+    // The link encloses the whole fragment: nesting, not interference.
+    const view = mountMd("[helloworld](https://example.com/)");
+    view.dispatch({ selection: { anchor: 6 } });
+    firePaste(view, { html: "<strong>new</strong>", text: "new" });
+    expect(view.state.doc.toString()).toBe("[hello**new**world](https://example.com/)");
+    view.destroy();
+  });
+  it.each([
+    // An unclosed delimiter on an earlier line of the same paragraph pairs with the
+    // fragment's opening marker, so `new` would not be bold in place.
+    [
+      "an earlier line of the paragraph",
+      "**foo\nbarbaz",
+      9,
+      "<strong>new</strong>",
+      "**foo\nbar\n\n**new**\n\nbaz",
+    ],
+    // The context starts at the container, not at the Paragraph node, whose raw
+    // slice would carry the continuation line's `> ` mark.
+    [
+      "an earlier line of a blockquote paragraph",
+      "> **foo\n> barbaz",
+      13,
+      "<strong>new</strong>",
+      "> **foo\n> bar\n\n**new**\n\nbaz",
+    ],
+    // A caret on the blank line between paragraphs still sees the line before it.
+    [
+      "the line before a blank-line caret",
+      "`foo\n\nbar",
+      5,
+      "<code>new</code>",
+      "`foo\n\n`new`\n\nbar",
+    ],
+    // Pasting into a setext underline dissolves it into the paragraph above, so a
+    // block beyond the caret's own decides the reading.
+    [
+      "a neighbouring block",
+      "b```\n---\n\\]```\nc**",
+      6,
+      "<strong>new</strong>",
+      "b```\n-\n\n**new**\n\n--\n\\]```\nc**",
+    ],
+  ])("keeps block framing when %s would pair with the fragment", (_, doc, caret, html, want) => {
+    const view = mountMd(doc);
+    view.dispatch({ selection: { anchor: caret } });
+    firePaste(view, { html, text: "new" });
+    expect(view.state.doc.toString()).toBe(want);
+    view.destroy();
+  });
+  // The handler reads only the blocks around the selection; a whole-document parse is
+  // the definition it must agree with. The oracle is restated here, independent of
+  // the implementation: inline iff the fragment's inline nodes are the same in the
+  // whole document as alone (none crossing its edges).
+  const inlineKeys = (tree: Tree, start: number, end: number): string | null => {
+    const keys: string[] = [];
+    let crosses = false;
+    tree.iterate({
+      enter: (node) => {
+        if (crosses || node.to <= start || node.from >= end) {
+          return false;
+        }
+        if (node.type.is("Block")) {
+          return;
+        }
+        if (node.from >= start && node.to <= end) {
+          keys.push(`${node.name}@${node.from - start}-${node.to - start}`);
+        } else if (node.from > start || node.to < end) {
+          crosses = true;
+          return false;
+        }
+      },
+    });
+    return crosses ? null : keys.join();
+  };
+  const expectWholeDocumentAgreement = (doc: string, from: number, to: number, html: string) => {
+    const view = mountQuoll(doc);
+    view.dispatch({ selection: { anchor: from, head: to } });
+    const md = htmlToMarkdown(html)?.markdown ?? "";
+    const parser = view.state.facet(language)?.parser;
+    if (!parser) {
+      throw new Error("no Markdown parser");
+    }
+    const inlineDoc = doc.slice(0, from) + md + doc.slice(to);
+    const alone = inlineKeys(parser.parse(md), 0, md.length);
+    const inPlace = inlineKeys(parser.parse(inlineDoc), from, from + md.length);
+    const oracleInline = alone !== null && inPlace === alone;
+    firePaste(view, { html, text: "new" });
+    expect(view.state.doc.toString() === inlineDoc).toBe(oracleInline);
+    view.destroy();
+  };
+  it.each([
+    ["helloworld", 5, 5, "<strong>new</strong>"],
+    ["helloworld", 5, 5, "<strong>(a)</strong>"],
+    ["hello!world", 6, 6, '<a href="https://example.com/">new</a>'],
+    ["hello old world", 6, 9, "<strong>new</strong>"],
+    ["[helloworld](https://example.com/)", 6, 6, "<strong>new</strong>"],
+    ["**foo\nbarbaz", 9, 9, "<strong>new</strong>"],
+    ["`foo\nbarbaz", 8, 8, "<code>new</code>"],
+    ["> **foo\n> barbaz", 13, 13, "<strong>new</strong>"],
+    ["- **foo\n  barbaz", 13, 13, "<strong>new</strong>"],
+    ["foo\n\nbar", 4, 4, "<strong>new</strong>"],
+    ["`foo\n\nbar", 5, 5, "<code>new</code>"],
+    ["**foo\n\nbar", 5, 5, "<strong>new</strong>"],
+    ["foo\n\n---", 4, 4, "<strong>new</strong>"],
+    ["foo\n", 4, 4, "<strong>new</strong>"],
+    ["", 0, 0, "<strong>new</strong>"],
+    ["hello\nworld", 6, 6, "<strong>new</strong>"],
+    ["| a | b |\n|---|---|\n| c | de |", 26, 26, "<strong>new</strong>"],
+    ["# helloworld", 7, 7, "<strong>new</strong>"],
+    ["hello\n\n- world", 3, 10, "<strong>new</strong>"],
+    ["hello\n===", 2, 2, "<strong>new</strong>"],
+    ["bar\n`foo", 3, 3, "<code>new</code>"],
+    ["b```\n---\n\\]```\nc**", 6, 6, "<strong>new</strong>"],
+    ["foo\n# h\nbar", 4, 4, "<strong>new</strong>"],
+    // The heading turns into paragraph text, which the indented code cannot interrupt,
+    // so the paragraph after it joins too: a reading two blocks past the caret's own.
+    ["foo `\n# h\n    code\nbar `", 6, 6, "<strong>new</strong>"],
+    ["foo `\n# h\n    code\nbar `", 7, 7, "<strong>new</strong>"],
+    // The same merge looking back: the paragraph before the heading opens the code span.
+    ["`foo\n# h", 6, 6, "<code>new</code>"],
+    // The indented code block's node starts after its four spaces; read from there
+    // instead of its line's start, `code` would be paragraph text whose backtick
+    // opens a code span across the fragment.
+    ["    `code\n# h", 11, 11, "<code>new</code>"],
+  ])("decides inline exactly as a whole-document parse would (%j @%i-%i, %s)", (doc, from, to, html) => {
+    expectWholeDocumentAgreement(doc, from, to, html);
+  });
+  it("decides inline as a whole-document parse would before the initial parse reaches the end", () => {
+    // EditorState.create parses only the first ~3000 characters, force-finishing the
+    // container open there; the list after the heading straddles that horizon and the
+    // closing backtick lies past it. Pasted at once, before any background parse.
+    const filler = "x\n\n".repeat(995);
+    const items = Array.from({ length: 40 }, (_, i) => `${i + 2}. item`).join("\n");
+    const doc = `${filler}foo \`\n# h\n${items} \``;
+    const caret = filler.length + "foo `\n".length;
+    expectWholeDocumentAgreement(doc, caret, caret, "<strong>new</strong>");
+  });
+  it("inserts inline near the top of a document too large to parse in full within the budget", () => {
+    // CM's background parse stops about 100 KB past the viewport, so a tree for the
+    // whole document is never on hand here and cannot be built in 50 ms. The caret's
+    // neighbourhood ends at the next blank line, and only that much is asked for.
+    const doc = "para line\n\n".repeat(300000);
+    const view = mountQuoll(doc);
+    view.dispatch({ selection: { anchor: 4 } });
+    firePaste(view, { html: "<strong>new</strong>", text: "new" });
+    expect(view.state.doc.sliceString(0, 24)).toBe("para**new** line\n\npara l");
+    view.destroy();
+  });
+  it("keeps block framing when no Markdown language is loaded", () => {
+    // No parser to prove the boundary safe → the conservative block insert.
     const view = mount("helloworld");
     view.dispatch({ selection: { anchor: 5 } });
     firePaste(view, { html: "<p><strong>mid</strong></p>", text: "mid" });
@@ -531,9 +742,11 @@ describe("richHtmlPaste — plain-text-like fragments defer", () => {
   });
 
   it("inserts a plain-text-shaped fragment inline at the caret, without block framing", () => {
-    // Deliberate behaviour change (see "Behaviour change" below): block framing
-    // is for CONVERTED rich content. A clipboard that is really just the word
-    // "mid" must land where the caret is, exactly as a no-`text/html` paste does.
+    // A clipboard that is really just the word "mid" must land where the caret is,
+    // exactly as a no-`text/html` paste does. The rich counterpart — a single
+    // inline run such as `<strong>` — lands inline too ("inserts a single inline
+    // run … mid-line" above); block framing is for multi-block or boundary-unsafe
+    // conversions only.
     const view = mount("helloworld");
     view.dispatch({ selection: { anchor: 5 } });
     firePaste(view, { html: "<p>mid</p>", text: "mid" });
