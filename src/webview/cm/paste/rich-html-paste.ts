@@ -35,8 +35,10 @@
 // The `!html` defer is unconditional: with no HTML flavour this handler has nothing
 // to insert either, so CM's own fallback behaviour is the whole story there.
 
-import { type Extension, Prec } from "@codemirror/state";
+import { language } from "@codemirror/language";
+import { type EditorState, type Extension, Prec } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
+import type { Tree } from "@lezer/common";
 
 // Cross-directory into cm/image/ deliberately: the "is this an image item"
 // question belongs to the handler that ingests them, and borrowing its definition
@@ -61,6 +63,77 @@ function blockSuffix(after: string): string {
     return "";
   }
   return after.startsWith("\n") ? "\n" : "\n\n";
+}
+
+/** The inline nodes of `tree` that lie within `[start, end)`, as position-relative
+ *  `name@from-to` keys — or `null` when an inline node CROSSES either edge. Block
+ *  nodes (lezer-markdown puts every one, Document and Paragraph included, in the
+ *  "Block" group) are only descended through: the question is about inline syntax. */
+function inlineNodesWithin(tree: Tree, start: number, end: number): string[] | null {
+  const keys: string[] = [];
+  let crosses = false;
+  tree.iterate({
+    enter: (node) => {
+      if (crosses || node.to <= start || node.from >= end) {
+        return false;
+      }
+      if (node.type.is("Block")) {
+        return;
+      }
+      if (node.from >= start && node.to <= end) {
+        keys.push(`${node.name}@${node.from - start}-${node.to - start}`);
+        return;
+      }
+      if (node.from > start || node.to < end) {
+        crosses = true; // starts before the range and ends inside it, or vice versa
+        return false;
+      }
+      // An inline node enclosing the whole range (pasting into a link label or an
+      // emphasis span): nesting, not interference — descend.
+    },
+  });
+  return crosses ? null : keys;
+}
+
+/** May the converted fragment go in at the caret as-is, instead of as its own
+ *  block? Only a single paragraph, and only when the editor's own parser reads it
+ *  the same way in place as alone: the line around the selection must neither
+ *  reach into the fragment (`!` before a link makes an image, a trailing `\`
+ *  escapes the first marker, a `*` merges with an emphasis run) nor leave its
+ *  syntax unparsed — CommonMark flanking rejects `hello**(a)**world`, a run
+ *  preceded by a letter and followed by punctuation, so that bold would show as
+ *  literal `**`. Asking the parser rather than restating flanking rules is what
+ *  keeps every such case covered by one test.
+ *
+ *  Every "no" falls back to the block insert, which is always safe: no Markdown
+ *  language loaded, a multi-block fragment, any difference in place. The context is
+ *  the selection's own line(s), not the whole paragraph, so a delimiter on an
+ *  earlier line of the same paragraph can still pair with the fragment — the same
+ *  thing typing those bytes would do. */
+function insertsInline(state: EditorState, from: number, to: number, md: string): boolean {
+  const parser = state.facet(language)?.parser;
+  if (!parser) {
+    return false;
+  }
+  const alone = parser.parse(md);
+  const paragraph = alone.topNode.firstChild;
+  if (
+    paragraph?.name !== "Paragraph" ||
+    paragraph.from !== 0 ||
+    paragraph.to !== md.length ||
+    paragraph.nextSibling !== null
+  ) {
+    return false;
+  }
+  const head = state.doc.sliceString(state.doc.lineAt(from).from, from);
+  const tail = state.doc.sliceString(to, state.doc.lineAt(to).to);
+  const want = inlineNodesWithin(alone, 0, md.length);
+  const got = inlineNodesWithin(
+    parser.parse(head + md + tail),
+    head.length,
+    head.length + md.length
+  );
+  return want !== null && got !== null && got.join() === want.join();
 }
 
 /** Would CM's own paste handler insert anything if this handler deferred?
@@ -273,9 +346,16 @@ export function richHtmlPaste(opts: { canWrite: () => boolean }): Extension {
         if (!imageRidesAlong) {
           event.preventDefault();
         }
-        const before = view.state.doc.sliceString(0, from);
-        const after = view.state.doc.sliceString(to);
-        const insert = blockPrefix(before) + md + blockSuffix(after);
+        // A lone paragraph that reads the same in place goes in at the caret, like a
+        // plain paste — bold text pasted into a sentence must not split it. Anything
+        // else gets blank-line separators so it stands as its own block, and so does
+        // prose with an image riding along: the image lands after it, on its own line.
+        const insert =
+          !imageRidesAlong && insertsInline(view.state, from, to, md)
+            ? md
+            : blockPrefix(view.state.doc.sliceString(0, from)) +
+              md +
+              blockSuffix(view.state.doc.sliceString(to));
         view.dispatch({
           changes: { from, to, insert },
           selection: { anchor: from + insert.length },

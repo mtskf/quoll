@@ -86,7 +86,46 @@ describe("richHtmlPaste — handler", () => {
     expect(view.state.doc.toString()).toBe("# Title\n\n**hi**\n");
     view.destroy();
   });
-  it("blank-line separates a converted fragment pasted mid-content", () => {
+  // A single paragraph lands inline when it parses the same in place as alone;
+  // everything else keeps the blank-line block framing. Pairs with the plain-path
+  // "inserts a plain-text-shaped fragment inline" at the bottom of this suite: bold
+  // text pasted into a sentence must not split it any more than plain text does.
+  const pasteAtFive = (html: string, text = "new"): string => {
+    const view = mountMd("helloworld");
+    view.dispatch({ selection: { anchor: 5 } });
+    firePaste(view, { html, text });
+    const doc = view.state.doc.toString();
+    view.destroy();
+    return doc;
+  };
+  it.each([
+    ["<strong>", "<p><strong>new</strong></p>", "hello**new**world"],
+    ["Chrome's styled <b>", '<b style="font-weight:700">new</b>', "hello**new**world"],
+    ["<a>", '<a href="https://example.com/">new</a>', "hello[new](https://example.com/)world"],
+    ["<code>", "<code>new</code>", "hello`new`world"],
+  ])("inserts a single inline run (%s) mid-line without splitting the sentence", (_, html, want) => {
+    expect(pasteAtFive(html)).toBe(want);
+  });
+  it.each([
+    // `hello**(a)**world`: the opening run is followed by punctuation and preceded by
+    // a letter, so it is not left-flanking and the bold would show as literal `**`.
+    ["a flanking-unsafe boundary", "<strong>(a)</strong>", "hello\n\n**(a)**\n\nworld"],
+    ["two paragraphs", "<p><strong>a</strong></p><p>b</p>", "hello\n\n**a**\n\nb\n\nworld"],
+    ["a heading", "<h2>new</h2>", "hello\n\n## new\n\nworld"],
+  ])("keeps block framing for %s", (_, html, want) => {
+    expect(pasteAtFive(html)).toBe(want);
+  });
+  it("keeps block framing when the context would absorb the fragment's syntax", () => {
+    // `!` before a link turns it into an image; the in-place parse differs from the
+    // fragment's own, so the fragment is not inserted inline.
+    const view = mountMd("hello!world");
+    view.dispatch({ selection: { anchor: 6 } });
+    firePaste(view, { html: '<a href="https://example.com/">new</a>', text: "new" });
+    expect(view.state.doc.toString()).toBe("hello!\n\n[new](https://example.com/)\n\nworld");
+    view.destroy();
+  });
+  it("keeps block framing when no Markdown language is loaded", () => {
+    // No parser to prove the boundary safe → the conservative block insert.
     const view = mount("helloworld");
     view.dispatch({ selection: { anchor: 5 } });
     firePaste(view, { html: "<p><strong>mid</strong></p>", text: "mid" });
@@ -531,9 +570,11 @@ describe("richHtmlPaste — plain-text-like fragments defer", () => {
   });
 
   it("inserts a plain-text-shaped fragment inline at the caret, without block framing", () => {
-    // Deliberate behaviour change (see "Behaviour change" below): block framing
-    // is for CONVERTED rich content. A clipboard that is really just the word
-    // "mid" must land where the caret is, exactly as a no-`text/html` paste does.
+    // A clipboard that is really just the word "mid" must land where the caret is,
+    // exactly as a no-`text/html` paste does. The rich counterpart — a single
+    // inline run such as `<strong>` — lands inline too ("inserts a single inline
+    // run … mid-line" above); block framing is for multi-block or boundary-unsafe
+    // conversions only.
     const view = mount("helloworld");
     view.dispatch({ selection: { anchor: 5 } });
     firePaste(view, { html: "<p>mid</p>", text: "mid" });
