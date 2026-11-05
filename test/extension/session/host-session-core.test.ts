@@ -761,46 +761,92 @@ describe("host-session-core: applyEditSettled drain", () => {
     expect(r.effects.filter((e) => e.type === "rescueUnsavedDraft")).toHaveLength(1);
   });
 
-  it("plain in-flight late ok settlement without a stash stays silent", () => {
-    const locked = base({ pendingApplyBaseVersion: 1, inFlightContent: "first" });
-    const disposed = core.transition(locked, { type: "disposed" }).state;
-    const r = core.transition(disposed, settled({ currentContent: null }));
-    expect(r.effects).toEqual([]);
-    expect(r.state.inFlightContent).toBe("first");
-  });
-
-  it("the post-dispose drain's own unverified settlement warns exactly once", () => {
+  const finalWrite = (kind: "plain" | "drain"): HostSessionState => {
+    if (kind === "plain") {
+      return core.transition(base({ pendingApplyBaseVersion: 1, inFlightContent: "later" }), {
+        type: "disposed",
+      }).state;
+    }
     const disposed = core.transition(lockedWithStash("first", "later"), { type: "disposed" }).state;
     const drained = core.transition(
       disposed,
       settled({ currentContent: "first", settledVersion: 5 })
     );
     expect(drained.state.lastAppliedDocVersion).toBe(5);
-    expect(drained.state.inFlightContent).toBeNull();
+    expect(drained.state.inFlightContent).toBe("later");
+    expect(drained.state.pendingApplyBaseVersion).toBeNull();
     expect(drained.effects).toEqual([{ type: "applyEdit", content: "later", baseDocVersion: 5 }]);
-    const own = core.transition(
-      drained.state,
-      settled({ currentContent: null, settledVersion: 6 })
-    );
-    expect(own.effects).toEqual([
-      {
-        type: "showError",
-        message:
-          "Quoll could not verify the final edit after the editor closed. Reopen the file to check its contents.",
-      },
-    ]);
-    // Divergence alone (observed text present, but not what the drain wrote) warns too.
-    const diverged = core.transition(
-      drained.state,
-      settled({ currentContent: "other", settledVersion: 6, divergedAfterApply: true })
-    );
-    expect(diverged.effects.filter((e) => e.type === "showError")).toHaveLength(1);
-    // Twin: the drained text observed with no annotation stays silent.
-    const clean = core.transition(
-      drained.state,
-      settled({ currentContent: "later", settledVersion: 6 })
-    );
-    expect(clean.effects).toEqual([]);
+    return drained.state;
+  };
+
+  const failures = [
+    [{ kind: "refused" }, "the preceding save was refused"],
+    [{ kind: "constructThrew", message: "construct!" }, "the preceding save failed (construct!)"],
+    [{ kind: "applyThrew", message: "apply!" }, "the preceding save failed (apply!)"],
+    [{ kind: "rejected", message: "reject!" }, "the preceding save failed (reject!)"],
+  ] as const;
+  it.each([
+    "plain",
+    "drain",
+  ] as const)("post-dispose %s final write follows one rescue rule", (kind) => {
+    const state = finalWrite(kind);
+    for (const [outcome, reason] of failures) {
+      for (const observed of ["other", null]) {
+        const event = settled({ outcome, currentContent: observed });
+        const first = core.transition(state, event);
+        expect(first.effects.filter((e) => e.type === "rescueUnsavedDraft")).toEqual([
+          { type: "rescueUnsavedDraft", content: "later", reason },
+        ]);
+        expect(first.effects.some((e) => e.type === "showError")).toBe(false);
+        expect(first.state.inFlightContent).toBeNull();
+        expect(
+          core.transition(first.state, event).effects.some((e) => e.type === "rescueUnsavedDraft")
+        ).toBe(false);
+      }
+      const result = core.transition(state, settled({ outcome, currentContent: "later" }));
+      expect(result.effects.some((e) => e.type === "rescueUnsavedDraft")).toBe(false);
+      expect(result.effects.some((e) => e.type === "showError")).toBe(true);
+    }
+    const eolState = { ...state, inFlightContent: "la\nter" };
+    for (const [outcome] of failures) {
+      const result = core.transition(eolState, settled({ outcome, currentContent: "la\r\nter" }));
+      expect(result.effects.some((e) => e.type === "rescueUnsavedDraft")).toBe(false);
+      expect(result.effects.some((e) => e.type === "showError")).toBe(true);
+    }
+    expect(core.transition(state, settled({ currentContent: "later" })).effects).toEqual([]);
+    expect(core.transition(state, settled({ currentContent: "other" })).effects).toEqual([]);
+    for (const [currentContent, divergedAfterApply, reason] of [
+      [null, false, "the preceding save completed but Quoll could not verify the document"],
+      ["other", true, "the preceding write did not leave the intended text in the document"],
+    ] as const) {
+      const result = core.transition(state, settled({ currentContent, divergedAfterApply }));
+      expect(result.effects.filter((e) => e.type === "rescueUnsavedDraft")).toEqual([
+        { type: "rescueUnsavedDraft", content: "later", reason },
+      ]);
+      expect(result.effects.some((e) => e.type === "showError")).toBe(false);
+    }
+    for (const [currentContent, shouldRescue] of [
+      [null, true],
+      ["other", true],
+      ["later", false],
+    ] as const) {
+      const recovered = core.transition(state, {
+        type: "settlementTransitionFailed",
+        settledVersion: 6,
+        currentContent,
+      });
+      expect(recovered.effects.filter((e) => e.type === "rescueUnsavedDraft")).toEqual(
+        shouldRescue
+          ? [
+              {
+                type: "rescueUnsavedDraft",
+                content: "later",
+                reason: "an internal error interrupted the preceding save",
+              },
+            ]
+          : []
+      );
+    }
   });
 
   it("post-dispose no-op drain does not rescue", () => {
@@ -1748,17 +1794,10 @@ describe("host-session-core: settlement ack-label gate (ackLabelObserved)", () =
     // `failureToasts(outcome, context)` directly and never reaches
     // `settlementEffects`, so neither the ack nor the withhold pair is
     // CONSTRUCTED here at all — there is no ack-label gate on this path to
-    // observe. What this pins is that non-construction: `ok` leaves only the
-    // unverified-final-edit `showError`, `refused` leaves toasts and nothing else.
+    // observe. With no in-flight target, `ok` stays silent and `refused` toasts.
     const disposed = base({ disposed: true, pendingApplyBaseVersion: null });
     const ok = core.transition(disposed, settled({ settledVersion: null, currentContent: null }));
-    expect(ok.effects).toEqual([
-      {
-        type: "showError",
-        message:
-          "Quoll could not verify the final edit after the editor closed. Reopen the file to check its contents.",
-      },
-    ]);
+    expect(ok.effects).toEqual([]);
     const refused = core.transition(
       disposed,
       settled({ outcome: { kind: "refused" }, settledVersion: null, currentContent: null })
@@ -2392,6 +2431,30 @@ describe("host-session-core: settlementTransitionFailed (write-lock recovery)", 
     });
     expect(r.effects.some((e) => e.type === "rescueUnsavedDraft")).toBe(false);
     expect(r.effects.some((e) => e.type === "showError")).toBe(true);
+  });
+
+  it.each([
+    null,
+    "other",
+    "edit1",
+    "edit1\r\nnext",
+  ])("post-dispose transition failure without stash rescues only an unobserved in-flight target (%s)", (observed) => {
+    const state = afterDispose({ inFlightContent: "edit1\nnext" });
+    const result = core.transition(state, { ...recovery(6), currentContent: observed });
+    const shouldRescue = observed === null || observed === "other" || observed === "edit1";
+    expect(result.effects.filter((e) => e.type === "rescueUnsavedDraft")).toEqual(
+      shouldRescue
+        ? [
+            {
+              type: "rescueUnsavedDraft",
+              content: "edit1\nnext",
+              reason: "an internal error interrupted the preceding save",
+            },
+          ]
+        : []
+    );
+    expect(result.effects.some((e) => e.type === "showError")).toBe(!shouldRescue);
+    expect(result.state.inFlightContent).toBeNull();
   });
 
   it("POST-DISPOSE with no stash still toasts the internal error, without claiming a loss", () => {

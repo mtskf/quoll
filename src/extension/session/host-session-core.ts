@@ -388,7 +388,7 @@ function contentMatches(a: string, b: string | null): boolean {
 }
 
 const rescueStash = (
-  stash: PendingEdit | null,
+  stash: Pick<PendingEdit, "content"> | null,
   observed: string | null,
   reason: string
 ): HostSessionEffect[] =>
@@ -872,27 +872,23 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
       }
 
       case "applyEditSettled": {
-        // ARCHITECTURE.md's surface/unsaved-draft-rescue.ts entry owns
-        // disposed no-stash notification behavior.
+        // After disposal, the final in-flight target is rescued by the same
+        // observation rule as a stash; repeated settlements cannot rescue twice.
         if (state.disposed && state.pendingEdit === null) {
-          const effects = failureToasts(event.outcome, state.context);
-          if (
-            event.outcome.kind === "ok" &&
-            state.inFlightContent === null &&
-            (event.currentContent === null || event.divergedAfterApply)
-          ) {
-            return {
-              state,
-              effects: [
-                {
-                  type: "showError",
-                  message:
-                    "Quoll could not verify the final edit after the editor closed. Reopen the file to check its contents.",
-                },
-              ],
-            };
-          }
-          return { state, effects };
+          const target = state.inFlightContent;
+          const observed = event.currentContent;
+          const rescue =
+            event.outcome.kind !== "ok" || observed === null || event.divergedAfterApply
+              ? rescueStash(
+                  target === null ? null : { content: target },
+                  observed,
+                  undrainableReason(event, observed, target)
+                )
+              : [];
+          return {
+            state: { ...state, inFlightContent: null },
+            effects: rescue.length > 0 ? rescue : failureToasts(event.outcome, state.context),
+          };
         }
         const heldBase = state.pendingApplyBaseVersion;
         const stash = state.pendingEdit;
@@ -1242,12 +1238,10 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         }
         switch (verdict.kind) {
           case "accept":
-            // Re-acquire the lock and track drained content while alive.
-            // Post-dispose returns bare settled state; omitted inFlightContent
-            // identifies the drain's own settlement for the no-stash rule.
+            // Track drained content on both paths; re-acquire the lock only while alive.
             return {
               state: state.disposed
-                ? settled
+                ? { ...settled, inFlightContent: stash.content }
                 : {
                     ...settled,
                     pendingApplyBaseVersion: settled.lastAppliedDocVersion,
@@ -1367,7 +1361,7 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // behavior. After disposal the captured observation decides rescue.
         const rescued = state.disposed
           ? rescueStash(
-              stash,
+              stash ?? (state.inFlightContent === null ? null : { content: state.inFlightContent }),
               event.currentContent,
               "an internal error interrupted the preceding save"
             )
@@ -1594,8 +1588,7 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         return { state, effects: [{ type: "openExternal", href: event.href }] };
 
       case "disposed":
-        // Keep inFlightContent: the no-stash settlement contract distinguishes
-        // a plain in-flight edit from the post-dispose drain's own settlement.
+        // Keep the final in-flight target available for post-dispose rescue.
         return { state: { ...state, disposed: true, pendingApplyBaseVersion: null }, effects: [] };
 
       default: {
