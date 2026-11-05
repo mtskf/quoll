@@ -25,7 +25,6 @@ import { commands, TabInputCustom, TabInputText, type TextEditor, window, worksp
 import { stashSwitchCaret, takeSwitchCaret } from "../handoff/editor-switch-caret.js";
 import { QuollEditorPanel } from "../session/quoll-editor-panel.js";
 import { canEditWith } from "./can-edit-with.js";
-import { isRejectionPending, REJECTION_BLOCKS_SWITCH_MESSAGE } from "./rejection-registry.js";
 import { openInTextEditor } from "./reopen-text-editor.js";
 import { showSafely } from "./show-safely.js";
 import { noteSurface } from "./surface-memory.js";
@@ -65,8 +64,7 @@ function surfaceError(prefix: string, err: unknown): void {
 
 /** Forward swap: reopen the active Quoll custom tab in the built-in text editor,
  *  then close the Quoll source tab (save-then-swap; see surface-swap.ts). No-op
- *  if the active tab is not a Quoll custom tab. Refused (draft-preserving) while
- *  the doc's session holds a pending write-gate rejection — see the guard below.
+ *  if the active tab is not a Quoll custom tab.
  *  Caret is NOT preserved on this
  *  path — the caret-preserving forward affordances are the in-editor button + the
  *  ⌘⌥E / Ctrl+Alt+E chord (they post `switch-to-text` to the panel, which owns
@@ -79,27 +77,6 @@ export async function reopenActiveQuollTabAsText(): Promise<void> {
     return;
   }
   const uri = input.uri;
-  // Data-loss guard, symmetric with the in-webview switch-to-text arm
-  // (quoll-editor-panel.ts): while THIS doc's host session holds a pending
-  // write-gate rejection the draft lives ONLY webview-side (disk clean, banner
-  // up, CodeMirror never reseeded), so closing the Quoll tab on the clean
-  // snapshot would silently orphan it. This command path is tab-only and cannot
-  // read the panel's state.rejection directly, so it consults the cross-surface
-  // registry keyed by uri. This command path has THREE checkpoints against the
-  // same window — fast path (here) / async-window re-check (after the open
-  // resolves) / point-of-no-return (the shouldAbortClose predicate passed to
-  // finalizeForwardSwap below). Fast path: refuse before opening a pointless
-  // second tab. It is not sufficient on its own — a rejection can still land
-  // during the async open / finalize awaits — so the later two cover the
-  // remaining windows. (The in-webview switch-to-text arm mirrors this with a
-  // FOURTH check: a drain-time re-check inside its editSettledBarrier, needed
-  // only there because that arm can be DEFERRED behind the write lock; this
-  // command path is never deferred, so it has no drain-time layer.) Same message
-  // the webview arm shows so both forward entry points read identically.
-  if (isRejectionPending(uri.toString())) {
-    showSafely(window.showErrorMessage(REJECTION_BLOCKS_SWITCH_MESSAGE), "showErrorMessage");
-    return;
-  }
   const sourceTab = findSourceTab(uri.toString(), "quoll", QuollEditorPanel.viewType);
   // Observability for the documented caret non-preservation on this path.
   console.info(
@@ -107,32 +84,10 @@ export async function reopenActiveQuollTabAsText(): Promise<void> {
   );
   try {
     await openInTextEditor(uri);
-    // Async-window guard: openInTextEditor is async and the webview stays live
-    // until finalizeForwardSwap closes the Quoll tab, so a NEW edit failing the
-    // write-gate during the open can flip the rejection to pending AFTER the
-    // fast-path check. Re-check before closing: retain the Quoll tab so the
-    // just-rejected draft is not orphaned (the opened text tab is a harmless
-    // second view of the clean disk bytes), and record "quoll" to override the
-    // restore watcher's sibling-adopt "text" written when that text tab opened.
-    if (isRejectionPending(uri.toString())) {
-      noteSurface(uri.toString(), "quoll");
-      showSafely(window.showErrorMessage(REJECTION_BLOCKS_SWITCH_MESSAGE), "showErrorMessage");
-      return;
-    }
     // finalizeForwardSwap records the outcome after finalization settles
     // ("text" only if the source closed), overriding the restore watcher's
     // sibling-adopt write (a failed open records nothing).
-    // Point-of-no-return guard: finalizeForwardSwap still awaits openDoc (and
-    // maybe save) before the irreversible tab close, so a rejection landing in
-    // THAT window would slip past the check above. Pass the same predicate so the
-    // close is aborted synchronously right before it happens — returning the
-    // shared refusal message as the abort REASON so finalizeForwardSwap surfaces
-    // it (the SAME message the two fast-path checks above show; check 3 renders
-    // it as a warning — nothing failed, the swap was refused to protect the
-    // draft — while the fast paths use an error toast).
-    await finalizeForwardSwap(uri, sourceTab, undefined, () =>
-      isRejectionPending(uri.toString()) ? REJECTION_BLOCKS_SWITCH_MESSAGE : null
-    );
+    await finalizeForwardSwap(uri, sourceTab);
   } catch (err) {
     surfaceError("could not open the text editor", err);
   }
