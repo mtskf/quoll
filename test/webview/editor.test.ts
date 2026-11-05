@@ -454,7 +454,7 @@ describe("editor — an ack that crossed an EOL-mode switch still folds (d2b)", 
 // so folding the visible reseed away would strand the user's ahead-of-host
 // keystrokes on screen with nothing left to post them — they look saved, are
 // not, and resurface on the NEXT keystroke as bytes the host already superseded
-// (external-wins — NOT an `edit-rejected`; no banner is involved).
+// (external-wins; no send-failure banner is involved).
 // Display and replay must agree on one rule; see ARCHITECTURE.md §3/§5/§7.
 describe("editor — ok-ack fold requires identity-lineage continuity (d3)", () => {
   // Types "2" (posted) then "3" (buffered) on top of a "D1" seed carrying the
@@ -1239,7 +1239,7 @@ describe("editor — postEditMessage survives a throwing post-edit dispatch (V-M
 
 // Oversized doc: an edit whose content exceeds MAX_CONTENT_LENGTH would be
 // silently dropped by the host boundary validator (isBoundedContent →
-// console.warn, no edit-rejected), so the webview MUST intercept it on the
+// console.warn, no acknowledgement), so the webview MUST intercept it on the
 // post path and route it to the send-failure banner. Without the gate the
 // over-limit `edit` posts, editInFlight latches on the ack that never comes,
 // and every later keystroke replay-drops with NO user-visible signal.

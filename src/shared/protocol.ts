@@ -599,8 +599,8 @@ export type CaretReportMessage = Envelope & {
  *  The reserved `fix` field of the webview's `LintDiagnostic` is intentionally
  *  NOT carried: autofix is applied locally in the webview (`Mod-.` via
  *  `cm/lint/apply-fix.ts`) and requires no host round-trip. `severity` is advisory only — "error"
- *  is structurally impossible here, mirroring the lint layer's policy that
- *  write-blocking failures belong to the host write-gate, not lint. */
+ *  is structurally impossible here. Lint never blocks storage; render/open
+ *  sinks validate independently. */
 export type LintDiagnosticWire = {
   startLine: number;
   startCharacter: number;

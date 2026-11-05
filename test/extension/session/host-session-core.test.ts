@@ -1834,9 +1834,6 @@ describe("Edit id (settledEditId on every Document)", () => {
   // enter locked and emit after releasing.
   // The fixture map is TOTAL in the event type (`satisfies Record<…>`): a new
   // event cannot be added without deciding what it does here.
-  // `editRejectedDeliveryFailed` passes here only through its id-mismatch
-  // guard — it has NO lock guard of its own. The test below pins what it
-  // actually relies on.
   it("a Document only ever leaves a lock-free state with nothing stashed", () => {
     const locked = core.transition(base(), edit({ editId: 5 })).state;
     const lockedWithStash = core.transition(locked, edit({ editId: 6, content: "next2" })).state;

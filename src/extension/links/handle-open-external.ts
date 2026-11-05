@@ -2,7 +2,7 @@
 // design (deps injected) so it unit-tests without a live VS Code host.
 // The wire shape comes from src/shared/protocol.ts; the security gate
 // is isAllowedUrl from src/markdown/url-allowlist.ts (the same predicate
-// the write-gate and link-insert command consume — defense in depth).
+// render, open-link and link-insert consumers use — defense in depth).
 //
 // Why re-validate on the host side after the webview already gates: the
 // webview is the untrusted boundary in a webview-extension architecture
@@ -58,8 +58,7 @@ function schemeOf(url: string): string | null {
 
 /** Sanitize an untrusted href for logging. The webview-controlled string
  *  may carry C0/DEL bytes that would corrupt the Output channel
- *  presentation. Mirrors C2's `unsafeUrlError` sanitisation in
- *  src/markdown/lezer-url-walker.ts (review fix #8). */
+ *  presentation. Sanitize before logging untrusted destinations. */
 function sanitizeForLog(href: string): string {
   // biome-ignore lint/suspicious/noControlCharactersInRegex: intentional — sanitising untrusted control bytes for logging.
   return href.replace(/[\u0000-\u001f\u007f]/g, "?").slice(0, 64);

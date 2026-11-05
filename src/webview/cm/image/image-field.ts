@@ -11,8 +11,7 @@
 // Paragraph):
 //   1. inline form only: a `URL` child means `![alt](url)`. Reference images
 //      `![a][ref]` and empty-destination `![a]()` have no URL child → skipped
-//      (left as raw source; the write-gate gates reference definitions where
-//      they live).
+//      (left as raw source).
 //   2. parent is a Paragraph whose entire trimmed content equals the image —
 //      excludes inline images amid prose and soft-break siblings sharing the
 //      paragraph (promoting one line of a multi-line paragraph would split it).
@@ -21,15 +20,14 @@
 //      whose LINE carries a prefix marker that a whole-line block-replace would
 //      wrongly swallow.
 //
-// Render-gate (fail-closed): the URL is the Lezer `URL` child — the SAME node
-// lezer-url-walker (the write-gate) gates — decoded + allowlist-gated via the
+// Render-gate (fail-closed): the Lezer `URL` child is decoded + allowlist-gated via the
 // SHARED `renderSafeMarkdownDestination` (the one render-side decode→gate choke
 // point, also used by the neutral inline tokenizer cm/inline/inline-ir.ts that
 // the table-cell renderer drives, so the two render gates cannot drift).
 // Passing a raw slice straight to the allowlist
 // would fail open on angle-bracket / backslash / char-ref forms. Any throw in
-// decode/gate is caught and treated as blocked (safeUrl = null), mirroring the
-// defense-in-depth catch in validate-for-write.ts. The verdict (AllowlistedUrl
+// decode/gate is caught and treated as blocked (safeUrl = null).
+// The verdict (AllowlistedUrl
 // | null) is handed to the widget, which never re-gates.
 //
 // Alt is the CommonMark-normalized image label: the raw chars between `![` and
@@ -181,7 +179,7 @@ function buildRange(state: EditorState, rangeFrom: number, rangeTo: number): Bui
       }
       // Render-gate, fail-closed. Shared decode→gate choke point with the
       // table-cell renderer (cm/table/cell-render.ts) so the two render gates
-      // cannot drift. The catch is defense-in-depth (mirrors validate-for-write).
+      // cannot drift. Any decode/gate throw also blocks rendering.
       let safeUrl: AllowlistedUrl | null;
       try {
         const safe = renderSafeMarkdownDestination(state.sliceDoc(urlNode.from, urlNode.to));

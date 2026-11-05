@@ -71,15 +71,14 @@ describe("reconcileOpen (stateful, in-memory map)", () => {
   });
 
   it("a text open beside a Quoll sibling OVERWRITES remembered 'quoll' with 'text' (surface-memory masking characterization)", () => {
-    // Surface-memory fact behind the surface-swap async-open union-pin (see
-    // host-rejects-edit-preserves-webview.test.ts + docs/LEARNING.md 2026-07-29):
+    // Surface-memory fact behind the surface-swap async-open ordering test (see
+    // save-then-handoff-switch-ordering.test.ts):
     // during a forward Quoll→text swap the source Quoll tab is still open when the
     // target text tab opens, so hasSibling=true and reconcileOpen ADOPTS "text",
     // overwriting the remembered "quoll". Since ARCH-06a-3 the forward swap site
     // records the OUTCOME after this adopt (finalizeForwardSwap after finalize
-    // settles, or "quoll" from the post-open rejection arm), so a refused swap
-    // ends "quoll" — through either the rejection arm or finalize's abort backstop,
-    // which is why surface memory still cannot isolate the async-window re-check.
+    // settles, or "quoll" from the post-open rejection arm), so a failed swap
+    // ends "quoll" after save/close failure or an open rejection.
     // This pins the local reconcileOpen transition only; it does NOT reproduce the
     // live watcher event ordering.
     noteSurface("file:///a.md", "quoll");

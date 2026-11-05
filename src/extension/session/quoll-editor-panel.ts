@@ -1,18 +1,18 @@
 // Custom editor provider for *.md files.
 //
-// The host-session STATE MACHINE — write-lock ordering, the rejected-draft
-// barrier, the resync rules, and the applyEdit settlement — lives in the
+// The host-session STATE MACHINE — write-lock ordering, resync rules,
+// and applyEdit settlement — lives in the
 // pure reducer `src/extension/session/host-session-core.ts`. This file is the VS
 // Code wiring around it: it snapshots live VS Code inputs
 // (`document.version`, `canWriteNow()`, canonical text, theme) into core
 // EVENTS, runs the returned EFFECTS as real side effects, and feeds async
-// outcomes (applyEdit settlement, edit-rejected delivery failure) back into
+// outcomes (applyEdit settlement and write recovery) back into
 // the core via a queued, non-recursive `dispatch`. See host-session-core.ts
 // for the transition table; the rationale below covers only why each piece
 // of VS Code wiring is shaped the way it is.
 //
 //   - `disposed` (local) — set on webviewPanel.onDidDispose. Every async
-//     continuation (the applyEdit / edit-rejected `.then` arms, listener
+//     continuation (the applyEdit `.then` arms, listener
 //     callbacks) checks it synchronously before touching the webview, so a
 //     dispose that races with an in-flight Promise does not postMessage on a
 //     disposed webview and unhandled-reject. The core also tracks a
@@ -316,7 +316,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         };
 
     // The pure host-session reducer owns every state mutation (write-lock
-    // ordering, rejected-draft barrier, resync rules, settlement). This
+    // ordering, resync rules, settlement). This
     // file snapshots live VS Code inputs into EVENTS and runs the returned
     // EFFECTS; see host-session-core.ts for the transition table.
     const core = createHostSessionCore({
@@ -343,7 +343,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // transition, COMMITS the resulting state, then runs its effects and settles
     // the barrier; the unit-tested createDrainingDispatcher owns the queue +
     // draining guard, so a re-entrant feedback dispatch (an effect that re-enters
-    // the core — applyEdit settlement, edit-rejected delivery failure,
+    // the core — applyEdit settlement,
     // construct/apply sync-throw) is flat / FIFO rather than a recursive stack.
     // `dispatch` is declared with definite-assignment so the effect executors
     // below can close over it — they are only invoked once a dispatch is in
@@ -455,7 +455,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       // is re-read on every send — the E2E harness swaps the override PER TEST
       // (after this panel is constructed), so an eagerly-captured surface would
       // pin the construction-time binding and ignore the swap (pinned by the
-      // edit-rejected / resync-fallback e2e).
+      // send-sync-throw-guarded e2e).
       send: (m) =>
         (
           this.harness?.webviewPostMessageOverride ?? ((mm) => webviewPanel.webview.postMessage(mm))

@@ -15,7 +15,7 @@
 // it calls setFenceLanguage, which dispatches ONE guarded edit rewriting the open
 // fence's language token. A native <select> is keyboard/SR accessible with no custom
 // popup; its options are a curated safe set, so the written value is always a known
-// identifier (the host write-gate re-validates regardless).
+// identifier. The host stores it through normal edit settlement.
 //
 // patchDOM(): a language change (a pick OR a source edit of the language word,
 // INCLUDING crossing the "" boundary between bare and labelled) leaves openFrom

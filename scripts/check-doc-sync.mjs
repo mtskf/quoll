@@ -7,7 +7,7 @@
 //
 // Why this exists: `.claude/CLAUDE.md` → "## Architecture invariants" →
 // "**Message protocol**" enumerates specific security-sensitive message names
-// (`edit-rejected`, `open-external`, `open-link`, `image-write`) inline as a
+// (`open-external`, `open-link`, `image-write`) inline as a
 // hand-maintained guardrail. When a message type is renamed or removed in
 // src/shared/protocol.ts, nothing forces that prose to follow — a 2026-07-11
 // audit found 5 of 7 such code-derived enumerations across CLAUDE.md had gone
@@ -40,8 +40,8 @@
 // doc ⊆ code, adding an *unrelated* message to protocol.ts does NOT fail (the
 // bullet is not an exhaustive mirror — by design). The divergence this guard
 // detects is a RENAME/REMOVAL of an *enumerated* name. Non-vacuity is verified
-// by renaming an enumerated message in protocol.ts (e.g. `edit-rejected` →
-// `edit-rejected-X`) and watching this go red — the revert-check documented in
+// by renaming an enumerated message in protocol.ts (e.g. `open-external` →
+// `open-external-alt`) and watching this go red — the revert-check documented in
 // the plan and the drift fixture in test/build/doc-sync.test.ts.
 //
 // ─────────────────────────────────────────────────────────────────────────
@@ -49,7 +49,7 @@
 //
 // Code side (extractCodeMessageTypes): every message type declares its
 // discriminant as a `type: "…"` field literal (`type: "document";`,
-// `type: "edit-rejected";`), and the two `build*Message` helpers repeat the
+// `type: "open-external";`), and the two `build*Message` helpers repeat the
 // same literals — dedup collapses those. `LintDiagnosticWire` (a sub-object,
 // no `type:` field) and `Envelope` are correctly excluded. Direction is NOT
 // split: the bullet does not distinguish host/webview, so the combined
@@ -172,7 +172,7 @@ function main() {
   if (docNames.length === 0) {
     console.error(
       `check-doc-sync: the "Message protocol" bullet in ${claudeMdPath} enumerates no message ` +
-        "names (expected e.g. `edit-rejected`). It was reworded past recognition — refusing to " +
+        "names (expected e.g. `open-external`). It was reworded past recognition — refusing to " +
         "pass vacuously."
     );
     process.exit(2);

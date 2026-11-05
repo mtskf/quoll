@@ -609,9 +609,8 @@ describe("effect-executor runApplyEdit (wrapper mapping)", () => {
       expect(dispatch).toHaveBeenCalledWith(
         expect.objectContaining({ type: "applyEditSettled", settledVersion: null })
       );
-      // The guarded reader serves three call families with different
-      // consequences, so its warn NAMES the site — without it this line is
-      // indistinguishable from a withheld edit-rejected recovery reseed.
+      // The guarded reader serves settlement and Promise-failure recovery
+      // with different consequences, so its warning names the call site.
       expect(warnSpy).toHaveBeenCalledWith(
         expect.stringContaining("guarded readVersion failed"),
         { site: "settlement-retry" },
@@ -801,8 +800,8 @@ describe("effect-executor runEffects other cases", () => {
   });
 
   // `rescueUnsavedDraft` is deliberately UNGUARDED by `isDisposed`: it exists for
-  // post-dispose unsaved drafts (an unwritable stash or a pending write-gate
-  // rejection at close), where the webview is gone but the draft is not.
+  // post-dispose unsaved drafts after a refused or failed write, where the
+  // webview is gone but the draft is not.
   const rescueReason = "bad link";
 
   it("rescueUnsavedDraft: runs the dep with { content, reason } even when disposed", () => {
@@ -971,9 +970,8 @@ describe("effect-executor runEffects other cases", () => {
 
   // `post`'s SYNC-THROW catch is a containment boundary like the two above, and
   // it reported through a bare console until this test. The cost is not confined
-  // to `post`: `case "postRejectedDraft"` calls `post` and then, on the very next
-  // line, `sendEditRejected` — so an escape from this catch takes the whole
-  // remainder of the effect list with it. Pinned with the generic shape (a post
+  // to `post`: an escape from this catch takes the whole remainder of the
+  // effect list with it. Pinned with the generic shape (a post
   // effect followed by another effect) so the property is the effect loop's, not
   // one arm's.
   it("post: a throwing report inside the sync-throw catch cannot unwind — the effect that FOLLOWS still runs", async () => {

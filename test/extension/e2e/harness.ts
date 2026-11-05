@@ -148,7 +148,7 @@ export function tick(ms = 50): Promise<void> {
 // queue — see [DBG-TEST] showing seed.docVersion=3 from a leftover
 // temp-file panel polluting failed-applyedit-surfaced.
 //
-// Rejected-draft rescue: suppression is (re)installed FIRST so the close below
+// Write-failure rescue: suppression is (re)installed FIRST so the close below
 // can never start a real rescue — even when the failing test left the override
 // at `null` — and again after `reset()`, which clears every override. Untitled
 // tabs are discarded before the close-all as a backstop, so a real rescued

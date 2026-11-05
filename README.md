@@ -140,12 +140,12 @@ Quoll is early software. Be aware of the following before relying on it:
      absolute one on the Marketplace page. Bare paths are left alone. -->
 
 - **Images have partial support.** Relative image paths (`./img.png`) render for **file-scheme** documents only. Paste/drop saves a content-hashed PNG/JPEG/GIF/WebP under `./assets/` (10 MB cap, type sniffed host-side). Images outside the document folder (`../sibling/img.png`) are not loaded — the resolved path must stay inside the document's own folder (`localResourceRoots`) — and remote (`https://…`) images are blocked by the content security policy; a remote-image opt-in is tracked for a follow-up.
-- **Unsafe URLs block saving.** Link/image destinations pass only when schemeless (relative or `#fragment`) or `http:` / `https:` / `mailto:`. Anything else (`javascript:`, `data:`, `file:`, protocol-relative `//host`) renders inertly and blocks the save with a "Cannot save" notice until fixed. The check covers Markdown destinations only — URLs inside raw HTML aren't checked.
-- **Edits made just before closing:** if a later edit is waiting behind an in-flight save and either the save fails or cannot be confirmed, or the later edit is refused (unsafe content, or the file is not writable) after the editor closes, Quoll opens that unsaved draft in a new untitled document. If the later edit is accepted but its write then fails or cannot be verified, Quoll shows an error instead (reopen the file to check its contents).
+- **Markdown storage and execution security** follow the policy in [Security Scope](SECURITY.md#scope).
+- **Edits made just before closing:** if a later edit is waiting behind an in-flight save and either the save fails or cannot be confirmed, or the later edit is refused (the file is not writable) after the editor closes, Quoll opens that unsaved draft in a new untitled document. If the later edit is accepted but its write then fails or cannot be verified, Quoll shows an error instead (reopen the file to check its contents).
 - **Line endings:** a file that mixes CRLF/LF is shown with one normalized separator (VS Code normalizes on load); opening and saving it without edits leaves the on-disk bytes unchanged.
 - **MDX (`.mdx`) is not supported** — only `.md` files open with the rich editor.
 - **Not implemented:** slash/block-insert menu, column resizing for tables, diff/git views, and collaborative editing. Single file, single editor only.
-- **Visual rendering is verified by manual smoke.** Automated tests cover the editing logic (round-trips, write-gate, message protocol, host E2E flows); in-webview visual rendering is not asserted by CI.
+- **Visual rendering is verified by manual smoke.** Automated tests cover the editing logic (round-trips, edit synchronization, message protocol, render/open security boundaries, host E2E flows); in-webview visual rendering is not asserted by CI.
 
 ## Contributing
 

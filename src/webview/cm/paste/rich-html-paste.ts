@@ -7,7 +7,7 @@
 // Follows html-table-paste.ts — Prec.high, defer (return false WITHOUT
 // preventDefault so the handlers after this one still run), preventDefault only
 // AFTER committing to insert, read-only swallow, and one dispatch through the
-// normal edit-sync → host write-lock → validateMarkdownForWrite pipeline. One
+// normal edit-sync → host write-lock → applyEdit settlement pipeline. One
 // deviation on the insert itself: when an image file item rides along, this handler
 // inserts and STILL returns false un-prevented, so imagePaste gets the same event.
 //

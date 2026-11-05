@@ -9,11 +9,8 @@
 // its unsent keystrokes, and an Edit built just before it is refused as stale.
 //
 // This records the one thing that settles it: the host's text under each
-// docVersion-carrying label — usually the text handed to the webview, but a
-// rejected-draft reseed hands the webview its own draft bytes instead and
-// records the host's canonical text here (see buildRejectedDraft in
-// quoll-editor-panel.ts) — and `since`, the first label that carried that
-// text. A later live text that equals it (EOL aside) is the
+// docVersion-carrying label handed to the webview, and `since`, the first
+// label that carried that text. A later live text that equals it (EOL aside) is the
 // same lineage — every label from `since` on is a valid base for it. The panel
 // resets it on every host apply: from then on the document has carried text the
 // webview produced and was never handed, so an external undo back to the old
@@ -24,9 +21,8 @@
 import { sameTextIgnoringEol } from "../../shared/text-equality.js";
 
 export interface EditLineage {
-  /** Record the host's text under a docVersion-carrying label — usually the
-   *  text handed to the webview, but a rejected-draft reseed hands the
-   *  webview its own draft bytes and records the host's canonical text here.
+  /** Record the host's text under a docVersion-carrying label handed
+   *  to the webview.
    *  `docVersion` is the label on the message; `liveVersion` is
    *  `document.version` at the time the text was read. */
   noteHandedText(read: () => string, docVersion: number, liveVersion: number): void;
@@ -68,9 +64,8 @@ export function createEditLineage(onReadError: (err: unknown) => void): EditLine
         return;
       }
       if (docVersion !== liveVersion) {
-        // Different text under a label that does not describe it (a
-        // rejected-draft replay re-sends the stored version while an external
-        // edit is still in the documentChanged debounce). Attributing the live
+        // Different text under a label that does not describe its live version.
+        // Attributing the live
         // text to a past label would let an Edit on that label overwrite the
         // external change, so leave the lineage alone. While live differs from
         // the old text every query answers `null`; if live returns to it, the

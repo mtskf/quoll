@@ -114,8 +114,8 @@ describe("lint rule: frontmatter-structure", () => {
 });
 
 // Pins the TODO's explicit layer constraint: the RULE must not reach into the
-// host-side frontmatter model. lint-independence.test.ts only guards the
-// write-gate modules, so this guards the `src/markdown/` boundary directly.
+// shared frontmatter model. lint-independence.test.ts guards host imports,
+// so this guards the `src/markdown/` boundary directly.
 describe("frontmatter-structure rule is independent of the host frontmatter model", () => {
   it("imports nothing from markdown/", () => {
     const src = readFileSync(

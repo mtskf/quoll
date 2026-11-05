@@ -41,6 +41,13 @@ ask us not to.
 
 ## Scope
 
+Quoll stores Markdown without content-based write admission, including unsafe
+URL destinations and incomplete or malformed frontmatter. Saving text does not
+authorize opening, loading, or executing it. Render, open, resource, image, and
+code-reference boundaries enforce their own policies, including permitted local
+resources and references; CSP remains default-deny. Advisory lint does not block
+writes.
+
 This policy covers the **published** Quoll extension (VS Code Marketplace / Open
 VSX) at the latest release.
 

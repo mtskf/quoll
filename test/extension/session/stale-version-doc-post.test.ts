@@ -2,7 +2,7 @@
 //
 // Regression pins for the stale-version Document post: a `postDocument` reseed
 // posts LIVE document bytes (buildSeedDocument reads document.getText()) but the
-// `ready`/`seed`/`viewStateVisible`/`editRejectedDeliveryFailed` arms used to
+// `ready`/`seed`/`viewStateVisible` arms used to
 // stamp the version from the possibly-stale stored `lastAppliedDocVersion`. When
 // an external edit is still coalescing in the 100 ms documentChanged debounce
 // the wire message pairs new bytes with an OLD version → the webview's next

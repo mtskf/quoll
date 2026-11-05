@@ -4,8 +4,8 @@
 // whole-document `toString()` (that is O(doc) per keystroke). We scan the line
 // model: line 1 must be a fence (O(1) reject for the overwhelmingly common
 // non-frontmatter doc); otherwise we look for the first subsequent fence line,
-// stopping at the closer. Sharing the single FENCE_LINE predicate with the host
-// write-gate keeps "what counts as a fence" in one place.
+// stopping at the closer. Sharing FENCE_LINE with formatting and lint keeps
+// "what counts as a fence" in one place.
 //
 // CRLF: CodeMirror's internal line model strips `\r` (production seeds via
 // Text.of(raw.split(/\r\n?|\n/))), so `line(n).text` never carries a `\r`, and
@@ -56,9 +56,8 @@ function computeSpan(state: EditorState): FrontmatterSpan | null {
   if (doc.lines < 2) {
     return null;
   }
-  // O(1) fast reject: line 1 must be a fence (also the opener check — the
-  // write-gate's opener is a fence line followed by a newline, guaranteed here
-  // by `doc.lines >= 2`). CodeMirror line text carries no `\r`.
+  // O(1) fast reject: line 1 must be a fence followed by a newline,
+  // guaranteed here by `doc.lines >= 2`. Line text carries no `\r`.
   if (!FENCE_LINE.test(doc.line(1).text)) {
     return null;
   }

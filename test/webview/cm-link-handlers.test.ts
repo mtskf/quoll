@@ -517,7 +517,7 @@ describe("tryOpenLinkAt — gate-reject bails warn", () => {
   });
 
   // Triage value must survive the classification: these are the schemes the
-  // render gate and write validator exist to block, so a blocked-link report is
+  // render and open gates exist to block, so a blocked-link report is
   // only actionable while the warn still names them. Pins LOGGABLE_SCHEMES
   // against being quietly emptied "for safety".
   it.each([

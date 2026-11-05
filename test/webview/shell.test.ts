@@ -1410,7 +1410,7 @@ describe("shell — own-lineage Documents never rewind un-acked bytes", () => {
       expect(noticeCount(".quoll-notice-discard")).toBe(0);
     });
 
-    it("a rejected draft is not announced as discarded when the external write differs in line endings only", async () => {
+    it("a buffer held after a failed send is not announced as discarded when the external write differs in line endings only", async () => {
       const host = await startWithFailedSend();
       host.externalWrite("a\r\nbx", "\r\n");
       host.pump();
@@ -1857,7 +1857,7 @@ describe("shell — format-document routing", () => {
   it("routes a format-document message to editor.runFormatDocument", async () => {
     // Reverting shell.ts's `case "format-document"` leaves the doc unformatted →
     // this assertion goes red. Uses the real editor (the formatter is pure string
-    // logic, no layout), mirroring the edit-rejected test's findFromDOM harness.
+    // logic, no layout), using the shared findFromDOM harness.
     await mount();
     deliver(buildDocument({ docVersion: 1, content: "1. a\n1. b\n" }));
 

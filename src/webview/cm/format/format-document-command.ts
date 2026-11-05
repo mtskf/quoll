@@ -70,7 +70,7 @@ export function runFormatDocument(view: EditorView): FormatDocumentResult {
   // DocumentEol values this call must read. See outboundContentLength's JSDoc.
   if (outboundContentLength(formatted, view.state.facet(quollDocumentEol)) > MAX_CONTENT_LENGTH) {
     // postEditMessage would refuse to post the oversized (CRLF-serialized) content
-    // and show the webview serialize-error banner, leaving the doc formatted but
+    // and show the webview send-failure banner, leaving the doc formatted but
     // unsaved. Bail before mutating instead.
     console.error("[quoll] Format Document aborted: result exceeds the content size limit.");
     return "too-large";

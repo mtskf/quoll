@@ -248,9 +248,8 @@ describe("reducer — theme updates do not touch docVersion", () => {
 });
 
 describe("reducer — save policy: send-failure arm", () => {
-  // A serialize result with ok: false (host reject / send failure) prevents
-  // Edit posting and surfaces the error. C8 retired the parse/serialize
-  // warning-consent arms; send-failure is the only surviving save-policy gate.
+  // A local send failure prevents Edit posting and surfaces the error.
+  // The next local edit clears the send gate so the latest bytes can retry.
 
   it("send-failure surfaces the error and clears editInFlight", () => {
     const a = reducer(initialState, docAction({ docVersion: 1 }));
@@ -333,7 +332,7 @@ describe("canPostEdit — save-policy gate is the single source of truth", () =>
 });
 
 describe("reducer — local-edit-attempt clears sendFailure for retry", () => {
-  // Path follow-up: after the host rejects an Edit, sendFailure
+  // After a local send fails, sendFailure
   // is non-null and the post-edit gate is closed. The user typing another
   // character is their intent to retry — the next local-edit-attempt
   // clears sendFailure so the debounced flush can ship a fresh Edit.

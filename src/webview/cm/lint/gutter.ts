@@ -1,7 +1,7 @@
 // Opt-in advisory-lint gutter: one severity dot per line that has a finding.
 //
 // A READ-ONLY view of `lintField` (cm/lint/extension.ts) — it never mutates the
-// document and is fully independent of the host write-gate. Held in a webview
+// document and never blocks storage. Held in a webview
 // Compartment (editor.ts) so when the `quoll.lint.gutter.enabled` setting is
 // off the whole gutter() extension is absent and `.cm-gutters` takes no width,
 // leaving the centred reading column pixel-identical to the no-gutter default.

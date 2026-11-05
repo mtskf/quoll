@@ -2,8 +2,7 @@
 // protected ranges, Table node ranges, and ordered-list marker groups, in ONE
 // tree.iterate walk (enter returns false to skip descent — the precedent is
 // cm/table/table-ranges.ts; a manual cursor walk leaks adjacent protected
-// blocks). Frontmatter is detected by its opening/closing --- fences (NOT
-// validateFrontmatter, which rejects any block containing a bare ---). Tables
+// blocks). Frontmatter is detected by its opening/closing --- fences. Tables
 // are the parser's Table nodes (filtered against protected ranges), NOT the
 // line-based parseAllTables (which absorbs interrupters / includes list
 // markers — see Decision Log).

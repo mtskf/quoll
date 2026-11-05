@@ -7,7 +7,7 @@
 //
 // Mounted at Prec.high so it arbitrates before those handlers: on a convertible
 // table it consumes the event; otherwise it defers. The insert rides the normal
-// dispatch → updateListener → edit-sync → host write-lock → validateMarkdownForWrite
+// dispatch → updateListener → edit-sync → host write-lock → applyEdit settlement
 // pipeline (no raw write path).
 
 import { type Extension, Prec } from "@codemirror/state";

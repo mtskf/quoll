@@ -18,7 +18,7 @@
 //    into the wrong columns — this keeps columns aligned. Always rectangular.
 //  - Cell text neutralises Markdown-inline-active characters (escapeCell) so a
 //    pasted cell round-trips as LITERAL text and cannot re-activate as an explicit
-//    Markdown link/image/code/emphasis. This — not the host write-gate — is the
+//    Markdown link/image/code/emphasis. This is the
 //    primary safety property. (A bare GFM autolink `http(s)://` / `www.` / email
 //    may still render live, but those are exactly the allowlist-safe schemes,
 //    gated identically to the same text typed in; `javascript:` is never

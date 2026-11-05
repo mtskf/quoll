@@ -123,7 +123,7 @@ describe("linkReveal — inline link form [text](url)", () => {
     const built = linkReveal.build(ctx(doc, EditorSelection.single(doc.indexOf("paragraph") + 3)));
     // Reference use-sites have no URL child; the provider emits no
     // decorations on them. The LinkReference DEFINITION is a separate
-    // node type (gated for write-safety by lezer-url-walker, not by us).
+    // node type; URL validation belongs to render/open sinks.
     expect(decosOf(built).filter((d) => d.kind === "hide" || d.kind === "reveal")).toEqual([]);
   });
 

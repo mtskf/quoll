@@ -48,7 +48,7 @@ describe("renderCellInline — the destination gate", () => {
   // CommonMark §2.4: only ASCII punctuation is backslash-escapable. In
   // `[a](x\ y)` the `\ ` is a literal backslash, so the unescaped space
   // terminates the bare destination and this is NOT a link — matching the
-  // Lezer write-gate parse. The escaped-punctuation case (`\)`) must still
+  // shared GFM parse. The escaped-punctuation case (`\)`) must still
   // suppress the paren so a genuine escape keeps the link live.
   it("renders `[a](x\\ y)` as literal text (`\\ ` is not an escape)", () => {
     expect(html(renderCellInline("[a](x\\ y)"))).toBe("[a](x\\ y)");
@@ -116,7 +116,7 @@ describe("renderCellInline — the destination gate", () => {
 
   // ── Consolidated table-cell URL-gate semantics (shared decode→gate) ─────────
   // After routing through the shared renderSafeMarkdownDestination, these inputs
-  // are gated identically to the block-image widget + the host write-gate. The
+  // are gated identically to the block-image widget. The
   // first four were LIVE <a>/<img> under the old local decoder (which left the
   // encoded form literal / required a trailing `;` / was case-sensitive); the
   // shared canonical decoder resolves or NUL-substitutes them → blocked.
@@ -159,7 +159,7 @@ describe("renderCellInline — the destination gate", () => {
   // OVER-BLOCK POLICY (Codex Conf 95): a safe-scheme URL carrying a non-curated
   // semicolon-terminated named entity (`&copy;`) is undecodable → NUL → blocked.
   // This was a LIVE link under the old local decoder; the consolidation makes
-  // table-cell render match the write-gate (non-persistable) + block-image gate.
+  // table-cell rendering match the block-image render gate.
   it("blocks `[x](https://x.test/?q=a&copy;b)` (non-curated entity over-block policy)", () => {
     expect(html(renderCellInline("[x](https://x.test/?q=a&copy;b)"))).toBe(
       "[x](https://x.test/?q=a&amp;copy;b)"

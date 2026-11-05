@@ -442,7 +442,7 @@ function tryParseLink(raw: string, start: number): ParsedLink | null {
       // CommonMark §2.4: only ASCII punctuation is escapable; a backslash
       // before anything else (e.g. `\ `) is a literal backslash, so the
       // unescaped space then terminates the bare destination and this is
-      // not a link — matching the Lezer write-gate parser.
+      // not a link — matching the shared GFM parser.
       j += 2;
       continue;
     }
