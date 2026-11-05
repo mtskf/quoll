@@ -501,11 +501,9 @@ const postDoc = (s: HostSessionState, docVersion: number): HostSessionEffect => 
 // that. On the path that reaches HERE — alive, ack withheld — that clause is the
 // HEDGED one ("may not have been saved"), which deliberately reuses this pair's
 // own `RESYNC_FAILURE_MESSAGE` phrasing so the two toasts cannot disagree about
-// certainty when both appear. The DEFINITE wording belongs to the post-dispose
-// branch, where this pair is never built at all (see the four routes below).
-// Post-dispose paths suppress this pair because there is no webview to resync.
-// ARCHITECTURE.md's surface/unsaved-draft-rescue.ts entry owns notification
-// and stash disposition there.
+// certainty when both appear. Post-dispose this pair is never built: there is
+// no webview to resync. ARCHITECTURE.md's surface/unsaved-draft-rescue.ts
+// entry owns notification and stash disposition there.
 function withholdAckEffects(
   settled: HostSessionState,
   heldBase: number | null,
@@ -1067,8 +1065,8 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         //     that refusal a deterministic loss. On a document whose version never
         //     advances again the epoch stays put and the buffer is still replayed
         //     (the quiet-document residual the follow-up TODO entry carries).
-        // Post-dispose the stash is its only carrier, which is why the drop is
-        // LOGGED below.
+        // Post-dispose the stash is its only carrier, which is why the branch
+        // below hands it to rescueStash instead of dropping it.
         // The ACK LABEL is deliberately NOT a conjunct below: the drain is a new
         // WRITE, not an ack, and its safety rests on the CONTENT evidence above.
         // ⛔ Do NOT re-add an `(ackLabelObserved || state.disposed)` conjunct here
@@ -1302,17 +1300,11 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
             // unobserved label takes the withhold arm. The shared `ackEffects` is
             // what keeps this site and `settlementEffects` from drifting apart.
             //
-            // POST-DISPOSE a `readonly` verdict is the one LOSS in this arm: alive,
-            // the repost shows the user their edit reverting; disposed, the stash
-            // was the keystroke's only carrier (no webview, no replay buffer), so
-            // it gets a toast, where the parse-failed arm above gets a rescue.
-            // `decideEdit` checks readonly BEFORE content equality, so the stash
-            // may already carry the settled text — nothing was lost then, and
-            // the toast would be a false alarm. `stale` (unreachable here, the
-            // base is current by construction) and `no-op` stay silent. The wording does not claim
-            // the file IS read-only: `canWrite: false` also covers the executor's
-            // fallback for a writability read that threw, and the reducer cannot
-            // tell the two apart.
+            // Alive only — disposed refusals return before this switch (rescue via
+            // drainRefusalReason / rescueStash). The `canWrite: false` verdict also
+            // covers the executor's fallback for a writability read that threw;
+            // drainRefusalReason's wording therefore says "could not be confirmed
+            // writable", never "is read-only".
             return {
               state: settled,
               effects: ackEffects(ackLabelObserved, settled, heldBase, state.context),
@@ -1364,8 +1356,9 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         const ackLabelObserved =
           event.settledVersion !== null ||
           (heldBase !== null && recovered.lastAppliedDocVersion > heldBase);
-        // UNCONDITIONAL, because the throwing transition ABANDONED its effect
-        // list — and every non-ok outcome OWED a save-failure `showError` ahead
+        // Emitted on every path EXCEPT a post-dispose rescue (the rescue helper
+        // owns the user notice there), because the throwing transition ABANDONED
+        // its effect list — and every non-ok outcome OWED a save-failure `showError` ahead
         // of its ack (`settlementEffects`' toast-before-reseed order; the
         // `refused` arm puts a triage `logWarn` first, so "owed before the ack"
         // is the true form, not "began the list"). This toast stands in for the
@@ -1385,11 +1378,12 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         if (state.disposed || ackLabelObserved) {
           lossClause = " Reopen the file to check its contents.";
         } else {
-          // ALIVE with a WITHHELD ack — HEDGED (the ⚠️ above already covers why
-          // this spans both carriers and drops the word "stash"). This arm is
-          // outcome-blind, and one corner really does land the bytes (the
-          // never-advancing document above), so MAY is the strongest honest
-          // claim. "may not have been saved" is deliberately the SAME phrase
+          // ALIVE with a WITHHELD ack — HEDGED. No ack Document means the
+          // webview's retained replay buffer is not replayed; the next lock-free
+          // forward advance bumps externalEpoch and edit-sync.ts drops it — unless
+          // the document's version never moves again, in which case the bytes
+          // still land. Outcome-blind, this arm cannot tell which, so MAY is the
+          // strongest honest claim (in-flight or stashed bytes alike). "may not have been saved" is deliberately the SAME phrase
           // `RESYNC_FAILURE_MESSAGE` uses (pinned against that constant in
           // `host-session-core.test.ts`), so if both toasts appear they cannot
           // contradict each other on certainty. The remedy is SELF-SUFFICIENT

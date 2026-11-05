@@ -1748,8 +1748,8 @@ describe("host-session-core: settlement ack-label gate (ackLabelObserved)", () =
     // `failureToasts(outcome, context)` directly and never reaches
     // `settlementEffects`, so neither the ack nor the withhold pair is
     // CONSTRUCTED here at all — there is no ack-label gate on this path to
-    // observe. What this pins is that non-construction: `ok` leaves no effects
-    // at all, `refused` leaves toasts and nothing else.
+    // observe. What this pins is that non-construction: `ok` leaves only the
+    // unverified-final-edit `showError`, `refused` leaves toasts and nothing else.
     const disposed = base({ disposed: true, pendingApplyBaseVersion: null });
     const ok = core.transition(disposed, settled({ settledVersion: null, currentContent: null }));
     expect(ok.effects).toEqual([
@@ -2266,7 +2266,7 @@ describe("host-session-core: settlementTransitionFailed (write-lock recovery)", 
   });
 
   // The SAME hedge with NO stash to lose, which is the state PR #409 cycle 4
-  // re-keyed. `lostStash` requires `stash !== null`, so this state used to land
+  // re-keyed. The old loss predicate required a stash, so this state used to land
   // in the no-loss branch and be told to "Reopen the file" — an instruction that
   // DESTROYS the buffer holding the at-risk bytes. Nothing was stashed, but the
   // recovery still fired mid-apply and the arm is outcome-blind, so the
