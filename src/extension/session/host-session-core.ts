@@ -1300,11 +1300,9 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
             // unobserved label takes the withhold arm. The shared `ackEffects` is
             // what keeps this site and `settlementEffects` from drifting apart.
             //
-            // Alive only — disposed refusals return before this switch (rescue via
-            // drainRefusalReason / rescueStash). The `canWrite: false` verdict also
-            // covers the executor's fallback for a writability read that threw;
-            // drainRefusalReason's wording therefore says "could not be confirmed
-            // writable", never "is read-only".
+            // Disposed refusals are rescued before this switch. `canWrite: false`
+            // can also mean the writability check threw, so the rescue reason
+            // does not claim the file is read-only.
             return {
               state: settled,
               effects: ackEffects(ackLabelObserved, settled, heldBase, state.context),
@@ -1378,13 +1376,10 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         if (state.disposed || ackLabelObserved) {
           lossClause = " Reopen the file to check its contents.";
         } else {
-          // ALIVE with a WITHHELD ack — HEDGED. No ack Document means the
-          // webview's retained replay buffer is not replayed; the next lock-free
-          // forward advance bumps externalEpoch and edit-sync.ts drops it — unless
-          // the document's version never moves again, in which case the bytes
-          // still land. Outcome-blind, this arm cannot tell which, so MAY is the
-          // strongest honest claim (in-flight or stashed bytes alike). "may not have been saved" is deliberately the SAME phrase
-          // `RESYNC_FAILURE_MESSAGE` uses (pinned against that constant in
+          // Without an ack Document, the webview's replay buffer can be dropped
+          // on the next version advance. If the version stays put, it can still
+          // replay. The outcome is unknown, so "may not have been saved" matches
+          // the phrase in `RESYNC_FAILURE_MESSAGE` (pinned in
           // `host-session-core.test.ts`), so if both toasts appear they cannot
           // contradict each other on certainty. The remedy is SELF-SUFFICIENT
           // rather than sequenced: presentation order in the notification stack

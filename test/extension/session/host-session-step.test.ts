@@ -223,18 +223,8 @@ describe("createHostSessionStep", () => {
     });
   });
 
-  // Mutation coverage: `releasesWriteLockOnCommit`'s `disposed` case answers
-  // `null`, but no other test in this suite drives a `disposed` event through
-  // `step` — so a mutation that moved `disposed` into the same rescue arm as
-  // `applyEditSettled` passed the whole suite unnoticed. (Since that helper
-  // returns the SETTLEMENT rather than a boolean, tsc now rejects such a move
-  // outright; this test still covers the runtime behaviour.) `disposed` needs no
-  // rescue of its own here: see `releasesWriteLockOnCommit`'s doc for why the
-  // drop, if any, rides a LATER, independent `applyEditSettled` step instead.
-  // The half PR #406 did not pay: the rescue released the deferred side
-  // channels' at-receipt guards but never the lock itself, so the payment was
-  // one-shot — a retried side channel re-deferred behind a lock nothing would
-  // ever release.
+  // The recovery must release the write lock before settling the barrier;
+  // otherwise retried side channels defer behind a lock that remains held.
   it("commits the write-lock recovery when an applyEditSettled transition throws — BEFORE the barrier settle", () => {
     const order: string[] = [];
     const step = createHostSessionStep({
