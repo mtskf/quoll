@@ -2,8 +2,6 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { validateMarkdownForWrite } from "../../../src/markdown/validate-for-write.js";
-import { lintMarkdown } from "../../../src/webview/cm/lint/engine.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "../../../"); // test/webview/lint -> repo root
@@ -23,9 +21,16 @@ const LINT_SOURCE_FILES = [
   "src/webview/cm/lint/index.ts",
 ];
 
-// The write-gate modules the lint layer must NEVER import: lint is advisory and
-// must stay structurally independent of the disk-write validator.
-const WRITE_GATE = /validate-for-write|lezer-url-walker|url-allowlist/;
+const HOST_MODULE = /src\/extension\//;
+function importsHost(rel: string, mod: string): boolean {
+  const resolved = mod.startsWith(".")
+    ? path
+        .resolve(path.dirname(path.join(ROOT, rel)), mod)
+        .split(path.sep)
+        .join("/")
+    : mod;
+  return HOST_MODULE.test(resolved);
+}
 // Matchers mirror test/markdown/no-pm-import.test.ts so the full surface is
 // covered: IMPORT_FROM's `[^;'"]` spans newlines (catches multiline imports),
 // plus dedicated side-effect, re-export, and dynamic-import forms.
@@ -44,19 +49,17 @@ function importedModules(src: string): string[] {
   return mods;
 }
 
-describe("lint layer is independent of the write gate", () => {
-  it.each(LINT_SOURCE_FILES)("%s imports nothing from the write gate", (rel) => {
+describe("lint layer is independent of the host", () => {
+  it.each(LINT_SOURCE_FILES)("%s imports nothing from the host", (rel) => {
     const src = readFileSync(path.join(ROOT, rel), "utf8");
     for (const mod of importedModules(src)) {
-      expect(WRITE_GATE.test(mod)).toBe(false);
+      expect(importsHost(rel, mod)).toBe(false);
     }
   });
 
-  it("a lint-dirty but write-safe document still passes the write gate", () => {
-    // Heading skip + trailing space: at least two lint warnings, zero write-gate
-    // concerns (no unsafe URL, no broken frontmatter).
-    const doc = "# Title \n\n### Skip\n";
-    expect(lintMarkdown(doc).length).toBeGreaterThanOrEqual(2);
-    expect(validateMarkdownForWrite(doc)).toEqual({ ok: true });
+  it("detects a relative import of host edit decisions", () => {
+    expect(
+      importsHost("src/webview/cm/lint/engine.ts", "../../../extension/session/edit-decision.js")
+    ).toBe(true);
   });
 });

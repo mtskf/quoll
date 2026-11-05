@@ -15,11 +15,17 @@
 // root handler under BOTH modifiers. The autolink at-cap row asserts liveness only.
 // What a link does once it IS live is cm-table-cell-render-clicks.test.ts; how
 // the delimiters around it pair is cm-table-cell-render-emphasis.test.ts.
+import { EditorState } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
-
-import { MAX_HREF_LENGTH } from "../../../src/shared/protocol.js";
+import { MAX_HREF_LENGTH, PROTOCOL_VERSION } from "../../../src/shared/protocol.js";
+import {
+  openExternalSinkFor,
+  quollOpenExternalSink,
+} from "../../../src/webview/cm/open-external.js";
 import { renderCellInline } from "../../../src/webview/cm/table/cell-render.js";
 import { html, htmlWithoutTooltip } from "./helpers/cell-render-fixtures.js";
+import { makeWidget } from "./helpers/widget-fixtures.js";
 
 describe("renderCellInline — the destination gate", () => {
   it("renders an inline link [text](url) as <a href> when URL is allowed", () => {
@@ -313,4 +319,116 @@ describe("renderCellInline — the destination gate", () => {
       expect(html(nodes)).toBe('<em><img src="https://csp/ws/notes/img.png" alt="x"></em>');
     });
   });
+});
+
+describe("table destinations from stored Markdown", () => {
+  it.each([
+    "javascript:alert(1)",
+    "data:text/html,x",
+    "file:///tmp/x",
+    "//evil.test/x",
+    "javascript&#58;alert(1)",
+    "javascript\\&colon;alert(1)",
+    "xmpp:user@example.com",
+    "https://example.com/path?q=1&b=2",
+  ])("gates link, image and autolink %j", (url) => {
+    for (const source of [
+      `[target](${url})`,
+      `![target](${url})`,
+      `<${url}>`,
+      `*[target](${url})*`,
+    ]) {
+      const root = document.createElement("div");
+      root.append(...renderCellInline(source));
+      const safe = url.startsWith("https:");
+      expect(root.querySelectorAll("a[href], img[src]").length).toBe(safe ? 1 : 0);
+      if (safe) {
+        expect(
+          root.querySelector("a, img")?.getAttribute(source.startsWith("!") ? "src" : "href")
+        ).toBe(url);
+      }
+    }
+  });
+});
+
+describe("table reference forms stay inert", () => {
+  it.each([
+    "javascript:1",
+    "data:image/png,x",
+    "file:///tmp/x",
+    "//evil.test/x",
+    "https://example.com",
+  ])("does not resolve definitions for %j", (url) => {
+    for (const form of ["[target][id]", "[id][]", "[id]", "![target][id]", "![id][]", "![id]"]) {
+      const root = document.createElement("div");
+      root.append(...renderCellInline(`${form}\n\n[id]: ${url}`));
+      expect(root.querySelector("a[href], img[src]")).toBeNull();
+    }
+  });
+});
+
+describe("table widget URL sinks through CodeMirror", () => {
+  for (const url of [
+    "javascript:1",
+    "data:image/png,x",
+    "file:///tmp/x",
+    "//evil.test/x",
+    "javascript&#58;1",
+    "xmpp:user@example.com",
+    "https://example.com",
+  ]) {
+    for (const form of [
+      `[target](${url})`,
+      `![target](${url})`,
+      `<${url}>`,
+      "[target][id]",
+      "[id][]",
+      "[id]",
+      "![target][id]",
+      "![id][]",
+      "![id]",
+    ]) {
+      it(`renders and clicks ${form} with ${url}`, () => {
+        const posted: unknown[] = [];
+        const parent = document.createElement("div");
+        document.body.append(parent);
+        const view = new EditorView({
+          parent,
+          state: EditorState.create({
+            extensions: [
+              quollOpenExternalSink.of(openExternalSinkFor({ postMessage: (m) => posted.push(m) })),
+            ],
+          }),
+        });
+        const widget = makeWidget(`| Link |\n| --- |\n| ${form} |\n\n[id]: ${url}`);
+        const dom = widget.toDOM(view);
+        try {
+          const inline = form.includes("](") || form.startsWith("<");
+          const safe = url.startsWith("https:") && inline;
+          expect(dom.querySelectorAll("a[href], img[src]").length).toBe(safe ? 1 : 0);
+          const target = dom.querySelector("a") ?? dom.querySelector("td");
+          for (const modifier of [{ metaKey: true }, { ctrlKey: true }]) {
+            posted.length = 0;
+            target?.dispatchEvent(
+              new MouseEvent("click", { bubbles: true, cancelable: true, ...modifier })
+            );
+            const opens = safe && !form.startsWith("!");
+            expect(posted).toEqual(
+              opens ? [{ protocol: PROTOCOL_VERSION, type: "open-external", href: url }] : []
+            );
+          }
+        } finally {
+          widget.destroy(dom);
+          view.destroy();
+          parent.remove();
+        }
+      });
+    }
+  }
+});
+
+it("a bare GFM xmpp destination in a table cell has no live target", () => {
+  const root = document.createElement("div");
+  root.append(...renderCellInline("xmpp:user@evil.example/resource"));
+  expect(root.querySelector("a[href], img[src]")).toBeNull();
 });

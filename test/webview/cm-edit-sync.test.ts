@@ -3500,3 +3500,41 @@ describe("cm edit-sync — failed-send carrier", () => {
     expect(posted).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("cm edit-sync — stored Markdown acknowledgements", () => {
+  it("posts each next formerly rejected Edit after its normal Document ack", () => {
+    const discarded = vi.fn();
+    const s = setup({ onLocalEditDiscarded: discarded });
+    s.sync.onHostSnapshot(1, true, 0, 1, "hello");
+    for (const [index, content] of [
+      "[x](javascript:1)",
+      "![x](data:image/png,x)",
+      "---\ntitle: unfinished",
+    ].entries()) {
+      s.type(content);
+      expect(s.posted.at(-1)).toEqual({ content, baseDocVersion: index + 1 });
+      expect(s.sync.onHostSnapshot(index + 2, true, 0, 1, content)).toBe(false);
+      s.sync.onReducerCommit(false);
+      expect(s.sync.viewHoldsUnackedEdit(content, 0, 1)).toBe(false);
+    }
+    s.setDoc("external X");
+    s.sync.onHostSnapshot(5, true, 1, 1, "external X");
+    s.sync.onReducerCommit(false);
+    expect(discarded).not.toHaveBeenCalled();
+  });
+
+  it("announces genuinely unsent bytes superseded by an external Document exactly once", () => {
+    const discarded = vi.fn();
+    const s = setup({ onLocalEditDiscarded: discarded });
+    s.sync.onHostSnapshot(1, true, 0, 1, "hello");
+    s.setPostOk(false);
+    s.type("unsent bytes");
+    expect(s.posted).toEqual([]);
+    s.setDoc("external X");
+    s.sync.onHostSnapshot(2, true, 1, 1, "external X");
+    s.sync.onReducerCommit(false);
+    s.sync.onReducerCommit(false);
+    expect(discarded).toHaveBeenCalledTimes(1);
+    expect(s.posted).toEqual([]);
+  });
+});

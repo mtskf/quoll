@@ -84,7 +84,7 @@ describe("pending-edit-dispose-drain", function () {
     assert.strictEqual(doc.getText(), "first", "edit #1 must land on the document while in flight");
 
     // Edit #2 arrives WHILE the lock is held → the host stashes it (no drop).
-    const drained = "drained last keystroke";
+    const drained = "[last](javascript:alert(1))\n";
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "edit",
@@ -118,7 +118,7 @@ describe("pending-edit-dispose-drain", function () {
     assert.ok(doc.isDirty, "the drained write must leave the document dirty (unsaved)");
   });
 
-  it("reopens a stash the write-gate refuses on the post-dispose drain as an untitled draft", async () => {
+  it("rescues a stash whose apply returns false after disposal", async () => {
     const harness = await getHarness();
     await openFixtureWithQuoll("sample.md");
     const seed = await harness.waitForEvent(isDocumentEvent, 8000);
@@ -141,7 +141,7 @@ describe("pending-edit-dispose-drain", function () {
       if (calls === 1) {
         return vscode.workspace.applyEdit(edit).then((ok) => gate.promise.then(() => ok));
       }
-      return vscode.workspace.applyEdit(edit);
+      return Promise.resolve(false);
     };
     // Installed AFTER the last getHarness(): the suite-wide no-op override is
     // re-applied by getHarness().
@@ -186,7 +186,7 @@ describe("pending-edit-dispose-drain", function () {
       await tick(20);
     }
     assert.deepStrictEqual(rescued, [refused], "the refused stash must be reopened exactly once");
-    assert.strictEqual(calls, 1, "a refused stash must not be written to the document");
+    assert.strictEqual(calls, 2, "the drain attempted the refused write");
     assert.strictEqual(doc.getText(), "first");
   });
   it("rescues the later stash when the preceding apply is refused after close", async () => {

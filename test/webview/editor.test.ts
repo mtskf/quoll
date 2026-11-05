@@ -2971,3 +2971,30 @@ describe("editor — failed-send carrier and synchronous re-entry", () => {
     expect(editPosts()).toHaveLength(1);
   });
 });
+
+describe("editor — acknowledged unsafe Markdown", () => {
+  it("acknowledges the bytes before an ordinary external edit without a discard notice", () => {
+    vi.useFakeTimers();
+    const discard = vi.fn();
+    const { handle, view, commit } = mount({ onLocalEditDiscarded: discard });
+    handle.applyDocument({ content: "seed", eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
+    const content = "[x](javascript:1)\n![x](data:image/png,x)";
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: content } });
+    vi.advanceTimersByTime(300);
+    expect(editPosts().at(-1)?.content).toBe(content);
+    handle.applyDocument({ content, eol: "\n", canWrite: true, docVersion: 2, ...PAIR });
+    commit(false);
+    expect(hostBytes(view)).toBe(content);
+    handle.applyDocument({
+      content: "external X",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 3,
+      ...PAIR,
+      externalEpoch: 1,
+    });
+    commit(false);
+    expect(hostBytes(view)).toBe("external X");
+    expect(discard).not.toHaveBeenCalled();
+  });
+});

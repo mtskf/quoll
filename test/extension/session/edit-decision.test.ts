@@ -79,9 +79,19 @@ describe("decideEdit — Markdown is stored as text", () => {
     "![x](data:image/svg+xml,test)",
     "[x](file:///tmp/example.md)",
     "[x](//example.com/path)",
+    "[x](javascript&#58;alert(1))",
+    "[x][id]\n\n[id]: javascript:alert(1)",
+    "![x][id]\n\n[id]: data:image/png,x",
+    "[id][]\n\n[id]: file:///tmp/x",
+    "[id]\n\n[id]: //example.com/x",
+    "| h |\n| --- |\n| [x](javascript:1) |",
+    "<javascript:alert(1)>",
+    "<xmpp:user@example.com>",
     "---\ntitle: unfinished",
     "---\ntitle: x\u2028---\n---\nbody\n",
     "---\ntitle: x\r---\n---\nbody\n",
+    "[unused]: javascript:1\n",
+    "[x][id]\n\n[id]: https://example.com\n[id]: javascript:1\n",
   ])("accepts %j", (content) => {
     expect(
       decideEdit({ baseIsCurrent: true, canWrite: true, content, currentContent: "seed" })

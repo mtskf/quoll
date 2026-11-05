@@ -1011,3 +1011,69 @@ describe("handleLinkMouseDown — fragment wiring", () => {
     view.destroy();
   });
 });
+
+describe("stored Markdown still obeys the open boundary", () => {
+  for (const url of [
+    "javascript:alert(1)",
+    "data:text/html,x",
+    "file:///tmp/x",
+    "//evil.test/x",
+    "javascript&#58;alert(1)",
+    "javascript\\&colon;alert(1)",
+    "xmpp:user@example.com",
+    "https://example.com/path?q=1&b=2",
+  ]) {
+    const safe = url.startsWith("https:");
+    const forms = [
+      { doc: `see [target](${url})`, marker: "target" },
+      { doc: `see [target][id]\n\n[id]: ${url}`, marker: "target" },
+      { doc: `see [target][]\n\n[target]: ${url}`, marker: "target" },
+      { doc: `see [target]\n\n[target]: ${url}`, marker: "target" },
+      { doc: `# see *[target](${url})*`, marker: "target" },
+      { doc: `> see [target](${url})`, marker: "target" },
+      { doc: `- see [target](${url})`, marker: "target" },
+    ];
+    if (/^(?:javascript|data|file|xmpp|https):/.test(url)) {
+      forms.push({ doc: `see <${url}>`, marker: url });
+    }
+    for (const { doc, marker } of forms) {
+      it(`opens only safe targets: ${doc}`, () => {
+        const posted: WebviewToHost[] = [];
+        // This handler opens inline Link nodes; reference and Autolink nodes stay inert.
+        const reachesSink = safe && doc.includes("](");
+        const handled = tryOpenLinkAt(
+          stateOf(doc),
+          posOf(doc, marker) + 1,
+          { postMessage: (m) => posted.push(m) },
+          noScroll
+        );
+        expect(handled).toBe(reachesSink);
+        expect(posted).toEqual(
+          reachesSink ? [{ protocol: PROTOCOL_VERSION, type: "open-external", href: url }] : []
+        );
+      });
+    }
+  }
+});
+
+describe("nested image links open only the outer allowed destination", () => {
+  it.each([
+    ["javascript:1", "https://example.com", true],
+    ["https://example.com/image.png", "javascript:1", false],
+    ["https://example.com/image.png", "https://example.com", true],
+  ] as const)("image %s inside link %s", (image, outer, opens) => {
+    const doc = `see [![target](${image})](${outer})`;
+    const posted: WebviewToHost[] = [];
+    expect(
+      tryOpenLinkAt(
+        stateOf(doc),
+        posOf(doc, "target") + 1,
+        { postMessage: (m) => posted.push(m) },
+        noScroll
+      )
+    ).toBe(opens);
+    expect(posted).toEqual(
+      opens ? [{ protocol: PROTOCOL_VERSION, type: "open-external", href: outer }] : []
+    );
+  });
+});

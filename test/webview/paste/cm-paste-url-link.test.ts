@@ -4,7 +4,6 @@ import { EditorSelection, EditorState } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 
-import { validateMarkdownForWrite } from "../../../src/markdown/validate-for-write.js";
 import { quollMarkdownLanguage } from "../../../src/webview/cm/markdown.js";
 import { detectPasteLinkUrl, pasteUrlOverSelection } from "../../../src/webview/cm/paste/index.js";
 import { settledMount } from "../helpers/settled-view.js";
@@ -162,8 +161,6 @@ describe("pasteUrlOverSelection — handler", () => {
     firePaste(view, url);
     const doc = view.state.doc.toString();
     expect(doc).toBe(`[Foo](<${url}>)`);
-    // …and the result is accepted by the host write-gate (never rejected).
-    expect(validateMarkdownForWrite(`${doc}\n`).ok).toBe(true);
     view.destroy();
   });
 
@@ -175,7 +172,6 @@ describe("pasteUrlOverSelection — handler", () => {
     firePaste(view, url);
     const doc = view.state.doc.toString();
     expect(doc).toBe(`[Foo](<${url}>)`);
-    expect(validateMarkdownForWrite(`${doc}\n`).ok).toBe(true);
     view.destroy();
   });
 });

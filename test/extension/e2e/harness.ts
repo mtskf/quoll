@@ -54,8 +54,8 @@ export async function getHarness(): Promise<TestHarnessShape> {
   return api.__test.harness;
 }
 
-// Closing a Quoll tab with a write-gate rejection pending reopens the rejected
-// draft as a DIRTY untitled document. Left on, that side effect would leak into
+// A failed write settling after close can reopen an unsaved draft as a DIRTY
+// untitled document. Left on, that side effect would leak into
 // every suite: the untitled tab steals the active editor from the next test, a
 // plain close of it raises a save prompt the headless host cannot answer, and
 // `cleanupBetweenTests`' own close can start one after a test failed half-way —

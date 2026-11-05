@@ -1,21 +1,21 @@
 import { syntaxTree } from "@codemirror/language";
 import { EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
-import { parseMarkdown } from "../../src/markdown/lezer-url-walker.js";
+import { gfmParser } from "../../src/markdown/gfm-parser.js";
 import { quollMarkdownLanguage } from "../../src/webview/cm/markdown.js";
 import { fullTree } from "./helpers/full-tree.js";
 
-// Pins that the HOST write-gate parser (parseMarkdown) and the WEBVIEW editor
+// Pins that the shared GFM parser and the WEBVIEW editor
 // language (quollMarkdownLanguage()) agree on Highlight extraction for the
 // inputs that matter. NOT whole-tree equality (the webview nests code
 // sub-languages, so fenced-code subtrees legitimately differ) — only the
 // Highlight/HighlightMark spans are compared, plus the "no Highlight inside
 // code" cases must agree in BOTH.
 
-/** Highlight/HighlightMark spans from the HOST parser. */
+/** Highlight/HighlightMark spans from the shared parser. */
 function hostHl(src: string): string[] {
   const out: string[] = [];
-  parseMarkdown(src).iterate({
+  gfmParser.parse(src).iterate({
     enter: (n) => {
       if (n.name === "Highlight" || n.name === "HighlightMark") {
         out.push(`${n.name}[${n.from},${n.to})`);
@@ -42,7 +42,7 @@ function webviewHl(src: string): string[] {
   return out;
 }
 
-describe("host↔webview Highlight parity", () => {
+describe("shared↔webview Highlight parity", () => {
   it.each([
     "==plain==",
     "==[x](https://example.com)==",

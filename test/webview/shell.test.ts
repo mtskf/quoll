@@ -1153,6 +1153,7 @@ describe("shell — own-lineage Documents never rewind un-acked bytes", () => {
       eol: "\n",
     };
     let canWrite = true;
+    let saved = seed;
     let taken = 0;
     let applying: { content: string; pre: string } | null = null;
     const out: HostToWebview[] = [];
@@ -1183,6 +1184,17 @@ describe("shell — own-lineage Documents never rewind un-acked bytes", () => {
     const host = {
       toasts,
       disk: () => doc.content,
+      save() {
+        saved = doc.content;
+      },
+      saved: () => saved,
+      changeEol() {
+        const previous = doc.version;
+        doc.content = doc.content.replace(/\r?\n/g, "\r\n");
+        doc.eol = "\r\n";
+        doc.version++;
+        run({ type: "documentChanged", documentVersion: doc.version, lineageSince: previous });
+      },
       setCanWrite(v: boolean) {
         canWrite = v;
       },
@@ -1280,8 +1292,58 @@ describe("shell — own-lineage Documents never rewind un-acked bytes", () => {
     return host;
   }
 
-  // The draft the host answered with `edit-rejected` stays on screen behind the
-  // "Cannot save" banner with no carrier in edit-sync.
+  it("saves unsafe text, reloads authoritative bytes, changes EOL and retains a refused correction", async () => {
+    const host = await start("seed");
+    typeAtEnd("\n[x](javascript:1)");
+    vi.advanceTimersByTime(300);
+    host.quiesce();
+    host.save();
+    const saved = "seed\n[x](javascript:1)";
+    expect(host.saved()).toBe(saved);
+    expect(viewText()).toBe(saved);
+    expect(noticeCount()).toBe(0);
+    host.ready();
+    host.pump();
+    expect(viewText()).toBe(saved);
+    host.changeEol();
+    host.ready();
+    host.pump();
+    typeAtEnd(" correction");
+    vi.advanceTimersByTime(300);
+    expect(editMessages().at(-1)?.content).toBe("seed\r\n[x](javascript:1) correction");
+    host.receive();
+    host.settle("refused");
+    host.pump();
+    expect(viewText()).toBe(`${saved} correction`);
+    expect(host.disk()).toBe("seed\r\n[x](javascript:1)");
+    expect(noticeCount(".quoll-notice-discard")).toBe(0);
+    expect(noticeCount(".quoll-notice-unsaved")).toBe(1);
+  });
+
+  it("successive unsafe edits settle and save, then an ordinary external edit needs no discard notice", async () => {
+    const host = await start("seed");
+    for (const addition of [
+      "\n[x](javascript:1)",
+      "\n![x](data:image/png,x)",
+      "\n---\ntitle: unfinished",
+    ]) {
+      const expected = viewText() + addition;
+      typeAtEnd(addition);
+      vi.advanceTimersByTime(300);
+      expect(editMessages().at(-1)?.content).toBe(expected);
+      host.quiesce();
+      host.save();
+      expect(host.saved()).toBe(expected);
+      expect(viewText()).toBe(expected);
+      expect(noticeCount()).toBe(0);
+    }
+    host.externalWrite("external X");
+    host.pump();
+    expect(viewText()).toBe("external X");
+    expect(noticeCount()).toBe(0);
+  });
+
+  // A transport failure keeps the visible draft in edit-sync until retry or resync.
   async function startWithFailedSend() {
     const host = await start("a\nb");
     postMessage.mockImplementation((message: unknown) => {

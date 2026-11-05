@@ -1903,3 +1903,69 @@ describe("host-session-core: Markdown text admission", () => {
     ).toEqual([pDoc(3, 0, 2)]);
   });
 });
+
+describe("host-session-core: Markdown storage settlements", () => {
+  it.each([
+    "[x](javascript:alert(1))",
+    "![x](data:image/svg+xml,test)",
+    "[x](file:///tmp/example.md)",
+    "[x](//example.com/path)",
+    "[x](javascript&#58;alert(1))",
+    "[x][id]\n\n[id]: javascript:alert(1)",
+    "![x][id]\n\n[id]: data:image/png,x",
+    "[id][]\n\n[id]: file:///tmp/x",
+    "[id]\n\n[id]: //example.com/x",
+    "| h |\n| --- |\n| [x](javascript:1) |",
+    "<javascript:alert(1)>",
+    "<xmpp:user@example.com>",
+    "---\ntitle: unfinished",
+    "---\ntitle: x\u2028---\n---\nbody\n",
+    "---\ntitle: x\r---\n---\nbody\n",
+    "[unused]: javascript:1\n",
+    "[x][id]\n\n[id]: https://example.com\n[id]: javascript:1\n",
+  ])("applies and acknowledges exact text %j", (content) => {
+    const accepted = core.transition(base(), edit({ content }));
+    expect(accepted.effects).toEqual([{ type: "applyEdit", content, baseDocVersion: 1 }]);
+    const changed = core.transition(accepted.state, documentChanged(2));
+    const ack = core.transition(changed.state, settled({ currentContent: content }));
+    expect(reseedIn(ack.effects)).toEqual(pDoc(2, 0, 1));
+    expect(ack.state.pendingApplyBaseVersion).toBeNull();
+    const ready = core.transition(ack.state, {
+      type: "ready",
+      documentVersion: 2,
+      lineageSince: 2,
+    });
+    expect(reseedIn(ready.effects)).toEqual(pDoc(2, 0, 1));
+  });
+
+  it("successive formerly rejected edits settle with normal Documents", () => {
+    let state = base();
+    let currentContent = "cur";
+    for (const [index, content] of [
+      "[x](javascript:1)",
+      "![x](data:image/png,x)",
+      "---\ntitle: unfinished",
+    ].entries()) {
+      const version = index + 1;
+      const accepted = core.transition(
+        state,
+        edit({
+          editId: version,
+          baseDocVersion: version,
+          documentVersion: version,
+          currentContent,
+          content,
+        })
+      );
+      expect(accepted.effects).toEqual([{ type: "applyEdit", content, baseDocVersion: version }]);
+      const changed = core.transition(accepted.state, documentChanged(version + 1));
+      const ack = core.transition(
+        changed.state,
+        settled({ settledVersion: version + 1, currentContent: content })
+      );
+      expect(reseedIn(ack.effects)).toEqual(pDoc(version + 1, 0, version));
+      state = ack.state;
+      currentContent = content;
+    }
+  });
+});

@@ -1,7 +1,6 @@
 // @vitest-environment happy-dom
 import { markdownLanguage } from "@codemirror/lang-markdown";
 import { describe, expect, it, vi } from "vitest";
-import { validateMarkdownForWrite } from "../../../src/markdown/validate-for-write.js";
 import { htmlToMarkdown } from "../../../src/webview/cm/paste/html-to-markdown.js";
 
 // The converter returns a discriminated result; these tests predate that and
@@ -155,7 +154,6 @@ describe("htmlToMarkdown — inline constructs", () => {
   it("angle-brackets a link destination containing parens", () => {
     const md = convert('<p><a href="https://en.wikipedia.org/wiki/Foo_(bar)">t</a></p>');
     expect(md).toBe("[t](<https://en.wikipedia.org/wiki/Foo_(bar)>)");
-    expect(validateMarkdownForWrite(`${md}\n`).ok).toBe(true);
   });
   it("escapes markdown-active characters in text so they stay literal", () => {
     expect(convert("<p>a*b_c[d]e`f</p>")).toBe("a\\*b\\_c\\[d\\]e\\`f");
@@ -212,17 +210,14 @@ describe("htmlToMarkdown — inline constructs", () => {
     // would have parsed. Percent-encoding would change the href the link opens.
     const md = convert('<p><a href="https://x.com/a<b>c">t</a></p>');
     expect(md).toBe("[t](https://x.com/a&lt;b&gt;c)");
-    expect(validateMarkdownForWrite(`${md}\n`).ok).toBe(true);
   });
   it("angle-brackets a link destination containing a space", () => {
     const md = convert('<p><a href="https://x.com/a b">t</a></p>');
     expect(md).toBe("[t](<https://x.com/a b>)");
-    expect(validateMarkdownForWrite(`${md}\n`).ok).toBe(true);
   });
   it("angle-wraps a destination with both a space and angle brackets", () => {
     const md = convert('<p><a href="https://x.com/a b<c>d">t</a></p>');
     expect(md).toBe("[t](<https://x.com/a b&lt;c&gt;d>)");
-    expect(validateMarkdownForWrite(`${md}\n`).ok).toBe(true);
   });
   it("keeps a literal entity, a backslash, and a numeric reference in an href intact", () => {
     // The href ATTRIBUTE value below is what the DOM hands the converter after its
@@ -232,8 +227,7 @@ describe("htmlToMarkdown — inline constructs", () => {
       '<p><a href="https://x.com/?a=1&amp;amp;b=2&amp;copy;&amp;#58;\\_c">t</a></p>'
     );
     expect(md).toBe("[t](https://x.com/?a=1&amp;amp;b=2&amp;copy;&amp;#58;\\\\_c)");
-    // `&copy;` unescaped decodes to the NUL substitute and the write is refused.
-    expect(validateMarkdownForWrite(`${md}\n`).ok).toBe(true);
+    // Escaping preserves the literal entity in the converted destination.
   });
   it("escapes a blockquote `>` marker at a line start", () => {
     expect(convert("<p>> not a quote</p>")).toBe("\\> not a quote");
@@ -250,10 +244,9 @@ describe("htmlToMarkdown — inline constructs", () => {
     const deep = `${"<b>".repeat(300)}x${"</b>".repeat(300)}`;
     expect(convert(deep)).toBeNull();
   });
-  it("produces output the host write-gate accepts", () => {
+  it("drops unsafe link targets while preserving surrounding text", () => {
     const md = convert('<p><a href="javascript:alert(1)">x</a> a|b ---</p>');
-    expect(md).not.toBeNull();
-    expect(validateMarkdownForWrite(`${md}\n`).ok).toBe(true);
+    expect(md).toBe("x a\\|b ---");
   });
 });
 
