@@ -27,6 +27,7 @@ import {
   defineLineCollapseField,
   type LineCollapseSpec,
 } from "../collapse/line-collapse-field.js";
+import { leadingFrontmatterEnd } from "../frontmatter/detect.js";
 import { fencedCollapseTarget } from "./fenced-code-collapse-state.js";
 import { FencedCollapseToggleWidget } from "./fenced-code-collapse-widget.js";
 
@@ -186,11 +187,21 @@ function computeExtendedSpan(tr: Transaction): Interval[] {
 // is narrower than the shared predicate on purpose — this field's hot path is editing INSIDE
 // a code fence, where a `#` comment or a `___` line must stay bounded; ../structural-guard.ts's
 // header owns that rationale.
+//
+// A frontmatter boundary move flips the geometry's `fmEnd` gate for a fence arbitrarily far
+// away without touching its bytes (image-field.ts G3). `fmEnd` is the closer line's `.to`, so
+// even a one-keystroke rigid shift inside the frontmatter body changes it and takes "full" —
+// the same accepted over-trigger as image G3; the fence hot path (editing inside a code
+// fence) never reaches it. Every move that can flip the gate (a closer appearing, vanishing
+// or re-identified) edits a `---` line, which STRUCTURAL already catches, so this arm is a
+// defence against STRUCTURAL being narrowed: no test goes red on it alone (bounded ≡ full pins
+// the behaviour).
 const fencedCollapseSpec: LineCollapseSpec<null> = {
   ...fencedCollapseTarget,
   makeWidget: ({ key, expanded, hiddenCount }) =>
     new FencedCollapseToggleWidget(key, expanded, hiddenCount),
   docChangePlan: (tr, prevBlocks) =>
+    leadingFrontmatterEnd(tr.startState) !== leadingFrontmatterEnd(tr.state) ||
     touchesStructural(tr) ||
     topLevelBoundaryRisk(tr, prevBlocks) ||
     !syntaxTreeAvailable(tr.state, tr.state.doc.length)
