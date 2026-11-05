@@ -637,17 +637,17 @@ describe("host-session-core: applyEditSettled drain", () => {
     ]);
   });
 
+  // inFlight === observed so `canDrain` holds and the drain itself reaches the
+  // readonly refusal (a mismatched in-flight would take the non-drain path).
   it.each([
     ["byte-identical", "a\nb", "a\nb"],
     ["EOL-equivalent", "a\nb", "a\r\nb"],
-  ])("post-dispose readonly observed stash stays silent (%s)", (_name, stash, observed) => {
+  ])("post-dispose readonly DRAIN with the stash already in the observed text stays silent (%s)", (_name, text, observed) => {
     const r = core.transition(
-      lockedWithStash("first", stash, { disposed: true }),
+      lockedWithStash(observed, text, { disposed: true }),
       settled({ canWrite: false, currentContent: observed })
     );
-    expect(r.effects.some((e) => e.type === "rescueUnsavedDraft" || e.type === "showError")).toBe(
-      false
-    );
+    expect(r.effects).toEqual([]);
   });
 
   it.each([
@@ -681,6 +681,31 @@ describe("host-session-core: applyEditSettled drain", () => {
       content: "later",
       reason: "the preceding save failed (boom)",
     });
+  });
+
+  it("post-dispose divergence alone blocks the drain and rescues the stash once", () => {
+    // currentContent matches the in-flight text, so only `divergedAfterApply`
+    // keeps `canDrain` false.
+    const r = core.transition(
+      lockedWithStash("first", "later", { disposed: true }),
+      settled({ currentContent: "first", divergedAfterApply: true })
+    );
+    expect(r.effects.filter((e) => e.type === "rescueUnsavedDraft")).toEqual([
+      {
+        type: "rescueUnsavedDraft",
+        content: "later",
+        reason: "the preceding write did not leave the intended text in the document",
+      },
+    ]);
+    expect(r.effects.some((e) => e.type === "applyEdit")).toBe(false);
+  });
+
+  it("alive divergence alone blocks the drain", () => {
+    const r = core.transition(
+      lockedWithStash("first", "later"),
+      settled({ currentContent: "first", divergedAfterApply: true })
+    );
+    expect(r.effects.some((e) => e.type === "applyEdit")).toBe(false);
   });
 
   it("an already observed stash keeps the preceding failure toast", () => {
@@ -764,6 +789,18 @@ describe("host-session-core: applyEditSettled drain", () => {
           "Quoll could not verify the final edit after the editor closed. Reopen the file to check its contents.",
       },
     ]);
+    // Divergence alone (observed text present, but not what the drain wrote) warns too.
+    const diverged = core.transition(
+      drained.state,
+      settled({ currentContent: "other", settledVersion: 6, divergedAfterApply: true })
+    );
+    expect(diverged.effects.filter((e) => e.type === "showError")).toHaveLength(1);
+    // Twin: the drained text observed with no annotation stays silent.
+    const clean = core.transition(
+      drained.state,
+      settled({ currentContent: "later", settledVersion: 6 })
+    );
+    expect(clean.effects).toEqual([]);
   });
 
   it("post-dispose no-op drain does not rescue", () => {

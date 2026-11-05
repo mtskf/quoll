@@ -197,18 +197,6 @@ describe("createHostSessionStep", () => {
     }
   });
 
-  // Mutation coverage: `releasesWriteLockOnCommit`'s `disposed` case answers
-  // `null`, but no other test in this suite drives a `disposed` event through
-  // `step` — so a mutation that moved `disposed` into the same rescue arm as
-  // `applyEditSettled` passed the whole suite unnoticed. (Since that helper
-  // returns the SETTLEMENT rather than a boolean, tsc now rejects such a move
-  // outright; this test still covers the runtime behaviour.) `disposed` needs no
-  // rescue of its own here: see `releasesWriteLockOnCommit`'s doc for why the
-  // drop, if any, rides a LATER, independent `applyEditSettled` step instead.
-  // The half PR #406 did not pay: the rescue released the deferred side
-  // channels' at-receipt guards but never the lock itself, so the payment was
-  // one-shot — a retried side channel re-deferred behind a lock nothing would
-  // ever release.
   it("carries only the captured settlement observation through direct recovery", () => {
     const calls: HostSessionEvent[] = [];
     const step = createRealHostSessionStep({
@@ -235,6 +223,18 @@ describe("createHostSessionStep", () => {
     });
   });
 
+  // Mutation coverage: `releasesWriteLockOnCommit`'s `disposed` case answers
+  // `null`, but no other test in this suite drives a `disposed` event through
+  // `step` — so a mutation that moved `disposed` into the same rescue arm as
+  // `applyEditSettled` passed the whole suite unnoticed. (Since that helper
+  // returns the SETTLEMENT rather than a boolean, tsc now rejects such a move
+  // outright; this test still covers the runtime behaviour.) `disposed` needs no
+  // rescue of its own here: see `releasesWriteLockOnCommit`'s doc for why the
+  // drop, if any, rides a LATER, independent `applyEditSettled` step instead.
+  // The half PR #406 did not pay: the rescue released the deferred side
+  // channels' at-receipt guards but never the lock itself, so the payment was
+  // one-shot — a retried side channel re-deferred behind a lock nothing would
+  // ever release.
   it("commits the write-lock recovery when an applyEditSettled transition throws — BEFORE the barrier settle", () => {
     const order: string[] = [];
     const step = createHostSessionStep({
@@ -304,18 +304,19 @@ describe("createHostSessionStep", () => {
   // pass for a member that fell through to the default instead.
   it("does NOT recover a throwing RECOVERY transition (no rescue of the rescue)", () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const recovered = vi.fn(() => [] as readonly HostSessionEffect[]);
+    const commit = vi.fn(() => {
+      throw new Error("reducer bug");
+    });
     const step = createRealHostSessionStep({
-      commitTransition: () => {
-        throw new Error("reducer bug");
-      },
+      commitTransition: commit,
       runEffects: () => {},
       settleEditBarrier: () => {},
     });
     expect(() =>
       step({ type: "settlementTransitionFailed", settledVersion: 3, currentContent: null })
     ).toThrow("reducer bug");
-    expect(recovered).not.toHaveBeenCalled();
+    // One commit only: a second would be a recovery of the recovery.
+    expect(commit).toHaveBeenCalledTimes(1);
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
   });
