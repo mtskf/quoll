@@ -1381,26 +1381,8 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
               "an internal error interrupted the preceding save"
             )
           : [];
-        const lostStash = stash !== null && !ackLabelObserved;
         let lossClause: string;
-        if (!lostStash && (state.disposed || ackLabelObserved)) {
-          // GENUINELY LOSS-FREE, which is why this is the only branch keyed on
-          // BOTH halves. Exactly two states reach it:
-          //   - ALIVE with an ack coming (`ackLabelObserved`), so the retained
-          //     replay buffer gets replayed. Nothing was lost.
-          //   - POST-DISPOSE with nothing stashed: no stash to drop, and the
-          //     in-flight bytes went with the iframe, so there is no remedy left
-          //     to advise beyond checking the file.
-          // ⚠️ The third state that used to land here — ALIVE, ack WITHHELD,
-          // `stash === null` — does NOT any more, and must not be routed back:
-          // this arm is outcome-blind, so the webview's IN-FLIGHT bytes sit under
-          // exactly the conditional four-step loss the ⚠️ above spells out for a
-          // stash, and "Reopen" would destroy the buffer still holding them. It
-          // takes the hedge below instead, which is why that hedge no longer
-          // names a stash.
-          lossClause = " Reopen the file to check its contents.";
-        } else if (state.disposed) {
-          // The stash was already observed, or no stash was present.
+        if (state.disposed || ackLabelObserved) {
           lossClause = " Reopen the file to check its contents.";
         } else {
           // ALIVE with a WITHHELD ack — HEDGED (the ⚠️ above already covers why
@@ -1431,17 +1413,21 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // the invariant test greps that identifier's `:` form over
         // comment-stripped source, and a detail key of that name would read as a
         // hand-rolled version write and redden it.
+        let stashStatus = "";
+        if (stash !== null) {
+          if (rescued.length > 0) {
+            stashStatus = " and the pending stash was handed to rescue";
+          } else if (state.disposed) {
+            stashStatus = " and the pending stash was already present";
+          } else {
+            stashStatus = " and the pending stash was dropped";
+          }
+        }
         const triage: HostSessionEffect = {
           type: "logWarn",
           message:
             "[quoll] settlement transition threw; the write lock was force-released by the recovery arm" +
-            (stash === null
-              ? ""
-              : rescued.length
-                ? " and the pending stash was handed to rescue"
-                : state.disposed
-                  ? " and the pending stash was already present"
-                  : " and the pending stash was dropped"),
+            stashStatus,
           detail: {
             uri: state.context.uriString,
             heldBase,
