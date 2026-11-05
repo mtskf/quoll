@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   buildDocumentMessage,
   buildEditorConfigMessage,
-  buildEditRejectedMessage,
   buildThemeMessage,
 } from "../../../src/extension/session/document-message.js";
 import { isHostToWebview, PROTOCOL_VERSION } from "../../../src/shared/protocol.js";
@@ -235,47 +234,5 @@ describe("buildEditorConfigMessage", () => {
         "type",
       ].sort()
     );
-  });
-});
-
-describe("buildEditRejectedMessage", () => {
-  it("constructs the final-shape message from a MarkdownError", () => {
-    const msg = buildEditRejectedMessage({
-      code: "unsafe_url",
-      message: "URL is not in the allowlist: javascript:alert(1)",
-    });
-    expect(msg).toEqual({
-      protocol: PROTOCOL_VERSION,
-      type: "edit-rejected",
-      error: {
-        code: "unsafe_url",
-        message: "URL is not in the allowlist: javascript:alert(1)",
-      },
-    });
-  });
-
-  it("preserves invalid_frontmatter code", () => {
-    const msg = buildEditRejectedMessage({
-      code: "invalid_frontmatter",
-      message: "Frontmatter body contains a bare `---` line",
-    });
-    expect(msg.error.code).toBe("invalid_frontmatter");
-  });
-
-  it("strips detail from the wire shape", () => {
-    // detail is intentionally NOT on the wire — keeps the protocol surface
-    // small. Forward-compat additions are cheap because of the validator's
-    // structural pass-through (test/shared/protocol.test.ts pin).
-    const msg = buildEditRejectedMessage({
-      code: "unsafe_url",
-      message: "URL is not in the allowlist: javascript:alert(1)",
-      detail: { url: "javascript:alert(1)" },
-    });
-    expect(Object.keys(msg.error).sort()).toEqual(["code", "message"]);
-  });
-
-  it("pins the emitted top-level key set", () => {
-    const msg = buildEditRejectedMessage({ code: "unsafe_url", message: "x" });
-    expect(Object.keys(msg).sort()).toEqual(["error", "protocol", "type"]);
   });
 });

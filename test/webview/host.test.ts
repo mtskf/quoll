@@ -221,3 +221,44 @@ describe("subscribeToHost — boundary validation + diagnostics", () => {
     expect(handler).not.toHaveBeenCalled();
   });
 });
+
+describe("obsolete host messages", () => {
+  it("drops edit-rejected under the current envelope and protocol-3 Documents", async () => {
+    const { subscribeToHost } = await freshHost();
+    const received = vi.fn();
+    const unsubscribe = subscribeToHost(received);
+    try {
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: {
+            protocol: PROTOCOL_VERSION,
+            type: "edit-rejected",
+            error: { code: "unsafe_url", message: "obsolete" },
+          },
+        })
+      );
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: {
+            protocol: 3,
+            type: "theme",
+            themeKind: "dark",
+          },
+        })
+      );
+      expect(received).not.toHaveBeenCalled();
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: {
+            protocol: PROTOCOL_VERSION,
+            type: "theme",
+            themeKind: "dark",
+          },
+        })
+      );
+      expect(received).toHaveBeenCalledTimes(1);
+    } finally {
+      unsubscribe();
+    }
+  });
+});

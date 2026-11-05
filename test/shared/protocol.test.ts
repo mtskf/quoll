@@ -662,8 +662,8 @@ describe("isHostToWebview — edit-rejected", () => {
     error: { code: "unsafe_url", message: "URL is not in the allowlist: javascript:alert(1)" },
   });
 
-  it("accepts a fully valid edit-rejected", () => {
-    expect(isHostToWebview(validEditRejected())).toBe(true);
+  it("rejects obsolete edit-rejected under the current envelope", () => {
+    expect(isHostToWebview(validEditRejected())).toBe(false);
   });
 
   it("rejects missing error.code", () => {
@@ -699,8 +699,8 @@ describe("isHostToWebview — edit-rejected", () => {
     expect(isHostToWebview({ ...validEditRejected(), protocol: 999 })).toBe(false);
   });
 
-  it("validator is structurally pass-through on edit-rejected: accepts arbitrary unknown extra fields", () => {
-    expect(isHostToWebview({ ...validEditRejected(), futureField: "ignored" })).toBe(true);
+  it("rejects obsolete edit-rejected even with extra fields", () => {
+    expect(isHostToWebview({ ...validEditRejected(), futureField: "ignored" })).toBe(false);
   });
 });
 
@@ -1290,5 +1290,12 @@ describe("format-document message", () => {
     expect(isHostToWebview({ protocol: PROTOCOL_VERSION + 1, type: "format-document" })).toBe(
       false
     );
+  });
+});
+
+describe("protocol 3 messages are obsolete", () => {
+  it("rejects the previous envelope in both directions", () => {
+    expect(isHostToWebview({ ...validDocument(), protocol: 3 })).toBe(false);
+    expect(isWebviewToHost({ ...validReady(), protocol: 3 })).toBe(false);
   });
 });

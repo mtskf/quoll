@@ -1140,14 +1140,10 @@ describe("shell — own-lineage Documents never rewind un-acked bytes", () => {
   // post order. The webview under test is the real shell; only the VS Code
   // plumbing between the two is stood in for.
   function realHost(seed: string) {
-    // Non-null while the write validator refuses every Edit with this error.
-    let rejectWith: { code: "unsafe_url"; message: string } | null = null;
     const core = createHostSessionCore(
       { uriString: "file:///t.md", fsPath: "/t.md" },
       {
         mintEpochGeneration: () => 11,
-        validateForWrite: () =>
-          rejectWith === null ? { ok: true } : { ok: false, error: rejectWith },
       }
     );
     let state: HostSessionState = core.initialState(1);
@@ -1177,8 +1173,6 @@ describe("shell — own-lineage Documents never rewind un-acked bytes", () => {
               settledEditId: e.settledEditId,
             })
           );
-        } else if (e.type === "postEditRejected") {
-          out.push({ protocol: PROTOCOL_VERSION, type: "edit-rejected", error: e.error });
         } else if (e.type === "applyEdit") {
           applying = { content: e.content, pre: doc.content };
         } else if (e.type === "showError") {
@@ -1191,10 +1185,6 @@ describe("shell — own-lineage Documents never rewind un-acked bytes", () => {
       disk: () => doc.content,
       setCanWrite(v: boolean) {
         canWrite = v;
-      },
-      // Make the write validator refuse every Edit from here on.
-      failValidation() {
-        rejectWith = { code: "unsafe_url", message: "URL is not in the allowlist" };
       },
       // Another writer replaced the document's text: the version advances and
       // no lineage covers it.
@@ -1292,20 +1282,23 @@ describe("shell — own-lineage Documents never rewind un-acked bytes", () => {
 
   // The draft the host answered with `edit-rejected` stays on screen behind the
   // "Cannot save" banner with no carrier in edit-sync.
-  async function startWithRejectedDraft() {
+  async function startWithFailedSend() {
     const host = await start("a\nb");
-    host.failValidation();
+    postMessage.mockImplementation((message: unknown) => {
+      if ((message as { type?: string }).type === "edit") {
+        throw new Error("transport failed");
+      }
+    });
     typeAtEnd("x");
     vi.advanceTimersByTime(300);
-    host.receive(); // parse-failed
-    host.pump(); // edit-rejected
+    host.lose();
     expect(viewText()).toBe("a\nbx");
     expect(container?.querySelector(".quoll-banner.error")).not.toBeNull();
     return host;
   }
 
-  it("a rejected draft replaced by an external write is announced exactly once", async () => {
-    const host = await startWithRejectedDraft();
+  it("an unsent draft replaced by an external write is announced exactly once", async () => {
+    const host = await startWithFailedSend();
     expect(noticeCount(".quoll-notice-discard")).toBe(0);
     host.externalWrite("theirs");
     host.pump();
@@ -1314,7 +1307,7 @@ describe("shell — own-lineage Documents never rewind un-acked bytes", () => {
   });
 
   it("a throwing discard notifier does not stop the replacing Document from landing", async () => {
-    const host = await startWithRejectedDraft();
+    const host = await startWithFailedSend();
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     const realSetAttribute = Element.prototype.setAttribute;
     // showNotice builds the dismiss button with this exact attribute, so this
@@ -1333,7 +1326,7 @@ describe("shell — own-lineage Documents never rewind un-acked bytes", () => {
       host.externalWrite("theirs");
       expect(() => host.pump()).not.toThrow();
       expect(viewText()).toBe("theirs");
-      // The reducer received the `document` (it clears serializeError) — the
+      // The reducer received the `document` (it clears sendFailure) — the
       // view and the reducer did not diverge.
       expect(container?.querySelector(".quoll-banner.error")).toBeNull();
       expect(noticeCount(".quoll-notice-discard")).toBe(0);
@@ -1347,203 +1340,6 @@ describe("shell — own-lineage Documents never rewind un-acked bytes", () => {
     }
   });
 
-  describe("Copy draft on the discard notice", () => {
-    const clipboardBefore = Object.getOwnPropertyDescriptor(navigator, "clipboard");
-    const writeText = vi.fn<(text: string) => Promise<void>>();
-    beforeEach(() => {
-      writeText.mockReset();
-      writeText.mockResolvedValue(undefined);
-      Object.defineProperty(navigator, "clipboard", {
-        configurable: true,
-        value: { writeText },
-      });
-    });
-    afterEach(() => {
-      if (clipboardBefore) {
-        Object.defineProperty(navigator, "clipboard", clipboardBefore);
-      } else {
-        Reflect.deleteProperty(navigator, "clipboard");
-      }
-    });
-
-    const copyButtons = (): HTMLButtonElement[] =>
-      Array.from(
-        (container as HTMLElement).querySelectorAll<HTMLButtonElement>(".quoll-resync-notice-copy")
-      );
-    const copyButton = (): HTMLButtonElement => {
-      const [button] = copyButtons();
-      if (!button) {
-        throw new Error("no Copy draft button");
-      }
-      return button;
-    };
-    // Let the clipboard promise's settle handlers run (promises are not faked).
-    const settled = async (): Promise<void> => {
-      await Promise.resolve();
-      await Promise.resolve();
-    };
-    function deferred() {
-      let resolve!: () => void;
-      let reject!: (err: unknown) => void;
-      const promise = new Promise<void>((res, rej) => {
-        resolve = res;
-        reject = rej;
-      });
-      return { promise, resolve, reject };
-    }
-    // Draft "a\nbx" replaced by "theirs": the notice is up with its button.
-    async function startWithReplacedDraft() {
-      const host = await startWithRejectedDraft();
-      host.externalWrite("theirs");
-      host.pump();
-      expect(viewText()).toBe("theirs");
-      return host;
-    }
-    // A SECOND draft ("theirsy") rejected and replaced while the notice is up.
-    function replaceSecondDraft(host: ReturnType<typeof realHost>): void {
-      typeAtEnd("y");
-      vi.advanceTimersByTime(300);
-      host.receive();
-      host.pump(); // edit-rejected
-      expect(viewText()).toBe("theirsy");
-      host.externalWrite("theirs again");
-      host.pump();
-      expect(viewText()).toBe("theirs again");
-    }
-    // A discard edit-sync reports itself, which carries no bytes: a keystroke
-    // still in the debounce window when a foreign write lands.
-    function draftlessDiscard(host: ReturnType<typeof realHost>, content: string): void {
-      typeAtEnd("z");
-      host.externalWrite(content);
-      host.pump();
-      expect(viewText()).toBe(content);
-    }
-
-    it("copies exactly the replaced draft and then reads Copied", async () => {
-      await startWithReplacedDraft();
-      const notice = (container as HTMLElement).querySelector(".quoll-notice-discard");
-      expect(notice?.querySelectorAll(".quoll-resync-notice-copy").length).toBe(1);
-      const button = copyButton();
-      expect(button.textContent).toBe("Copy draft");
-      // The dismiss control stays the last thing in the notice.
-      expect(notice?.lastElementChild?.classList.contains("quoll-resync-notice-dismiss")).toBe(
-        true
-      );
-      button.click();
-      expect(writeText).toHaveBeenCalledTimes(1);
-      expect(writeText).toHaveBeenCalledWith("a\nbx");
-      await settled();
-      expect(button.textContent).toBe("Copied");
-    });
-
-    it("a second replaced draft reuses the notice and its one button, which now copies the second draft", async () => {
-      const host = await startWithReplacedDraft();
-      const notice = (container as HTMLElement).querySelector(".quoll-notice-discard");
-      const button = copyButton();
-      button.click();
-      await settled();
-      expect(button.textContent).toBe("Copied");
-      replaceSecondDraft(host);
-      expect((container as HTMLElement).querySelector(".quoll-notice-discard")).toBe(notice);
-      expect(copyButtons()).toEqual([button]);
-      // "Copied" was about the first draft; it must not claim the second one.
-      expect(button.textContent).toBe("Copy draft");
-      button.click();
-      expect(writeText).toHaveBeenLastCalledWith("theirsy");
-    });
-
-    it("a discard that carries no bytes leaves the button and its draft in place", async () => {
-      const host = await startWithReplacedDraft();
-      const button = copyButton();
-      draftlessDiscard(host, "other");
-      expect(copyButtons()).toEqual([button]);
-      button.click();
-      expect(writeText).toHaveBeenCalledTimes(1);
-      expect(writeText).toHaveBeenCalledWith("a\nbx");
-    });
-
-    it("a discard that carries no bytes shows no Copy button on its own", async () => {
-      const host = await start("s");
-      draftlessDiscard(host, "other");
-      expect(noticeCount(".quoll-notice-discard")).toBe(1);
-      expect(copyButtons()).toEqual([]);
-    });
-
-    it("dismiss empties the draft: a later byte-less discard shows no Copy button", async () => {
-      const host = await startWithReplacedDraft();
-      expect(copyButtons().length).toBe(1);
-      (
-        (container as HTMLElement).querySelector(".quoll-resync-notice-dismiss") as HTMLElement
-      ).click();
-      expect(noticeCount()).toBe(0);
-      draftlessDiscard(host, "other");
-      expect(noticeCount(".quoll-notice-discard")).toBe(1);
-      expect(copyButtons()).toEqual([]);
-    });
-
-    it("reads Copy failed when the clipboard refuses, without an unhandled rejection", async () => {
-      const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
-      const unhandled = vi.fn();
-      process.on("unhandledRejection", unhandled);
-      try {
-        await startWithReplacedDraft();
-        const refusal = new Error("denied");
-        writeText.mockRejectedValue(refusal);
-        const button = copyButton();
-        button.click();
-        await settled();
-        expect(button.textContent).toBe("Copy failed");
-        expect(consoleWarn).toHaveBeenCalledWith("[quoll] copy draft failed", refusal);
-        // A clipboard API that is missing altogether reads the same way.
-        Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
-        button.textContent = "";
-        expect(() => button.click()).not.toThrow();
-        expect(button.textContent).toBe("Copy failed");
-        vi.useRealTimers();
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        expect(unhandled).not.toHaveBeenCalled();
-      } finally {
-        process.off("unhandledRejection", unhandled);
-      }
-    });
-
-    it.each([
-      "resolve",
-      "reject",
-    ] as const)("a copy of the first draft that settles (%s) after a second draft arrived does not label the second", async (outcome) => {
-      vi.spyOn(console, "warn").mockImplementation(() => {});
-      const host = await startWithReplacedDraft();
-      const first = deferred();
-      writeText.mockReturnValueOnce(first.promise);
-      const button = copyButton();
-      button.click();
-      replaceSecondDraft(host);
-      expect(button.textContent).toBe("Copy draft");
-      if (outcome === "resolve") {
-        first.resolve();
-      } else {
-        first.reject(new Error("late"));
-      }
-      await settled();
-      expect(button.textContent).toBe("Copy draft");
-    });
-
-    it("two clicks on one draft: a late rejection of the first does not undo the second's Copied", async () => {
-      vi.spyOn(console, "warn").mockImplementation(() => {});
-      await startWithReplacedDraft();
-      const first = deferred();
-      writeText.mockReturnValueOnce(first.promise);
-      const button = copyButton();
-      button.click();
-      button.click(); // resolves
-      await settled();
-      expect(button.textContent).toBe("Copied");
-      first.reject(new Error("late"));
-      await settled();
-      expect(button.textContent).toBe("Copied");
-    });
-  });
-
   describe("against the real host reducer", () => {
     // Against the REAL host, no legitimate own-lineage flow may read as
     // foreign: a discard notice in any of these columns means a Document
@@ -1553,7 +1349,7 @@ describe("shell — own-lineage Documents never rewind un-acked bytes", () => {
     });
 
     it("a rejected draft is not announced as discarded when the external write differs in line endings only", async () => {
-      const host = await startWithRejectedDraft();
+      const host = await startWithFailedSend();
       host.externalWrite("a\r\nbx", "\r\n");
       host.pump();
       expect(viewText()).toBe("a\nbx");
@@ -1777,25 +1573,12 @@ describe("shell — own-lineage Documents never rewind un-acked bytes", () => {
   describe("scripted Document sequences", () => {
     const G11 = { externalEpoch: 0, epochGeneration: 11 } as const;
     const seedS = (): HostToWebview => buildDocument({ docVersion: 1, content: "s", ...G11 });
-    const internalReject = (): HostToWebview =>
-      buildEditRejected({ code: "internal_error", message: "no" });
 
     async function startScripted(): Promise<void> {
       await mount();
       vi.useFakeTimers();
       drive(seedS());
     }
-
-    it("a keystroke in the debounce window survives an edit-rejected drain", async () => {
-      await startScripted();
-      typeAtEnd("x");
-      vi.advanceTimersByTime(300); // E(1, sx)
-      typeAtEnd("y");
-      vi.advanceTimersByTime(300); // buffered "sxy"
-      typeAtEnd("z"); // in the window
-      deliver(internalReject());
-      expect(viewText()).toBe("sxyz");
-    });
 
     it("a refusal does not outlive an identity transition", async () => {
       await startScripted();
@@ -1829,22 +1612,21 @@ describe("shell — own-lineage Documents never rewind un-acked bytes", () => {
       expect(editPairs()).toEqual([["sx", 1]]);
     });
 
-    it("the Document behind a rejected draft does not make the saved state read as foreign", async () => {
+    it("a saved Document does not make a refused correction read as foreign", async () => {
       await startScripted();
       typeAtEnd("x");
       vi.advanceTimersByTime(300); // A = E(1, sx): the host applies it
       typeAtEnd("!");
-      window.dispatchEvent(new Event("blur")); // B = E(1, sx!): stashed, then fails validation
-      // The host's drain: disk = A, the Document carries the DRAFT B, then the reject.
+      window.dispatchEvent(new Event("blur")); // B = E(1, sx!): stashed, then saved
+      // The host settles B with its authoritative bytes.
       drive(buildDocument({ docVersion: 2, content: "sx!", ...G11 }));
-      deliver(internalReject());
       deleteAtEnd(); // the user fixes the draft: "sx"…
       typeAtEnd("c"); // …"sxc"
       vi.advanceTimersByTime(300); // C = E(2, sxc)
       typeAtEnd("?");
       vi.advanceTimersByTime(300); // buffered "sxc?"
-      // C is refused: the host reposts its real document, A.
-      drive(buildDocument({ docVersion: 2, content: "sx", ...G11 }));
+      // C is refused: the host reposts its real document, B.
+      drive(buildDocument({ docVersion: 2, content: "sx!", ...G11 }));
       expect(noticeCount(".quoll-notice-discard")).toBe(0);
       expect(viewText()).toBe("sxc?");
       expect(editPairs().at(-1)).toEqual(["sxc?", 2]);
@@ -2006,118 +1788,6 @@ describe("shell — banner host is the editor's preceding sibling (renders above
     expect(editor.parentElement).toBe(main);
     const children = Array.from(main.children);
     expect(children.indexOf(bannerHost)).toBeLessThan(children.indexOf(editor));
-  });
-});
-
-// NOTE: the init-error surface test (vanilla ErrorBoundary replacement)
-// lives in test/webview/index-error.test.ts. It is in a separate file
-// so its host mock (getHost throws) does not collide with shell.test.ts's
-// baseline host mock; isolation at the file level avoids vi.resetModules
-// + vi.doMock + dynamic import interleavings.
-
-function buildEditRejected(
-  error: { code: string; message: string } = {
-    code: "unsafe_url",
-    message: "URL is not in the allowlist: javascript:alert(1)",
-  }
-): HostToWebview {
-  return {
-    protocol: PROTOCOL_VERSION,
-    type: "edit-rejected",
-    error,
-  };
-}
-
-describe("shell — edit-rejected routing", () => {
-  it("renders the serializeError banner with the host's reject message", async () => {
-    await mount();
-    deliver(buildDocument({ docVersion: 1, content: "hello\n" }));
-    deliver(buildEditRejected());
-    const banner = (container as HTMLElement).querySelector(".quoll-banner.error");
-    expect(banner?.textContent ?? "").toContain("URL is not in the allowlist: javascript:alert(1)");
-    // Pin data-code for the known-code path (symmetric with the unknown-code test).
-    expect(banner?.getAttribute("data-code")).toBe("unsafe_url");
-  });
-
-  it("edit-rejected with an unknown error.code still raises the banner without throwing", async () => {
-    // The wire delivers `error.code` typed as plain `string`; a future
-    // host shipping a literal this build does not know about (or a
-    // malformed message slipping past the boundary validator's
-    // `typeof === "string"` check) must NOT crash the shell.
-    // `narrowMarkdownErrorCode` falls back to "internal_error" and the
-    // banner still renders the host's `error.message` verbatim.
-    //
-    // The "banner renders" assertion alone would pass even without the
-    // narrow (an unsafe cast also reaches the banner), so this test
-    // additionally pins the documented fallback by calling
-    // `narrowMarkdownErrorCode` directly. Removing the Set/helper and
-    // restoring `as MarkdownErrorCode` makes the direct assertion go red.
-    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    await mount();
-    deliver(buildDocument({ docVersion: 1, content: "hello\n" }));
-    expect(() => {
-      deliver(
-        buildEditRejected({
-          code: "future_unknown_code",
-          message: "future host policy",
-        })
-      );
-    }).not.toThrow();
-    const banner = (container as HTMLElement).querySelector(".quoll-banner.error");
-    expect(banner).not.toBeNull();
-    expect(banner?.textContent ?? "").toContain("future host policy");
-    // No console.error from the shell — the narrow is silent, not noisy.
-    const quollErrors = consoleSpy.mock.calls.filter(
-      (args) => typeof args[0] === "string" && args[0].includes("[quoll]")
-    );
-    expect(quollErrors.length).toBe(0);
-    consoleSpy.mockRestore();
-
-    // Dispatch-path pin — asserts the shell's edit-rejected arm actually
-    // invokes narrowMarkdownErrorCode before dispatching, not just that the
-    // helper works in isolation. If shell.ts reverts to
-    // `code: message.error.code as MarkdownErrorCode`, the banner's
-    // data-code would carry "future_unknown_code" instead of
-    // "internal_error" and this assertion goes red.
-    // Note: this pin depends on banners.ts writing `err.code` verbatim to
-    // data-code. It correctly detects a revert of narrowMarkdownErrorCode in
-    // shell.ts because banners.ts is transparent (no code-canonicalization).
-    // If banners.ts ever adds defensive code normalization, move the pin to
-    // a spy on narrowMarkdownErrorCode or on the dispatch action payload.
-    expect(banner?.getAttribute("data-code")).toBe("internal_error");
-
-    // Secondary helper-isolation pin (kept for documentation of the
-    // narrowMarkdownErrorCode contract independently of the dispatch wire).
-    const { narrowMarkdownErrorCode } = await import("../../src/webview/shell.js");
-    expect(narrowMarkdownErrorCode("future_unknown_code")).toBe("internal_error");
-  });
-
-  it("user's LOCAL edit survives an edit-rejected (typed bytes are not overwritten)", async () => {
-    // The seed delivers disk bytes. The user types via the EditorView
-    // (programmatic transaction stands in for a keystroke — happy-dom does
-    // not faithfully fire CM input events). Then edit-rejected arrives.
-    // The user's typed bytes must STILL be in the editor's doc after the
-    // routing: the shell must NOT call editor.applyDocument on
-    // edit-rejected, so the editor view holds the user's bytes verbatim.
-    await mount();
-    deliver(buildDocument({ docVersion: 1, content: "seed body\n" }));
-
-    const mountEl = (container as HTMLElement).querySelector(".quoll-editor") as HTMLElement;
-    const view = EditorView.findFromDOM(mountEl);
-    if (!view) {
-      throw new Error("EditorView not found via findFromDOM");
-    }
-    // User types " edited" at the end of the doc.
-    view.dispatch({
-      changes: { from: view.state.doc.length, insert: " edited" },
-    });
-    const docBeforeReject = view.state.sliceDoc();
-    expect(docBeforeReject).toContain(" edited");
-
-    deliver(buildEditRejected());
-
-    const docAfterReject = view.state.sliceDoc();
-    expect(docAfterReject).toBe(docBeforeReject); // unchanged — user's bytes survived
   });
 });
 
@@ -2571,39 +2241,6 @@ describe("shell — relative image read-path seam (shell → editor → facet)",
   });
 });
 
-describe("shell — KNOWN_MARKDOWN_ERROR_CODES exhaustiveness", () => {
-  it("the Set covers every MarkdownErrorCode literal", async () => {
-    // The Set powers shell.ts's wire-boundary narrow
-    // (`narrowMarkdownErrorCode`). Exhaustiveness is pinned at compile
-    // time by `_AllLiteralsCovered` in shell.ts — adding a literal to
-    // `MarkdownErrorCode` without extending `MARKDOWN_ERROR_CODE_LITERALS`
-    // causes `pnpm compile` to fail with "Type 'false' is not assignable
-    // to type 'true'". This runtime test derives its fixture from the
-    // same tuple so no parallel hand-maintained list exists.
-    const { KNOWN_MARKDOWN_ERROR_CODES, MARKDOWN_ERROR_CODE_LITERALS } = await import(
-      "../../src/webview/shell.js"
-    );
-    for (const literal of MARKDOWN_ERROR_CODE_LITERALS) {
-      expect(KNOWN_MARKDOWN_ERROR_CODES.has(literal)).toBe(true);
-    }
-    // Size invariant: detects extra entries in the Set (the per-literal
-    // loop above detects missing entries).
-    expect(KNOWN_MARKDOWN_ERROR_CODES.size).toBe(MARKDOWN_ERROR_CODE_LITERALS.length);
-  });
-
-  it("narrowMarkdownErrorCode is identity on a known code", async () => {
-    const { narrowMarkdownErrorCode } = await import("../../src/webview/shell.js");
-    expect(narrowMarkdownErrorCode("unsafe_url")).toBe("unsafe_url");
-    expect(narrowMarkdownErrorCode("invalid_frontmatter")).toBe("invalid_frontmatter");
-  });
-
-  it("narrowMarkdownErrorCode falls back to internal_error on an unknown code", async () => {
-    const { narrowMarkdownErrorCode } = await import("../../src/webview/shell.js");
-    expect(narrowMarkdownErrorCode("future_unknown_code")).toBe("internal_error");
-    expect(narrowMarkdownErrorCode("")).toBe("internal_error");
-  });
-});
-
 describe("shell — teardown flush (close-without-save data loss)", () => {
   it("flushes pending content to the host on visibilitychange:hidden (before the debounce fires)", async () => {
     vi.useFakeTimers();
@@ -2785,5 +2422,39 @@ describe("attachTeardownListeners — perf onPageHide rides the after-init set",
       remove();
       winAdd.mockRestore();
     }
+  });
+});
+
+describe("shell — local send failure", () => {
+  it("shows the string banner, retains the view, and retries only the latest bytes", async () => {
+    await mount();
+    vi.useFakeTimers();
+    deliver(buildDocument({ docVersion: 1, content: "seed" }));
+    let fail = true;
+    postMessage.mockImplementation((message: unknown) => {
+      if ((message as { type?: string }).type === "edit" && fail) {
+        throw new Error("transport failed");
+      }
+    });
+    typeAtEnd("x");
+    vi.advanceTimersByTime(300);
+    expect(viewText()).toBe("seedx");
+    expect(container?.querySelector(".quoll-banner.error")?.textContent).toContain(
+      "transport failed"
+    );
+    expect(editMessages()).toHaveLength(1);
+    vi.advanceTimersByTime(600);
+    expect(editMessages()).toHaveLength(1);
+    fail = false;
+    typeAtEnd("y");
+    expect(container?.querySelector(".quoll-banner.error")).toBeNull();
+    expect(editMessages()).toHaveLength(1);
+    vi.advanceTimersByTime(300);
+    expect(editMessages()).toHaveLength(2);
+    expect(editMessages().at(-1)?.content).toBe("seedxy");
+    deliver(buildDocument({ docVersion: 2, content: "seedxy" }));
+    expect(viewText()).toBe("seedxy");
+    expect(noticeCount()).toBe(0);
+    expect(container?.querySelector(".quoll-banner.error")).toBeNull();
   });
 });

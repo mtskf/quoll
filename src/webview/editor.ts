@@ -27,7 +27,6 @@ import {
   PROTOCOL_VERSION,
   type WebviewToHost,
 } from "../shared/protocol.js";
-import { sameTextIgnoringEol } from "../shared/text-equality.js";
 import { applyCaret, type Caret, selectionCharCount, selectionToCaret } from "./cm/caret.js";
 import { quollCodeRefClickHandler, quollCodeRefKeymap } from "./cm/code-ref/code-ref-handlers.js";
 import { quollContextHandoffKeymap } from "./cm/context-handoff.js";
@@ -157,11 +156,8 @@ export type EditorOptions = {
    *  console.warn is devtools-only, which is no signal for a normal user).
    *  The full rule lives on `EditSyncOptions.onLocalEditDiscarded` (cm/edit-sync.ts)
    *  — do not restate it here; this is a pass-through.
-   *
-   *  `draft` is the pre-replace text, passed only by a caller that still has it
-   *  (`applyDocument`, when an external write replaces a rejected draft).
-   *  edit-sync's own call sites pass none. */
-  onLocalEditDiscarded?: (draft?: string) => void;
+   */
+  onLocalEditDiscarded?: () => void;
   /** Fired when edit-sync is holding un-posted edits under a readonly document
    *  (shown at most once per readonly episode). The shell wires it to a
    *  user-visible notice and returns whether that notice was shown — `false`
@@ -270,21 +266,18 @@ function postEditMessage(
 ): boolean {
   if (content.length > MAX_CONTENT_LENGTH) {
     // The host boundary validator (isBoundedContent, shared/protocol.ts) drops
-    // an over-limit `edit` with only a console.warn — no `edit-rejected`, no
+    // an over-limit `edit` with only a console.warn — no
     // ack Document. Without this pre-check editInFlight would latch forever,
     // every later keystroke's replay would be suppressed, and the user would
-    // get NO signal that nothing is reaching disk. Route to the serialize-error
-    // banner (the same surface the host reject path uses) and return false —
+    // get NO signal that nothing is reaching disk. Route to the send-failure
+    // banner and return false —
     // edit-sync's callers keep the buffer and never latch editInFlight. Each
     // subsequent keystroke clears the gate (local-edit-attempt) and re-attempts
     // the post, which lands back here and re-arms the banner while the doc stays
     // over-limit, so no oversized edit ever reaches the host.
     dispatch({
-      type: "serialize-error",
-      error: {
-        code: "internal_error",
-        message: `document is too large to save (over ${MAX_CONTENT_LENGTH.toLocaleString()} characters)`,
-      },
+      type: "send-failure",
+      message: `document is too large to send (over ${MAX_CONTENT_LENGTH.toLocaleString()} characters)`,
     });
     return false;
   }
@@ -305,20 +298,20 @@ function postEditMessage(
     const detail = err instanceof Error ? err.message : String(err);
     try {
       dispatch({
-        type: "serialize-error",
-        error: { code: "internal_error", message: `Could not send edit to host: ${detail}` },
+        type: "send-failure",
+        message: `Could not send edit to host: ${detail}`,
       });
     } catch (dispatchErr) {
-      // Not a reducer throw (state.ts's serialize-error case is a pure spread
+      // Not a reducer throw (state.ts's send-failure case is a pure spread
       // and cannot throw) — state.editInFlight is already committed false by
       // the time this catches. The realistic source is shell.ts's dispatch
       // side effects: renderBanners' DOM write, or the synchronous re-entrant
       // drain (onReducerCommit -> edit-sync.replayIfNeeded -> postEditMessage).
-      // In that case editInFlight recovers correctly, but the "Cannot save"
+      // In that case editInFlight recovers correctly, but the "Cannot send edit"
       // banner never reached the DOM for this tick — log it so that failure
       // mode is diagnosable.
       console.error(
-        "[quoll] serialize-error dispatch itself failed (banner may not have rendered)",
+        "[quoll] send-failure dispatch itself failed (banner may not have rendered)",
         dispatchErr
       );
     }
@@ -513,8 +506,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // (@codemirror/search core module). `search({ top: true })` mounts the
         // panel at the top (VS Code-like). A replace is an ordinary transaction,
         // so it rides the normal updateListener → edit-sync → host write-lock →
-        // validate-for-write pipeline (no raw write path); a gate-rejecting
-        // replacement surfaces edit-rejected like any other edit. In read-only
+        // verified-write pipeline. In read-only
         // mode CM's replace commands return false and the panel omits its replace
         // UI (both guard on EditorState.readOnly, set when canWrite=false), so
         // there is no UI/host divergence. highlightSelectionMatches underlines
@@ -604,16 +596,14 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // Advisory Markdown lint: a debounced ViewPlugin re-lints the raw doc off
         // the keystroke path and publishes findings via a StateEffect; the field
         // underlines them (wavy, severity-coloured) with a hover message.
-        // Display-only (byte-identical round-trip) and independent of the host
-        // write-gate — it never imports validate-for-write and never blocks a
-        // write. It parses the raw doc itself, so its order relative to the
+        // Display-only (byte-identical round-trip): it never blocks a write. It parses the raw doc itself, so its order relative to the
         // language field is irrelevant to correctness.
         quollLint(postLintDiagnostics),
         // Opt-in advisory-lint gutter (cm/lint/gutter.ts). Held in a
         // Compartment that defaults EMPTY so the centred reading column is
         // pixel-identical until the host pushes editor-config(lintGutter:true)
         // via shell.setLintGutter. A read-only view of lintField — no document
-        // mutation, no write-gate coupling.
+        // mutation.
         lintGutterCompartment.of([]),
         // Opt-in advisory prose-lint gate. The proseLintEnabled facet drives
         // whether the engine runs the prose rules; held in a Compartment so the
@@ -955,11 +945,10 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         EditorView.updateListener.of((u) => {
           const updateStart = QUOLL_PERF ? perfNow() : 0;
           if (u.docChanged && !seeding) {
-            // Reject-recovery: when the host has rejected the prior Edit,
+            // Send-failure recovery: when the prior Edit could not be sent,
             // the next user keystroke is their retry intent. Two ops in
             // STRICT order before scheduling the debounced flush:
-            //   1. discardBuffer — the pre-reject buffered bytes are
-            //      stale (same content the host just rejected); the
+            //   1. discardBuffer — the buffered bytes precede this keystroke; the
             //      synchronous onReducerCommit → replayIfNeeded chain
             //      that fires INSIDE the local-edit-attempt dispatch
             //      below would otherwise post them again and the
@@ -976,7 +965,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
             // and ships a retry on the next timer tick. The order
             // regression is pinned by the "synchronous drain does NOT
             // replay stale buffered bytes" test above.
-            if (opts.getState().serializeError !== null) {
+            if (opts.getState().sendFailure !== null) {
               sync.discardBuffer();
               opts.dispatch({ type: "local-edit-attempt" });
             }
@@ -1224,19 +1213,6 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       const heldOnLeadingLineage = aheadOfHost && sync.viewHoldsUnackedEdit(liveDoc, snapshot);
       const foldsOkAck = heldOnLeadingLineage && canWrite;
       const needsReseed = aheadOfHost && !foldsOkAck;
-      // A draft the host answered with `edit-rejected` sits on screen without a
-      // carrier, so edit-sync's own discard notice never sees this reseed take
-      // it away. Judged BEFORE the replace: the shell clears `serializeError`
-      // right after this call returns. Each conjunct excludes a reseed that
-      // loses nothing — bytes edit-sync still holds on a leading lineage come
-      // back on the re-grant (a readonly Document rewinds the view only), and
-      // an EOL-only difference replaces no text. A buffer on a foreign lineage
-      // is announced by edit-sync too; the shell shows one notice per kind.
-      const discardsRejectedDraft =
-        needsReseed &&
-        !heldOnLeadingLineage &&
-        opts.getState().serializeError !== null &&
-        !sameTextIgnoringEol(liveDoc, content);
       // Decide HERE whether the text is replaced at all; `replaceViewText` owns
       // how. `null` (the fold and the not-ahead arms) leaves the text alone, and
       // the dispatch then carries the compartment effects only.
@@ -1270,16 +1246,6 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
           setReadOnlyClass(canWrite);
         }
       );
-      if (discardsRejectedDraft) {
-        // Caught for the reason edit-sync's call site gives: a throw here would
-        // skip the shell's `document` dispatch and leave the reducer behind the
-        // view the replace above already installed.
-        try {
-          opts.onLocalEditDiscarded?.(liveDoc);
-        } catch (err) {
-          console.error("[quoll] onLocalEditDiscarded threw", err);
-        }
-      }
       return editPending;
     },
     isIdentityTransition(externalEpoch, epochGeneration) {

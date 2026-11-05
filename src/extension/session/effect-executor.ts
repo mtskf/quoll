@@ -1,7 +1,6 @@
 // Host effect executor — turns the pure host-session reducer's EFFECTS into
-// real side effects, and feeds async outcomes (applyEdit settlement,
-// edit-rejected delivery failure) back into the core via the injected
-// `dispatch`.
+// real side effects, and feeds async applyEdit settlement back into the core
+// via the injected `dispatch`.
 //
 // Extracted verbatim from `resolveCustomTextEditor`'s closure so the
 // dispose / lifecycle branches — previously reachable only through the e2e
@@ -17,7 +16,7 @@
 // ⚠️ Disposed-guard scope (do NOT over-apply). The `isDisposed()` guard belongs
 // ONLY where the panel closure had it: `post`'s early-return + its `.then` OK
 // arm (NOT the false/reject arms — those log unconditionally), and
-// `sendEditRejected`'s early-return + BOTH `.then` arms. `runEffects` itself is
+// ordinary guarded delivery. `runEffects` itself is
 // NEVER wrapped in a disposed guard (nor are the `showError` and
 // `rescueUnsavedDraft` cases), and `runApplyEdit`'s `applyEditSettled`
 // dispatch fires EVEN post-dispose in every arm (ok / refused / rejected, plus
@@ -32,7 +31,6 @@
 // `pendingApplyBaseVersion`, but that fires only on teardown, so neither can
 // substitute for dispatching this event from BOTH arms).
 
-import type { MarkdownError } from "../../markdown/errors.js";
 import { perfNow, perfRecord, perfReport } from "../../shared/perf.js";
 import type { HostToWebview, ThemeKind } from "../../shared/protocol.js";
 import type {
@@ -45,7 +43,6 @@ import type {
   ApplyEditOutcome,
   HostSessionEffect,
   HostSessionInputEvent,
-  HostSessionState,
 } from "./host-session-core.js";
 
 // One user-facing message for BOTH "the webview could not be resynced" families
@@ -79,14 +76,6 @@ export type ApplyEditSeam<TEdit> = DocumentWriteAdapter<TEdit>;
 
 export interface EffectExecutorDeps<TEdit> {
   isDisposed: () => boolean;
-  /** Read for the `sendEditRejected` delivery-refused warn log
-   *  (`lastAppliedDocVersion`) — the executor's only state read. The stash
-   *  drain reads `pendingEdit` inside the core's `applyEditSettled` arm, not
-   *  through here. */
-  getState: () => HostSessionState;
-  /** document.uri.toString() — for the sendEditRejected delivery-refused warn
-   *  payload, kept byte-identical. */
-  uriString: () => string;
   /** INPUT events only. `settlementTransitionFailed` is excluded by the type
    *  (`HostSessionInputEvent`) because a dispatched recovery would queue behind
    *  a sibling whose lock-held stash arm then loses its stash to it — it is
@@ -97,15 +86,11 @@ export interface EffectExecutorDeps<TEdit> {
   /** harness?.recordEvent ?? noop — called only on an accepted (ok=true) send. */
   recordEvent: (message: HostToWebview) => void;
   showError: (message: string) => void;
-  /** Reopen an unsaved post-dispose draft (a stash the reducer could not write,
-   *  or a pending write-gate rejection at close) as an untitled document.
+  /** Reopen an unsaved post-dispose draft the reducer could not write
+   *  as an untitled document.
    *  Required: an absent dep would silently lose that draft. */
   rescueUnsavedDraft: (draft: UnsavedDraft) => void;
   canWrite: () => boolean;
-  /** The panel's lineage answer for the live text (session/edit-lineage.ts),
-   *  carried on the edit-rejected recovery dispatches. Never throws: the
-   *  lineage guards its own read. */
-  readLineageSince: () => number | null;
   /** Live builders — read theme/canWrite/document text at call time (freshness).
    *  The (externalEpoch, epochGeneration) pair is core-managed and passed from
    *  the effect (self-contained, like docVersion). */
@@ -115,15 +100,7 @@ export interface EffectExecutorDeps<TEdit> {
     epochGeneration: number,
     settledEditId: number
   ) => HostToWebview;
-  buildRejectedDraft: (
-    content: string,
-    docVersion: number,
-    externalEpoch: number,
-    epochGeneration: number,
-    settledEditId: number
-  ) => HostToWebview;
   buildTheme: (themeKind: ThemeKind) => HostToWebview;
-  buildEditRejected: (error: MarkdownError) => HostToWebview;
   applyEditSeam: ApplyEditSeam<TEdit>;
   /** Wraps handleOpenExternal(href, {openExternal, showError}). */
   openExternal: (href: string) => void;
@@ -176,9 +153,7 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
   // tokens stay exactly as they were), and ARGUMENT EVALUATION happens inside
   // the `try` too — a template literal, a throwing getter, or an INJECTED SEAM
   // READ that throws while building the payload would otherwise re-open the same
-  // hole one layer out. The delivery-refused site is the one that actually needs
-  // that second reason: its payload reads `deps.uriString()` and
-  // `deps.getState()`, so both live inside the thunk.
+  // hole one layer out.
   //
   // ⚠️ NOT a completeness claim — and be precise about WHICH half is
   // best-effort, because the imprecise version reads as licence to skip the
@@ -216,10 +191,9 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
   // claim): where a reducer-side list pairs a signal with a triage log, the
   // signal goes first — defence in depth against a future edit removing a
   // per-effect guard. Cited by name from `withholdAckEffects`, the
-  // `settlementTransitionFailed` arm, and the `editRejectedDeliveryFailed`
-  // unobserved arm — CONSUMERS, not a census: other lists satisfy it uncited
+  // `settlementTransitionFailed` arm — CONSUMERS, not a census: other lists satisfy it uncited
   // (the post-dispose rescue lists) or invert it on purpose
-  // (`settlementEffects`' `refused` arm, the drain's parse-failed arm).
+  // (`settlementEffects`' `refused` arm).
   const reportContained = (report: () => void): void => {
     try {
       report();
@@ -308,13 +282,7 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
     try {
       pending = deps.send(message);
     } catch (err) {
-      // CONTAINED: this catch is the reason a sync transport throw does not
-      // unwind the caller, and a bare report let it unwind anyway. What that
-      // costs depends on the caller: `case "postRejectedDraft"` runs
-      // `sendEditRejected` IMMEDIATELY after this `post`, so an escape here took
-      // the failure-aware banner delivery, its `editRejectedDeliveryFailed`
-      // recovery dispatch, and the arm's trailing `Cannot save:` toast with it —
-      // leaving a `pending` rejection the panel cannot clear on its own.
+      // Keep a failed transport report from unwinding the remaining effects.
       reportContained(() =>
         console.error("[quoll] host→webview postMessage threw synchronously", err, {
           type: message.type,
@@ -372,17 +340,13 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
   //   2. the pipeline-REJECTION arm's FIRST read: that settlement never reached a
   //      settle-time read at all, so this is the only version read it ever makes
   //      (not a second chance at one).
-  //   3. `sendEditRejected`'s three recovery dispatches below (sync throw /
-  //      delivery refused / delivery rejected), labelling the reseed that clears
-  //      a stuck rejection.
   // The consequences differ per family, so the call site is NAMED and travels on
-  // the warn: without it three unrelated outcomes collapse into one log line and
+  // the warn: without it unrelated outcomes collapse into one log line and
   // triage cannot tell "the retry lost a transient" from "the recovery reseed was
   // withheld".
   //
   // The roster IS the contract: a closed set of triage tokens, one per call
-  // SITE (not one per family — family 3 alone owns three of the five, one per
-  // recovery dispatch). Typing it as a union (not `string`) makes ONE of the two
+  // SITE. Typing it as a union (not `string`) makes ONE of the two
   // invariants the compiler's job: an off-roster token is rejected. The other
   // stays a CONVENTION the compiler cannot hold — pass a LITERAL, never a
   // computed expression, because this runs on a failure path and must not
@@ -391,12 +355,7 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
   // The union also cannot catch a copy-paste that stamps one VALID token onto
   // the wrong arm (the three adjacent recovery sites are exactly that shape), so
   // each site also has a per-site assertion in `effect-executor.test.ts`.
-  type GuardedVersionReadSite =
-    | "settlement-retry"
-    | "rejection-arm-first-read"
-    | "edit-rejected-recovery:sync-throw"
-    | "edit-rejected-recovery:refused"
-    | "edit-rejected-recovery:rejected";
+  type GuardedVersionReadSite = "settlement-retry" | "rejection-arm-first-read";
   const readVersionGuarded = (site: GuardedVersionReadSite): number | null => {
     try {
       return deps.applyEditSeam.readVersion();
@@ -416,107 +375,6 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
       );
       return null;
     }
-  };
-
-  // Edit-rejected delivery with a resync fallback re-entering the core,
-  // carrying the per-delivery `id` (Codex N2/N6). If the webview refuses,
-  // detaches, or `send()` throws, dispatching `editRejectedDeliveryFailed(id)`
-  // clears the rejection and reseeds a normal Document so the panel does not
-  // deadlock — but ONLY when that `id` still matches the pending rejection.
-  // A stale failure (a newer rejection B is pending, the rejection was already
-  // cleared by a resync/settlement, or a `ready`/`seed` replay re-stamped the
-  // id) is a no-op in the `editRejectedDeliveryFailed` arm, so it can neither
-  // clobber the live banner nor force an unsolicited reseed. When the clear
-  // DOES fire, the user's typed content is overwritten — same "external wins"
-  // semantics as for an `onDidChangeTextDocument` race. The event carries the
-  // document version read via the guarded `readVersionGuarded`; if that read
-  // fails the event carries `null` and the reducer clears the rejection
-  // WITHOUT reseeding — no Document at an unobserved label — signalling
-  // through the shared resync-failure latch.
-  const sendEditRejected = (error: MarkdownError, id: number): void => {
-    if (deps.isDisposed()) {
-      return;
-    }
-    const message = deps.buildEditRejected(error);
-    // A SYNCHRONOUS throw from send() escapes the `.then(...)` arms below
-    // (it happens before `Promise.resolve(...)` can assimilate it), so the
-    // resync fallback would never run and the rejection would stay stuck
-    // pending — the webview keeps a banner it can never resolve. Treat it
-    // exactly like the reject arm: log + dispatch `editRejectedDeliveryFailed`
-    // so the core clears the rejection and reseeds a Document (Codex N5).
-    let pending: Thenable<boolean>;
-    try {
-      pending = deps.send(message);
-    } catch (err) {
-      // CONTAINED: every report in this function sits on the way INTO the
-      // dispatch that clears the rejection, so a throwing console skipped the
-      // recovery entirely — measured as `dispatched: []`. From there the webview
-      // holds a banner it can never resolve and its single flight stays parked
-      // (`editInFlight` clears only on a Document or an `edit-rejected`), while
-      // the pending rejection suppresses visible-edge resync. The host makes no
-      // further attempt of its own; recovery waits on an external
-      // `documentChanged` or a webview reload (`ready`).
-      reportContained(() =>
-        console.error("[quoll] edit-rejected delivery threw synchronously; resync fallback", err)
-      );
-      deps.dispatch({
-        type: "editRejectedDeliveryFailed",
-        id,
-        documentVersion: readVersionGuarded("edit-rejected-recovery:sync-throw"),
-        lineageSince: deps.readLineageSince(),
-      });
-      return;
-    }
-    // Promise.resolve(...) assimilation: a non-standard Thenable can no
-    // longer resolve SYNCHRONOUSLY and re-enter the active drain — the
-    // `editRejectedDeliveryFailed` feedback always lands in a fresh drain,
-    // so it can never be stranded behind a throwing `.then` mid-drain.
-    void Promise.resolve(pending).then(
-      (ok) => {
-        if (deps.isDisposed()) {
-          return;
-        }
-        if (ok) {
-          deps.recordEvent(message);
-          return;
-        }
-        // CONTAINED — same position class as the sync-throw arm above, and this
-        // is the site that needs the thunk's SECOND reason: the payload reads
-        // two injected seams (`deps.uriString()`, `deps.getState()`), so leaving
-        // them outside would put two more throw sources on the way into the
-        // dispatch. Inside the thunk they are contained with the log itself.
-        reportContained(() =>
-          console.warn("[quoll] edit-rejected delivery refused; resync fallback", {
-            uri: deps.uriString(),
-            docVersion: deps.getState().lastAppliedDocVersion,
-          })
-        );
-        deps.dispatch({
-          type: "editRejectedDeliveryFailed",
-          id,
-          documentVersion: readVersionGuarded("edit-rejected-recovery:refused"),
-          lineageSince: deps.readLineageSince(),
-        });
-      },
-      (err: unknown) => {
-        if (deps.isDisposed()) {
-          return;
-        }
-        // CONTAINED — the third of this function's three recovery dispatches,
-        // wrapped for the same reason. In the two `.then` arms an escape is the
-        // more insidious mode: it becomes an unhandled rejection rather than a
-        // visible throw, so the missing dispatch is the only symptom.
-        reportContained(() =>
-          console.error("[quoll] edit-rejected delivery rejected; resync fallback", err)
-        );
-        deps.dispatch({
-          type: "editRejectedDeliveryFailed",
-          id,
-          documentVersion: readVersionGuarded("edit-rejected-recovery:rejected"),
-          lineageSince: deps.readLineageSince(),
-        });
-      }
-    );
   };
 
   // Map a verified-write outcome (Plan S6 `document-write/`) to the reducer's
@@ -803,7 +661,7 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
   };
 
   // Effect executor — turns each core EFFECT into the real side effect.
-  // `postDocument` / `postRejectedDraft` stamp the wire docVersion from the
+  // `postDocument` stamp the wire docVersion from the
   // EFFECT (self-contained: the version a Document carries is a core
   // decision) and read only the live document text / theme / FS-writability
   // (those are not core state) via the injected builders.
@@ -842,7 +700,7 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
             // ⚠️ The Document does NOT reach the webview either way — an escaping
             // throw would have skipped the `post()` just the same — and the
             // webview clears its single-flight `editInFlight` ONLY on a Document
-            // or an `edit-rejected` (`webview/state.ts`). So until some later
+            // (`webview/state.ts`). So until some later
             // Document arrives, its buffer holds the user's keystrokes and posts
             // nothing. What this fix must NOT do is make that state SILENT:
             // before it, the same scenario at least produced a (wrong) "Failed to
@@ -907,62 +765,6 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
           }
           break;
         }
-        case "postRejectedDraft": {
-          // docVersion is the core-managed value (NOT a fresh
-          // document.version read) — the rejected draft never ran
-          // applyEdit, so the version is unchanged and the webview's next
-          // Edit keeps a matching base. ORDER IS LOAD-BEARING: the webview
-          // reducer's `document` arm clears `serializeError`, so the
-          // Document MUST precede the `edit-rejected` (reversing it would
-          // wipe the banner the user needs).
-          let draftMessage: HostToWebview;
-          try {
-            draftMessage = deps.buildRejectedDraft(
-              effect.content,
-              effect.docVersion,
-              effect.externalEpoch,
-              effect.epochGeneration,
-              effect.settledEditId
-            );
-          } catch (err) {
-            // CONTAINED like `postDocument`'s builder, for the same reason: this
-            // builder reads LIVE state (theme kind, FS writability), so it can
-            // throw, and an escaping throw abandons the rest of the list — the
-            // drain's `Cannot save:` toast — and escapes the dispatch.
-            //
-            // ⛔ Skip BOTH sends. The banner without its draft Document is not a
-            // degraded delivery, it is a different one: `sendEditRejected` alone,
-            // or its `editRejectedDeliveryFailed` recovery, can end with an
-            // authoritative Document replacing the bytes the user typed. So this
-            // is containment and NOT recovery — the rejection stays pending with
-            // nothing delivered, exactly as it did when the throw escaped.
-            reportContained(() =>
-              console.error(
-                "[quoll] failed to build the rejected draft; skipping its Document and edit-rejected",
-                err
-              )
-            );
-            break;
-          }
-          post(draftMessage);
-          // The replay banner is FAILURE-AWARE: route it through
-          // `sendEditRejected` (with the core-stamped fresh delivery id),
-          // NOT a bare `post`. A `ready`/`seed` replay can fail to deliver
-          // (the webview detaches mid-reload — a documented-normal `post`
-          // outcome); a bare post would drop that failure silently and the
-          // rejection would stay stuck pending forever (the re-stamp already
-          // invalidated the pre-replay `postEditRejected` failure that used
-          // to recover it, and visible-edge resync is suppressed while a
-          // rejection is pending). Routing through `sendEditRejected`
-          // dispatches `editRejectedDeliveryFailed(id)` on failure, so the
-          // core clears the rejection and reseeds a Document — recovery
-          // instead of a deadlock (Codex N6).
-          sendEditRejected(effect.error, effect.id);
-          break;
-        }
-        case "postEditRejected":
-          sendEditRejected(effect.error, effect.id);
-          break;
         case "postTheme":
           post(deps.buildTheme(effect.themeKind));
           break;
@@ -1047,14 +849,10 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
           // The rule for the remaining positions, so the next one is decided
           // rather than rediscovered:
           //   - A builder that reads LIVE state is GUARDED. That is
-          //     `deps.buildSeedDocument` (`case "postDocument"`) and
-          //     `deps.buildRejectedDraft` (`case "postRejectedDraft"`); the
-          //     latter contains the throw and delivers nothing — see its catch.
+          //     `deps.buildSeedDocument` (`case "postDocument"`).
           //   - A builder that is a pure object literal is NOT guarded, on
-          //     purpose: `deps.buildTheme` (`postTheme`) and
-          //     `deps.buildEditRejected` (`sendEditRejected`, before that
-          //     function's own `try`) read nothing that can fail
-          //     (`document-message.ts`). ⚠️ That is a property of today's
+          //     purpose: `deps.buildTheme` (`postTheme`) reads nothing that can
+          //     fail (`document-message.ts`). ⚠️ That is a property of today's
           //     injected implementations — a builder that starts reading live
           //     state moves to the first bullet.
           //   - `case "openExternal"` → `runOpenExternal(effect.href)` has no

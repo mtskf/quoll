@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 
-import type { MarkdownError } from "../../src/markdown/errors.js";
 import type { ThemeKind } from "../../src/shared/protocol.js";
 import {
   type Action,
@@ -30,10 +29,7 @@ const docAction = (
     ...overrides,
   }) as const;
 
-const serializeError: MarkdownError = {
-  code: "invalid_frontmatter",
-  message: "Frontmatter body contains a bare `---` line",
-};
+const sendFailure = "Could not send edit to host: transport failed";
 
 // Type-level equality check (same helper, same name as
 // test/extension/types-equality.test.ts). `Readonly<T>` is a homomorphic mapped
@@ -198,7 +194,7 @@ describe("reducer — editInFlight single-flight invariant", () => {
 
     // Same-docVersion Document arrives (e.g. visibility resync). The
     // reducer overwrites in place — it does NOT short-circuit to the
-    // previous state — clearing editInFlight and resetting serializeError
+    // previous state — clearing editInFlight and resetting sendFailure
     // from the action payload.
     const afterResync = reducer(afterPostEdit, {
       type: "document",
@@ -209,7 +205,7 @@ describe("reducer — editInFlight single-flight invariant", () => {
     expect(afterResync.editInFlight).toBe(false);
     expect(afterResync.docVersion).toBe(3);
     expect(afterResync.ready).toBe(true);
-    expect(afterResync.serializeError).toBeNull();
+    expect(afterResync.sendFailure).toBeNull();
   });
 
   it("post-edit is dropped when canWrite is false", () => {
@@ -251,32 +247,32 @@ describe("reducer — theme updates do not touch docVersion", () => {
   });
 });
 
-describe("reducer — save policy: serialize-error arm", () => {
+describe("reducer — save policy: send-failure arm", () => {
   // A serialize result with ok: false (host reject / send failure) prevents
   // Edit posting and surfaces the error. C8 retired the parse/serialize
-  // warning-consent arms; serialize-error is the only surviving save-policy gate.
+  // warning-consent arms; send-failure is the only surviving save-policy gate.
 
-  it("serialize-error surfaces the error and clears editInFlight", () => {
+  it("send-failure surfaces the error and clears editInFlight", () => {
     const a = reducer(initialState, docAction({ docVersion: 1 }));
     const b = reducer(a, { type: "post-edit" });
-    const c = reducer(b, { type: "serialize-error", error: serializeError });
-    expect(c.serializeError).toEqual(serializeError);
+    const c = reducer(b, { type: "send-failure", message: sendFailure });
+    expect(c.sendFailure).toEqual(sendFailure);
     expect(c.editInFlight).toBe(false);
   });
 
-  it("post-edit is dropped while a serialize-error is unresolved", () => {
+  it("post-edit is dropped while a send-failure is unresolved", () => {
     const a = reducer(initialState, docAction({ docVersion: 1 }));
-    const b = reducer(a, { type: "serialize-error", error: serializeError });
+    const b = reducer(a, { type: "send-failure", message: sendFailure });
     const c = reducer(b, { type: "post-edit" });
     expect(c.editInFlight).toBe(false);
     expect(c).toBe(b);
   });
 
-  it("non-stale Document clears a prior serialize-error", () => {
+  it("non-stale Document clears a prior send-failure", () => {
     const a = reducer(initialState, docAction({ docVersion: 1 }));
-    const b = reducer(a, { type: "serialize-error", error: serializeError });
+    const b = reducer(a, { type: "send-failure", message: sendFailure });
     const c = reducer(b, docAction({ docVersion: 2 }));
-    expect(c.serializeError).toBeNull();
+    expect(c.sendFailure).toBeNull();
   });
 });
 
@@ -284,11 +280,11 @@ describe("canPostEdit — save-policy gate is the single source of truth", () =>
   // canPostEdit is the POLICY layer the reducer's post-edit case AND
   // edit-sync's canPost (via editor.ts) both consult, so the gate cannot
   // drift between them. These tests pin the contract that it encodes the
-  // policy condition (serializeError) and DELIBERATELY excludes the two
+  // policy condition (sendFailure) and DELIBERATELY excludes the two
   // mechanism gates (canWrite, editInFlight) — edit-sync enforces those
   // itself, and folding them in would make its readonly hard-drop
   // ambiguous. (C8 retired the parse/serialize warning-consent states, so
-  // serializeError is the only surviving policy condition.)
+  // sendFailure is the only surviving policy condition.)
 
   const stateWith = (overrides: Partial<WebviewState>): WebviewState => ({
     ...initialState,
@@ -297,12 +293,12 @@ describe("canPostEdit — save-policy gate is the single source of truth", () =>
     ...overrides,
   });
 
-  it("permits posting when no serialize-error is pending", () => {
+  it("permits posting when no send-failure is pending", () => {
     expect(canPostEdit(stateWith({}))).toBe(true);
   });
 
-  it("blocks posting while a serialize-error is unresolved", () => {
-    expect(canPostEdit(stateWith({ serializeError }))).toBe(false);
+  it("blocks posting while a send-failure is unresolved", () => {
+    expect(canPostEdit(stateWith({ sendFailure }))).toBe(false);
   });
 
   it("ignores capability — readonly is a MECHANISM gate, not policy", () => {
@@ -324,7 +320,7 @@ describe("canPostEdit — save-policy gate is the single source of truth", () =>
     // The reducer drops a post-edit when canPostEdit is false (with
     // capability + in-flight clear). Pin that the two stay in lockstep.
     const seeded = reducer(initialState, docAction({ docVersion: 1 }));
-    const withError = reducer(seeded, { type: "serialize-error", error: serializeError });
+    const withError = reducer(seeded, { type: "send-failure", message: sendFailure });
     expect(canPostEdit(withError)).toBe(false);
     const blocked = reducer(withError, { type: "post-edit" });
     expect(blocked).toBe(withError); // dropped — no editInFlight
@@ -336,38 +332,38 @@ describe("canPostEdit — save-policy gate is the single source of truth", () =>
   });
 });
 
-describe("reducer — local-edit-attempt clears serializeError for retry", () => {
-  // Path follow-up: after the host rejects an Edit, serializeError
+describe("reducer — local-edit-attempt clears sendFailure for retry", () => {
+  // Path follow-up: after the host rejects an Edit, sendFailure
   // is non-null and the post-edit gate is closed. The user typing another
   // character is their intent to retry — the next local-edit-attempt
-  // clears serializeError so the debounced flush can ship a fresh Edit.
+  // clears sendFailure so the debounced flush can ship a fresh Edit.
 
-  it("clears a prior serialize-error", () => {
+  it("clears a prior send-failure", () => {
     const a = reducer(initialState, docAction({ docVersion: 1 }));
-    const withError = reducer(a, { type: "serialize-error", error: serializeError });
-    expect(withError.serializeError).toEqual(serializeError);
+    const withError = reducer(a, { type: "send-failure", message: sendFailure });
+    expect(withError.sendFailure).toEqual(sendFailure);
     const cleared = reducer(withError, { type: "local-edit-attempt" });
-    expect(cleared.serializeError).toBeNull();
+    expect(cleared.sendFailure).toBeNull();
   });
 
   it("does not touch editInFlight", () => {
-    // editInFlight was cleared by serialize-error; local-edit-attempt
+    // editInFlight was cleared by send-failure; local-edit-attempt
     // does NOT re-arm it (the next post-edit dispatch does that).
     const a = reducer(initialState, docAction({ docVersion: 1 }));
-    const withError = reducer(a, { type: "serialize-error", error: serializeError });
+    const withError = reducer(a, { type: "send-failure", message: sendFailure });
     const cleared = reducer(withError, { type: "local-edit-attempt" });
     expect(cleared.editInFlight).toBe(false);
   });
 
   it("post-edit unblocks after local-edit-attempt clears the error", () => {
     const a = reducer(initialState, docAction({ docVersion: 1 }));
-    const withError = reducer(a, { type: "serialize-error", error: serializeError });
+    const withError = reducer(a, { type: "send-failure", message: sendFailure });
     const cleared = reducer(withError, { type: "local-edit-attempt" });
     const posted = reducer(cleared, { type: "post-edit" });
     expect(posted.editInFlight).toBe(true);
   });
 
-  it("is a no-op when serializeError is already null (returns same reference)", () => {
+  it("is a no-op when sendFailure is already null (returns same reference)", () => {
     // Avoid unnecessary re-renders: every keystroke must not spend a render
     // tick on a dispatch that has no effect. The shell relies on
     // referential identity to short-circuit dispatch / onReducerCommit.
@@ -399,7 +395,7 @@ describe("reducer — purity", () => {
     const a = reducer(initialState, docAction({ docVersion: 1 }));
     // Pin the property set so additions / removals show up as test diffs.
     expect(Object.keys(a).sort()).toEqual(
-      ["canWrite", "docVersion", "editInFlight", "ready", "serializeError", "theme"].sort()
+      ["canWrite", "docVersion", "editInFlight", "ready", "sendFailure", "theme"].sort()
     );
   });
 

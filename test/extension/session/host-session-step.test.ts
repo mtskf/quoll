@@ -858,16 +858,6 @@ describe("createHostSessionStep", () => {
     const core = createHostSessionCore(
       { uriString: "file:///t.md", fsPath: "/t.md" },
       {
-        // Throws for the STASH content only: the drain reaches decideEdit →
-        // validator and the settlement transition throws. A later edit must
-        // still be able to validate, or the "next edit" assertion below could
-        // never pass for the right reason.
-        validateForWrite: (content: string) => {
-          if (content === "edit1+x") {
-            throw new Error("validator blew up");
-          }
-          return { ok: true } as const;
-        },
         mintEpochGeneration: () => 7,
       }
     );
@@ -884,7 +874,12 @@ describe("createHostSessionStep", () => {
       isDisposed: () => false,
       onError: () => {},
     });
+    let throwSettlement = true;
     const commit = (event: HostSessionEvent): readonly HostSessionEffect[] => {
+      if (event.type === "applyEditSettled" && throwSettlement) {
+        throwSettlement = false;
+        throw new Error("settlement transition failed");
+      }
       const result = core.transition(state, event);
       state = result.state;
       return result.effects;
@@ -911,7 +906,7 @@ describe("createHostSessionStep", () => {
         currentContent: "edit1",
         preApplyContent: "seed",
       })
-    ).toThrow("validator blew up");
+    ).toThrow("settlement transition failed");
 
     // 1. the lock is RELEASED (it was held for the panel's life before this fix)
     expect(isWriteLockHeld(state)).toBe(false);
@@ -945,18 +940,22 @@ describe("createHostSessionStep", () => {
       lineageSince: null,
     });
     expect(effects.some((e) => e.type === "applyEdit" && e.content === "next")).toBe(true);
+    dispatch({
+      type: "applyEditSettled",
+      outcome: { kind: "ok" },
+      settledVersion: 7,
+      canWrite: true,
+      currentContent: "next",
+      preApplyContent: "edit1",
+    });
+    expect(isWriteLockHeld(state)).toBe(false);
+    expect(effects.some((e) => e.type === "postDocument" && e.docVersion === 7)).toBe(true);
   });
 
   it("real core, step, barrier and dispatcher rescue a disposed stash after a throwing settlement", () => {
     const core = createHostSessionCore(
       { uriString: "file:///x.md", fsPath: "/x.md" },
       {
-        validateForWrite: (content) => {
-          if (content === "later") {
-            throw new Error("validator failed");
-          }
-          return { ok: true } as const;
-        },
         mintEpochGeneration: () => 7,
       }
     );
@@ -968,6 +967,7 @@ describe("createHostSessionStep", () => {
     };
     const effects: HostSessionEffect[] = [];
     const calls: HostSessionEvent[] = [];
+    let throwSettlement = true;
     const barrier = createEditSettledBarrier({
       isLocked: () => isWriteLockHeld(state),
       isDisposed: () => state.disposed,
@@ -976,6 +976,10 @@ describe("createHostSessionStep", () => {
     const step = createRealHostSessionStep({
       commitTransition: (event) => {
         calls.push(event);
+        if (event.type === "applyEditSettled" && throwSettlement) {
+          throwSettlement = false;
+          throw new Error("settlement transition failed");
+        }
         const result = core.transition(state, event);
         state = result.state;
         return result.effects;
@@ -994,7 +998,7 @@ describe("createHostSessionStep", () => {
         currentContent: "first",
         preApplyContent: "seed",
       })
-    ).toThrow("validator failed");
+    ).toThrow("settlement transition failed");
     expect(calls.at(-1)).toStrictEqual({
       type: "settlementTransitionFailed",
       settledVersion: 6,

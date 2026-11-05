@@ -7,17 +7,13 @@
 //     CI before it reaches the wire.
 //   - buildThemeMessage: removes the protocol literal from the panel so
 //     the panel never holds wire-format constants directly.
-//   - buildEditRejectedMessage: constructs the edit rejection message
-//     from a MarkdownError, stripping detail from the wire shape.
 
-import type { MarkdownError } from "../../markdown/errors.js";
 import {
   type CaretApplyMessage,
   type ContentWidthPref,
   type DocumentEol,
   type DocumentMessage,
   type EditorConfigMessage,
-  type EditRejectedMessage,
   type FontFamilyPref,
   type FontSizePref,
   type ImageWriteResultMessage,
@@ -129,20 +125,5 @@ export function buildCaretApplyMessage(caret: {
     type: "caret-apply",
     line: caret.line,
     character: caret.character,
-  };
-}
-
-/** Construct an EditRejected message from the host's parse-failed verdict.
- *  Strips `MarkdownError.detail` from the wire shape on purpose — the
- *  wire surface stays minimal (`code` + `message` are all the banner
- *  needs), and a future extension is a backward-compatible field add. */
-export function buildEditRejectedMessage(error: MarkdownError): EditRejectedMessage {
-  return {
-    protocol: PROTOCOL_VERSION,
-    type: "edit-rejected",
-    error: {
-      code: error.code,
-      message: error.message,
-    },
   };
 }

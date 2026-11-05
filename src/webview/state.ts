@@ -21,7 +21,6 @@
 // fights for authority with EditorState. The reducer instead carries
 // the small UI/protocol metadata that feeds the render.
 
-import type { MarkdownError } from "../markdown/errors.js";
 import type { ThemeKind } from "../shared/protocol.js";
 
 export type WebviewState = {
@@ -43,12 +42,12 @@ export type WebviewState = {
   readonly editInFlight: boolean;
   /** Most recent send-side failure — dispatched when postMessage throws
    *  (closed MessagePort, structuredClone error, host throttle) during
-   *  a post-edit call, or when the host rejects an Edit (`edit-rejected`).
+   *  a post-edit call, or when the document exceeds the wire size limit.
    *  Blocks further post-edit transitions until cleared by the next
    *  non-stale Document or a local-edit-attempt retry. The sole surviving
    *  webview banner surface (C8 retired the PM-bridge parse-warning /
    *  parse-error machinery). */
-  readonly serializeError: MarkdownError | null;
+  readonly sendFailure: string | null;
 };
 
 export type Action =
@@ -74,16 +73,16 @@ export type Action =
     }
   | { readonly type: "theme"; readonly themeKind: ThemeKind }
   | { readonly type: "post-edit" }
-  | { readonly type: "serialize-error"; readonly error: MarkdownError }
+  | { readonly type: "send-failure"; readonly message: string }
   | {
-      /** Next user keystroke after a host-side rejected save attempt
-       *  (serializeError != null). Clears the gate so the debounced
+      /** Next user keystroke after a failed send attempt
+       *  (sendFailure != null). Clears the gate so the debounced
        *  flush can retry — the next post-edit dispatch will re-arm
        *  editInFlight and post a fresh Edit. The editor's docChanged
        *  handler ALSO calls sync.discardBuffer() before dispatching so
        *  the synchronous `onReducerCommit → replayIfNeeded` chain does
-       *  not post stale pre-reject buffered bytes (see editor.ts and
-       *  edit-sync.ts for the pair contract). No-op when serializeError
+       *  not post stale pre-failure buffered bytes (see editor.ts and
+       *  edit-sync.ts for the pair contract). No-op when sendFailure
        *  is already null so per-keystroke dispatches are cheap. */
       readonly type: "local-edit-attempt";
     };
@@ -99,12 +98,12 @@ export const initialState: WebviewState = Object.freeze({
   theme: "dark",
   canWrite: false,
   editInFlight: false,
-  serializeError: null,
+  sendFailure: null,
 });
 
 /** Save-policy gate: does the current UI/protocol state PERMIT the webview
  *  to post an Edit to the host? This is the POLICY layer only — today the
- *  sole blocker is a pending host reject / send failure (`serializeError`),
+ *  sole blocker is a send failure (`sendFailure`),
  *  which holds until cleared. Any future warning/error state belongs here.
  *
  *  It deliberately does NOT encode the two MECHANISM gates the reducer's
@@ -123,7 +122,7 @@ export const initialState: WebviewState = Object.freeze({
  *  condition added here is honoured by both call sites, so the gate cannot
  *  drift between them. */
 export function canPostEdit(state: WebviewState): boolean {
-  return state.serializeError === null;
+  return state.sendFailure === null;
 }
 
 export function reducer(state: WebviewState, action: Action): WebviewState {
@@ -144,10 +143,10 @@ export function reducer(state: WebviewState, action: Action): WebviewState {
         theme: action.themeKind,
         canWrite: action.canWrite,
         editInFlight: state.editInFlight && action.editPending === true,
-        // A fresh non-stale Document clears a prior host reject so the user
+        // A fresh non-stale Document clears a prior send failure so the user
         // can resume editing (existing behavior; kept after the warning-
         // field pruning).
-        serializeError: null,
+        sendFailure: null,
       };
     }
     case "theme": {
@@ -165,7 +164,7 @@ export function reducer(state: WebviewState, action: Action): WebviewState {
       // mechanism arms stay inline (NOT in canPostEdit) so edit-sync's
       // readonly hard-drop / single-flight semantics keep their own
       // authority — see the canPostEdit contract. (C8 removed the
-      // parse/serialize warning-consent arms — serializeError is the only
+      // parse/serialize warning-consent arms — sendFailure is the only
       // surviving policy condition.)
       if (!state.canWrite) {
         return state;
@@ -178,14 +177,14 @@ export function reducer(state: WebviewState, action: Action): WebviewState {
       }
       return { ...state, editInFlight: true };
     }
-    case "serialize-error": {
-      return { ...state, serializeError: action.error, editInFlight: false };
+    case "send-failure": {
+      return { ...state, sendFailure: action.message, editInFlight: false };
     }
     case "local-edit-attempt": {
-      if (state.serializeError === null) {
+      if (state.sendFailure === null) {
         return state;
       }
-      return { ...state, serializeError: null };
+      return { ...state, sendFailure: null };
     }
     default: {
       // Exhaustiveness guard — a new Action variant added without a case here

@@ -49,7 +49,6 @@ import {
   workspace,
 } from "vscode";
 
-import { createIncrementalWriteValidator } from "../../markdown/validate-for-write.js";
 import { perfReport } from "../../shared/perf.js";
 import {
   buildFormatCommandMessage,
@@ -105,14 +104,12 @@ import { buildWebviewHtml } from "../webview-html.js";
 import { canHostWrite } from "./can-host-write.js";
 import {
   buildDocumentMessageFromDocument,
-  buildRejectedDraftFromDocument,
   canonicalDocumentText,
   canonicalizeText,
 } from "./document-canonical.js";
 import {
   buildCaretApplyMessage,
   buildEditorConfigMessage,
-  buildEditRejectedMessage,
   buildThemeMessage,
 } from "./document-message.js";
 import { createEditLineage } from "./edit-lineage.js";
@@ -328,24 +325,14 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // ordering, rejected-draft barrier, resync rules, settlement). This
     // file snapshots live VS Code inputs into EVENTS and runs the returned
     // EFFECTS; see host-session-core.ts for the transition table.
-    const core = createHostSessionCore(
-      {
-        uriString: document.uri.toString(),
-        fsPath: document.uri.fsPath,
-      },
-      // Per-panel incremental write validator: reuses the previous parse via
-      // Lezer TreeFragment so a debounced flush re-parses only the changed
-      // span. Verdict-identical to the stateless default (pinned by a fuzz
-      // battery); the cache lives in this closure, reclaimed once the panel
-      // closure is no longer held (past dispose by at most one async settlement).
-      { validateForWrite: createIncrementalWriteValidator() }
-    );
+    const core = createHostSessionCore({
+      uriString: document.uri.toString(),
+      fsPath: document.uri.fsPath,
+    });
     let state = core.initialState(document.version);
 
-    // The session's pending-rejection predicate — one definition, two readers:
-    // the cross-surface registry below (tab-only command path to the forward
-    // swap) and the context-handoff wiring (both AI handoffs refuse while set).
-    const isRejectionPending = (): boolean => state.rejection.kind === "pending";
+    // Retained wiring for the next slice: the core no longer has rejection state.
+    const isRejectionPending = (): boolean => false;
 
     // Publish THIS session's pending-rejection state to the cross-surface
     // registry keyed by document.uri, so the TAB-ONLY command path to the forward
@@ -479,8 +466,6 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // live theme/canWrite at CALL time, preserving the freshness contract.
     const { post, runEffects } = createEffectExecutor({
       isDisposed: () => disposed,
-      getState: () => state,
-      uriString: () => document.uri.toString(),
       dispatch: (event) => dispatch(event),
       // Route postMessage through the harness override when present so tests can
       // exercise the non-acceptance arms (ok=false / reject). Production builds
@@ -501,7 +486,6 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       showError,
       rescueUnsavedDraft: rescueDraft,
       canWrite: canWriteNow,
-      readLineageSince: () => liveLineageSince(() => canonicalDocumentText(document)),
       buildSeedDocument: (docVersion, externalEpoch, epochGeneration, settledEditId) => {
         const message = buildDocumentMessageFromDocument(document, {
           docVersion,
@@ -514,22 +498,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         lineage.noteHandedText(() => message.content, docVersion, document.version);
         return message;
       },
-      buildRejectedDraft: (content, docVersion, externalEpoch, epochGeneration, settledEditId) => {
-        const message = buildRejectedDraftFromDocument(document, content, {
-          docVersion,
-          themeKind: themeKindFromColorTheme(window.activeColorTheme.kind),
-          canWrite: canWriteNow(),
-          externalEpoch,
-          epochGeneration,
-          settledEditId,
-        });
-        // The HOST text under this label, not the draft: the draft is the
-        // webview's own bytes, and its next Edit is built on this label.
-        lineage.noteHandedText(() => canonicalDocumentText(document), docVersion, document.version);
-        return message;
-      },
       buildTheme: (themeKind) => buildThemeMessage(themeKind),
-      buildEditRejected: (error) => buildEditRejectedMessage(error),
       applyEditSeam: {
         // OLD text = the live buffer (applyEdit has not run yet, and the write
         // lock — set by the accept transition — blocks any other inbound edit on
@@ -1036,7 +1005,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           // This receipt-time check is a cheap fast path only; the check that
           // actually closes the hole is the DRAIN-time re-check inside
           // editSettledBarrier.run below — see the comment there.
-          if (state.rejection.kind === "pending") {
+          if (isRejectionPending()) {
             showError(REJECTION_BLOCKS_SWITCH_MESSAGE);
             return;
           }
@@ -1056,7 +1025,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
             // already passed, then settle(true) drains this callback in the
             // same step(). Without this re-check the deferred swap would close
             // the Quoll tab and orphan the just-rejected draft.
-            if (state.rejection.kind === "pending") {
+            if (isRejectionPending()) {
               showError(REJECTION_BLOCKS_SWITCH_MESSAGE);
               return;
             }
@@ -1077,7 +1046,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
                 // resolves the highlighted problem in the Quoll tab, then
                 // switches. Same data-loss invariant as the two checks above —
                 // never finalize a swap that orphans typed bytes.
-                if (state.rejection.kind === "pending") {
+                if (isRejectionPending()) {
                   noteSurface(document.uri.toString(), "quoll");
                   showError(REJECTION_BLOCKS_SWITCH_MESSAGE);
                   return;
@@ -1110,7 +1079,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
                 // failed, the swap was refused to protect the draft — while the
                 // earlier checks use an error toast).
                 void finalizeForwardSwap(document.uri, sourceTab, undefined, () =>
-                  state.rejection.kind === "pending" ? REJECTION_BLOCKS_SWITCH_MESSAGE : null
+                  isRejectionPending() ? REJECTION_BLOCKS_SWITCH_MESSAGE : null
                 );
               },
               (err: unknown) => {
@@ -1224,17 +1193,6 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       // BEFORE the disposed transition clears the lock (prepareDispose reads
       // isWriteLockHeld(state) NOW). MUST run before dispatch({ type: "disposed" }).
       revertRescueWiring.prepareDispose();
-      // A draft the write-gate refused never reached the TextDocument, so VS
-      // Code raised no save prompt and revert-rescue cannot see it: once the
-      // webview is gone the reducer state holds the only copy. Reopen it as an
-      // untitled document (see surface/unsaved-draft-rescue.ts). Runs BEFORE
-      // the teardown below, so a step that throws there cannot take the draft
-      // with it; the rescue reads `state.rejection` and touches nothing else.
-      // A pending rejection at close is projected here. Later settlement and
-      // drain rescues reach the same helper through the reducer effect.
-      if (state.rejection.kind === "pending") {
-        rescueDraft({ content: state.rejection.content, reason: state.rejection.error.message });
-      }
       // Set the local guard FIRST (arms the executor / listener guards), then drive
       // the core's `disposed` transition (releases the lock while retaining the
       // stash for reducer disposition), then tear down. The edit-settled barrier does

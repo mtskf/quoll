@@ -31,6 +31,7 @@ const validateForWrite = (content: string): ValidateForWriteResult =>
   content.includes("BAD") ? { ok: false, error: unsafe } : { ok: true };
 
 function harness(initial: (seed: HostSessionState) => HostSessionState) {
+  // @ts-expect-error — Task 4 removes this obsolete rejection-only fixture.
   const core = createHostSessionCore(ctx, { validateForWrite });
   const sent: HostToWebview[] = [];
   const toasts: string[] = [];
@@ -49,8 +50,6 @@ function harness(initial: (seed: HostSessionState) => HostSessionState) {
   };
   const executor = createEffectExecutor({
     isDisposed: () => false,
-    getState: () => live,
-    uriString: () => ctx.uriString,
     dispatch,
     send: async (message) => {
       sent.push(message);
@@ -62,13 +61,17 @@ function harness(initial: (seed: HostSessionState) => HostSessionState) {
     },
     rescueUnsavedDraft: () => undefined,
     canWrite: () => true,
-    readLineageSince: () => null,
     buildSeedDocument: unreachable("buildSeedDocument"),
+    // @ts-expect-error — Task 4 removes this obsolete rejection-only fixture.
     buildRejectedDraft: () => {
       throw new Error("boom-draft");
     },
     buildTheme: (themeKind) => ({ protocol: PROTOCOL_VERSION, type: "theme", themeKind }),
-    buildEditRejected: (error) => ({ protocol: PROTOCOL_VERSION, type: "edit-rejected", error }),
+    buildEditRejected: (error: { code: string; message: string }) => ({
+      protocol: PROTOCOL_VERSION,
+      type: "edit-rejected",
+      error,
+    }),
     applyEditSeam: {
       readText: unreachable("readText"),
       readVersion: () => 1,
@@ -117,6 +120,7 @@ describe("a throwing buildRejectedDraft is contained", () => {
       expect(h.toasts).toEqual([`Cannot save: ${unsafe.message}`]);
       expect(h.sent).toEqual([]);
       expect(h.dispatched).toEqual(["applyEditSettled"]);
+      // @ts-expect-error — Task 4 removes this obsolete rejection-only assertion.
       expect(h.state().rejection).toMatchObject({ kind: "pending", content: "hasBAD" });
       expect(errorSpy).toHaveBeenCalledWith(
         expect.stringContaining("failed to build the rejected draft"),
@@ -151,6 +155,7 @@ describe("a throwing buildRejectedDraft is contained", () => {
       expect(editorConfigPush).toHaveBeenCalledOnce();
       expect(h.sent).toEqual([]);
       expect(h.dispatched).toEqual(["ready"]);
+      // @ts-expect-error — Task 4 removes this obsolete rejection-only assertion.
       expect(h.state().rejection).toMatchObject({ kind: "pending", content: "hasBAD" });
     } finally {
       errorSpy.mockRestore();

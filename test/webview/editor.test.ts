@@ -22,7 +22,7 @@ import { quollMarkdownLanguage } from "../../src/webview/cm/markdown.js";
 import { quollOpenExternalSink } from "../../src/webview/cm/open-external.js";
 import { quollDocumentEol, serializeDocument } from "../../src/webview/cm/seed.js";
 import { type EditorHandle, mountEditor } from "../../src/webview/editor.js";
-import { type Action, initialState, type WebviewState } from "../../src/webview/state.js";
+import { type Action, initialState, reducer, type WebviewState } from "../../src/webview/state.js";
 import { HEAVY_FIXTURE_TIMEOUT_MS } from "../shared/heavy-fixture-timeout.js";
 import { fullTree } from "./helpers/full-tree.js";
 import { settledState } from "./helpers/settled-state.js";
@@ -1113,12 +1113,12 @@ describe("editor — dispose cancels a waiting handoff", () => {
 });
 
 // V-M13(a) (C3): debounce-driven first-post path throw surface.
-// postEditMessage catches a throw and dispatches serialize-error; without
+// postEditMessage catches a throw and dispatches send-failure; without
 // this guard, editInFlight would stay true forever (no Document arrives
 // because the host never received the Edit). Pin via injecting a host
 // mock whose postMessage throws on the FIRST call only.
 describe("editor — postEditMessage debounce-path throw surface (V-M13(a))", () => {
-  it("dispatches serialize-error + logs console.error when the first debounced post throws", async () => {
+  it("dispatches send-failure + logs console.error when the first debounced post throws", async () => {
     vi.useFakeTimers();
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     // Replace the postMessage mock for this test only — throws on the first
@@ -1139,17 +1139,17 @@ describe("editor — postEditMessage debounce-path throw surface (V-M13(a))", ()
     handle.applyDocument({ content: "seed", eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
     view.dispatch({ changes: { from: view.state.doc.length, insert: "x" } });
     vi.advanceTimersByTime(300);
-    // post-edit dispatched (single-flight set) THEN serialize-error
+    // post-edit dispatched (single-flight set) THEN send-failure
     // dispatched (catch arm). The reducer would clear editInFlight on
-    // serialize-error.
+    // send-failure.
     const types = dispatchSpy.mock.calls.map(([a]) => (a as { type: string }).type);
     expect(types).toContain("post-edit");
-    expect(types).toContain("serialize-error");
-    // The serialize-error action carries the host's throw message.
+    expect(types).toContain("send-failure");
+    // The send-failure action carries the host's throw message.
     const errAction = dispatchSpy.mock.calls.find(
-      ([a]) => (a as { type: string }).type === "serialize-error"
-    )?.[0] as { error: { message: string } };
-    expect(errAction.error.message).toContain("structuredClone failed");
+      ([a]) => (a as { type: string }).type === "send-failure"
+    )?.[0] as { message: string };
+    expect(errAction.message).toContain("structuredClone failed");
     // One [quoll] log surfaces the throw.
     const quollLogs = consoleSpy.mock.calls.filter(
       (args) => typeof args[0] === "string" && args[0].includes("[quoll] postMessage(edit) failed")
@@ -1162,11 +1162,11 @@ describe("editor — postEditMessage debounce-path throw surface (V-M13(a))", ()
 // V-M13(b): a throw from `dispatch` itself, inside postEditMessage's onError
 // callback, must not propagate out of the debounce-driven flush. Without a
 // guard around this inner dispatch call, editInFlight (set true by the prior
-// post-edit dispatch) would never be cleared by serialize-error, silently
+// post-edit dispatch) would never be cleared by send-failure, silently
 // blocking all further edits (state.ts's post-edit case: `if (editInFlight)
 // return state`).
-describe("editor — postEditMessage survives a throwing serialize-error dispatch (V-M13(b))", () => {
-  it("logs and does not propagate when the serialize-error dispatch itself throws", () => {
+describe("editor — postEditMessage survives a throwing send-failure dispatch (V-M13(b))", () => {
+  it("logs and does not propagate when the send-failure dispatch itself throws", () => {
     vi.useFakeTimers();
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     let calls = 0;
@@ -1179,7 +1179,7 @@ describe("editor — postEditMessage survives a throwing serialize-error dispatc
       }
     });
     const dispatchSpy = vi.fn((action: Action) => {
-      if (action.type === "serialize-error") {
+      if (action.type === "send-failure") {
         throw new Error("dispatch exploded");
       }
     });
@@ -1191,7 +1191,7 @@ describe("editor — postEditMessage survives a throwing serialize-error dispatc
     const quollLogs = consoleSpy.mock.calls.filter(
       (args) =>
         typeof args[0] === "string" &&
-        args[0].includes("[quoll] serialize-error dispatch itself failed")
+        args[0].includes("[quoll] send-failure dispatch itself failed")
     );
     expect(quollLogs.length).toBe(1);
     // The inner catch must fully absorb the throw — safePostMessage's own
@@ -1210,7 +1210,7 @@ describe("editor — postEditMessage survives a throwing serialize-error dispatc
 // V-M14: a throw from `dispatch` on the post-edit action itself (the FIRST
 // dispatch call in postEditMessage, before the Edit message is even built)
 // must not propagate out of the debounce-driven flush. Symmetric with
-// V-M13(b)'s guard around the serialize-error dispatch.
+// V-M13(b)'s guard around the send-failure dispatch.
 describe("editor — postEditMessage survives a throwing post-edit dispatch (V-M14)", () => {
   it("logs and does not propagate when the post-edit dispatch itself throws, and still posts the edit", () => {
     vi.useFakeTimers();
@@ -1240,16 +1240,22 @@ describe("editor — postEditMessage survives a throwing post-edit dispatch (V-M
 // Oversized doc: an edit whose content exceeds MAX_CONTENT_LENGTH would be
 // silently dropped by the host boundary validator (isBoundedContent →
 // console.warn, no edit-rejected), so the webview MUST intercept it on the
-// post path and route it to the serialize-error banner. Without the gate the
+// post path and route it to the send-failure banner. Without the gate the
 // over-limit `edit` posts, editInFlight latches on the ack that never comes,
 // and every later keystroke replay-drops with NO user-visible signal.
-describe("editor — oversized edit is gated to the serialize-error banner (oversized-doc)", () => {
+describe("editor — oversized edit is gated to the send-failure banner (oversized-doc)", () => {
   it(
-    "an over-limit doc posts NO edit, dispatches serialize-error, and never latches post-edit",
+    "an over-limit doc posts NO edit, dispatches send-failure, and never latches post-edit",
     () => {
       vi.useFakeTimers();
-      const dispatchSpy = vi.fn();
-      const { handle, view } = mount({ onDispatch: dispatchSpy });
+      let state = makeState();
+      const dispatchSpy = vi.fn((action: Action) => {
+        state = reducer(state, action);
+        m.setState(state);
+        m.commit(state.editInFlight);
+      });
+      const m = mount({ state, onDispatch: dispatchSpy });
+      const { handle, view } = m;
       handle.applyDocument({ content: "seed", eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
       // Replace the whole doc with an over-limit body (one code unit past the cap).
       const oversized = "a".repeat(MAX_CONTENT_LENGTH + 1);
@@ -1258,14 +1264,22 @@ describe("editor — oversized edit is gated to the serialize-error banner (over
       // The over-limit edit is intercepted on the post path — nothing reaches the host.
       expect(editPosts()).toHaveLength(0);
       const types = dispatchSpy.mock.calls.map(([a]) => (a as { type: string }).type);
-      // serialize-error surfaces the banner; post-edit is NEVER dispatched, so the
+      // send-failure surfaces the banner; post-edit is NEVER dispatched, so the
       // reducer's editInFlight cannot latch.
-      expect(types).toContain("serialize-error");
+      expect(types).toContain("send-failure");
       expect(types).not.toContain("post-edit");
       const errAction = dispatchSpy.mock.calls.find(
-        ([a]) => (a as { type: string }).type === "serialize-error"
-      )?.[0] as { error: { message: string } };
-      expect(errAction.error.message).toMatch(/too large/i);
+        ([a]) => (a as { type: string }).type === "send-failure"
+      )?.[0] as { message: string };
+      expect(errAction.message).toMatch(/too large/i);
+      expect(state.editInFlight).toBe(false);
+      expect(hostBytes(view)).toBe(oversized);
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: "smaller" } });
+      expect(state.sendFailure).toBeNull();
+      expect(editPosts()).toHaveLength(0);
+      vi.advanceTimersByTime(300);
+      expect(editPosts()).toHaveLength(1);
+      expect((editPosts()[0] as { content: string }).content).toBe("smaller");
     },
     HEAVY_FIXTURE_TIMEOUT_MS
   );
@@ -1603,14 +1617,11 @@ describe("editor — caret preserved across accept-and-reseed (q)", () => {
 });
 
 describe("editor — local-edit-attempt + discardBuffer on docChanged", () => {
-  it("dispatches local-edit-attempt + calls discardBuffer when serializeError is set", () => {
+  it("dispatches local-edit-attempt + calls discardBuffer when sendFailure is set", () => {
     const onDispatch = vi.fn();
     const stateWithError: WebviewState = {
       ...makeState(),
-      serializeError: {
-        code: "unsafe_url",
-        message: "URL is not in the allowlist: javascript:alert(1)",
-      },
+      sendFailure: "Could not send edit to host: transport failed",
     };
     const { view, handle } = mount({
       state: stateWithError,
@@ -1630,7 +1641,7 @@ describe("editor — local-edit-attempt + discardBuffer on docChanged", () => {
     expect(localEditCalls.length).toBe(1);
   });
 
-  it("does NOT dispatch local-edit-attempt when serializeError is null", () => {
+  it("does NOT dispatch local-edit-attempt when sendFailure is null", () => {
     const onDispatch = vi.fn();
     const { view, handle } = mount({
       state: makeState(),
@@ -1648,97 +1659,44 @@ describe("editor — local-edit-attempt + discardBuffer on docChanged", () => {
     expect(localEditCalls.length).toBe(0);
   });
 
-  it("on retry-keystroke, the synchronous drain does NOT replay stale buffered bytes", async () => {
-    // Setup steps (production-faithful):
-    //   1. Mount with NO error, debounce in real time (vi.useFakeTimers covers the 300ms).
-    //   2. Drive an Edit into in-flight via docChanged + debounce fire.
-    //   3. Drive a SECOND docChanged while in-flight to populate `buffered` with pre-reject doc bytes.
-    //   4. Simulate the host's edit-rejected via setState (clear editInFlight + set serializeError)
-    //      and call commit(false). The reducer's serialize-error arm would do the same in production.
-    //   5. The user's "fix" keystroke fires the updateListener. With discardBuffer-before-dispatch,
-    //      the synchronous drain sees an empty buffer and short-circuits. With the WRONG order, the
-    //      drain would post the stale pre-reject bytes — the test catches that as an extra postMessage.
+  it("on retry-keystroke, the synchronous drain does NOT replay stale buffered bytes", () => {
     vi.useFakeTimers();
-    try {
-      const onDispatch = vi.fn();
-      const initial = makeState();
-      const m = mount({ state: initial, onDispatch });
-
-      m.handle.applyDocument({
-        content: "safe\n",
-        eol: "\n",
-        canWrite: true,
-        docVersion: 1,
-        ...PAIR,
-      });
-
-      // (2) post → in-flight
-      m.view.dispatch({ changes: { from: m.view.state.doc.length, insert: "X" } });
-      await vi.advanceTimersByTimeAsync(350);
-      expect(editPosts()).toHaveLength(1);
-      const firstPost = editPosts()[0] as { content: string };
-      expect(firstPost.content).toMatch(/safe\nX/);
-
-      // (3) SECOND docChanged while in-flight → buffered = "safe\nXY"
-      m.view.dispatch({ changes: { from: m.view.state.doc.length, insert: "Y" } });
-      await vi.advanceTimersByTimeAsync(350);
-      expect(editPosts()).toHaveLength(1);
-
-      // (4) Simulate edit-rejected: flip state to serialize-error+editInFlight=false then commit.
-      m.setState({
-        ...initial,
-        ready: true,
-        docVersion: 1,
-        canWrite: true,
-        editInFlight: false,
-        serializeError: {
-          code: "unsafe_url",
-          message: "URL is not in the allowlist: javascript:alert(1)",
-        },
-      });
-      m.commit(false);
-
-      // No replay:
-      //   - commit(false) syncs edit-sync's internal editInFlight to false, then calls
-      //     replayIfNeeded. replayIfNeeded hits !canPost() (state.serializeError is set)
-      //     and returns early WITHOUT consuming buffered.
-      // buffered still holds "safe\nXY" after this call.
-      expect(editPosts()).toHaveLength(1);
-
-      // (5) User types the "fix" keystroke. updateListener:
-      //   a) detects serializeError != null
-      //   b) calls sync.discardBuffer() → buffered = null
-      //   c) dispatches local-edit-attempt → reducer clears serializeError. shell's dispatch
-      //      wrapper would synchronously fire onReducerCommit(false). Emulate by flipping
-      //      state then calling commit(false) right after the dispatch.
-      //   d) drain sees buffered === null → no-op
-      //   e) sync.onLocalChange() → schedule trySend for 300ms
-      onDispatch.mockImplementation((action) => {
-        if ((action as { type: string }).type === "local-edit-attempt") {
-          m.setState({
-            ...initial,
-            ready: true,
-            docVersion: 1,
-            canWrite: true,
-            editInFlight: false,
-            serializeError: null,
-          });
-          m.commit(false);
-        }
-      });
-      m.view.dispatch({ changes: { from: m.view.state.doc.length, insert: "Z" } });
-
-      // No synchronous post — drain short-circuited because discardBuffer() ran BEFORE dispatch.
-      expect(editPosts()).toHaveLength(1);
-
-      // Debounce fires → trySend reads FRESH getDoc() (now "safe\nXYZ") and posts that.
-      await vi.advanceTimersByTimeAsync(350);
-      expect(editPosts()).toHaveLength(2);
-      const secondPost = editPosts()[1] as { content: string };
-      expect(secondPost.content).toMatch(/safe\nXYZ/);
-    } finally {
-      vi.useRealTimers();
-    }
+    let state = makeState();
+    const m = mount({
+      state,
+      onDispatch: (action) => {
+        state = reducer(state, action);
+        m.setState(state);
+        m.commit(state.editInFlight);
+      },
+    });
+    m.handle.applyDocument({
+      content: "safe\n",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 1,
+      ...PAIR,
+    });
+    m.view.dispatch({ changes: { from: m.view.state.doc.length, insert: "X" } });
+    vi.advanceTimersByTime(300);
+    expect(editPosts()).toHaveLength(1);
+    m.view.dispatch({ changes: { from: m.view.state.doc.length, insert: "Y" } });
+    vi.advanceTimersByTime(300);
+    expect(editPosts()).toHaveLength(1);
+    postMessage.mockImplementationOnce(() => {
+      throw new Error("transport failed");
+    });
+    m.handle.flushPending();
+    expect(state.sendFailure).toContain("transport failed");
+    expect(state.editInFlight).toBe(false);
+    expect(editPosts()).toHaveLength(2);
+    m.view.dispatch({ changes: { from: m.view.state.doc.length, insert: "Z" } });
+    // The retry clears the buffer before dispatch synchronously re-enters the drain.
+    expect(state.sendFailure).toBeNull();
+    expect(editPosts()).toHaveLength(2);
+    vi.advanceTimersByTime(300);
+    expect(editPosts()).toHaveLength(3);
+    expect((editPosts().at(-1) as { content: string }).content).toBe("safe\nXYZ");
   });
 });
 
@@ -2966,5 +2924,50 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
     expect(range.to).toBeLessThanOrEqual(newHeadingPos); // "# New" NOT concealed
     const freshLine1 = view.state.doc.line(1);
     expect(foldable(view.state, freshLine1.from, freshLine1.to)).toEqual(range);
+  });
+});
+
+describe("editor — failed-send carrier and synchronous re-entry", () => {
+  it("retains the visible draft and reports a foreign reseed once through the drain", () => {
+    vi.useFakeTimers();
+    const discard = vi.fn();
+    let state = makeState();
+    const m = mount({
+      state,
+      onLocalEditDiscarded: discard,
+      onDispatch: (action) => {
+        state = reducer(state, action);
+        m.setState(state);
+        m.commit(state.editInFlight);
+      },
+    });
+    m.handle.applyDocument({ content: "seed", eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
+    postMessage.mockImplementation((message: { type?: string }) => {
+      if (message.type === "edit") {
+        throw new Error("transport failed");
+      }
+    });
+    m.view.dispatch({ changes: { from: 4, insert: "x" } });
+    vi.advanceTimersByTime(300);
+    expect(state.sendFailure).toContain("transport failed");
+    expect(state.editInFlight).toBe(false);
+    expect(hostBytes(m.view)).toBe("seedx");
+    expect(discard).not.toHaveBeenCalled();
+    m.handle.applyDocument({
+      content: "theirs",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 2,
+      ...PAIR,
+      externalEpoch: 1,
+    });
+    state = reducer(state, { type: "document", docVersion: 2, canWrite: true, themeKind: "dark" });
+    m.setState(state);
+    m.commit(false);
+    m.commit(false);
+    expect(hostBytes(m.view)).toBe("theirs");
+    expect(discard).toHaveBeenCalledTimes(1);
+    expect(state.sendFailure).toBeNull();
+    expect(editPosts()).toHaveLength(1);
   });
 });

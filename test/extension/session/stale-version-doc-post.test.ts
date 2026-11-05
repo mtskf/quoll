@@ -27,10 +27,8 @@ import {
 import { type HostToWebview, PROTOCOL_VERSION } from "../../../src/shared/protocol.js";
 
 const ctx = { uriString: "file:///x.md", fsPath: "/x.md" };
-const okValidate = () => ({ ok: true }) as const;
 const GEN = 555;
 const core = createHostSessionCore(ctx, {
-  validateForWrite: okValidate,
   mintEpochGeneration: () => GEN,
 });
 
@@ -39,8 +37,6 @@ const state = (over: Partial<HostSessionState> = {}): HostSessionState => ({
   lastAppliedDocVersion: 1,
   pendingApplyBaseVersion: null,
   disposed: false,
-  rejection: { kind: "none" },
-  nextRejectionId: 1,
   pendingEdit: null,
   inFlightContent: null,
   externalEpoch: 0,
@@ -107,7 +103,7 @@ describe("stale-version Document post: keystroke is not lost", () => {
 
 describe("stale-version Document post: executor pairs live version with live bytes", () => {
   it("viewStateVisible under a stale core version posts the live version AND live bytes together", () => {
-    const coreL = createHostSessionCore(ctx, { validateForWrite: okValidate });
+    const coreL = createHostSessionCore(ctx);
     // Fake mutable document. An external edit advances version+bytes together
     // (as VS Code does), but its documentChanged is still in the 100 ms debounce
     // so the reducer's lastAppliedDocVersion has NOT caught up.
@@ -123,8 +119,6 @@ describe("stale-version Document post: executor pairs live version with live byt
     });
     const executor: EffectExecutor = createEffectExecutor({
       isDisposed: () => false,
-      getState: () => live,
-      uriString: () => ctx.uriString,
       dispatch: dispatchEvent,
       send: async (m) => {
         sent.push(m);
@@ -134,7 +128,6 @@ describe("stale-version Document post: executor pairs live version with live byt
       showError: () => {},
       rescueUnsavedDraft: () => undefined,
       canWrite: () => true,
-      readLineageSince: () => null,
       // Mirrors the production panel closure: live bytes + the effect's version
       // + the core-managed identity pair.
       buildSeedDocument: (docVersion, externalEpoch, epochGeneration, settledEditId) =>
@@ -146,23 +139,8 @@ describe("stale-version Document post: executor pairs live version with live byt
           epochGeneration,
           settledEditId,
         }),
-      buildRejectedDraft: (content, docVersion, externalEpoch, epochGeneration, settledEditId) =>
-        ({
-          protocol: PROTOCOL_VERSION,
-          type: "document",
-          eol: "\n",
-          content,
-          docVersion,
-          canWrite: true,
-          themeKind: "light",
-          externalEpoch,
-          epochGeneration,
-          settledEditId,
-        }) as HostToWebview,
       buildTheme: (themeKind) =>
         ({ protocol: PROTOCOL_VERSION, type: "theme", themeKind }) as HostToWebview,
-      buildEditRejected: (error) =>
-        ({ protocol: PROTOCOL_VERSION, type: "edit-rejected", error }) as HostToWebview,
       applyEditSeam: {
         readText: () => fakeDoc.getText(),
         readVersion: () => fakeDoc.version,

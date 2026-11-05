@@ -80,14 +80,6 @@ export type ThemeMessageShape = EnvelopeShape & {
   themeKind: ThemeKindShape;
 };
 
-export type EditRejectedMessageShape = EnvelopeShape & {
-  type: "edit-rejected";
-  error: {
-    code: string;
-    message: string;
-  };
-};
-
 // Local mirrors of the preset unions (the e2e tsconfig cannot import from src/).
 // types-equality.test.ts pins these against the real protocol unions.
 type FontFamilyPrefShape = "default" | "serif" | "sans";
@@ -186,7 +178,6 @@ export type FormatDocumentMessageShape = EnvelopeShape & { type: "format-documen
 export type HostToWebviewShape =
   | DocumentMessageShape
   | ThemeMessageShape
-  | EditRejectedMessageShape
   | ImageWriteResultMessageShape
   | EditorConfigMessageShape
   | CaretApplyMessageShape
