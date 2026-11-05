@@ -1077,8 +1077,7 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // readonly/stale/no-op arm below — that arm already logs the same
         // incident through `withholdAckEffects`. NOT emitted post-dispose
         // either: there the `accept` arm deliberately does not re-acquire the
-        // lock, so neither consequence named below can occur (no later
-        // settlement reads this base, and no draft goes out).
+        // lock, so no later settlement reads this base.
         // Both exclusions live HERE, in the one place the record is built, so no
         // call site can carry half the gate: an arm that spreads it emits it
         // exactly when it is warranted.
@@ -1088,9 +1087,8 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
             : [
                 {
                   type: "logWarn",
-                  // Shared incident sentence, then the arm's own consequence —
-                  // written as ONE owner for the shared half so the two arms
-                  // cannot drift apart on what the incident WAS.
+                  // Record both the unobserved base and its consequence for a
+                  // later settlement that also misses its content read.
                   message:
                     "[quoll] unlabelled drain: the pending stash was re-based onto an UNOBSERVED settlement label (a known-stale lower bound). " +
                     "The bytes land; the residual is that a later settlement which also misses its CONTENT read can score our own increment as foreign (one spurious epoch bump → replay-buffer drop)",

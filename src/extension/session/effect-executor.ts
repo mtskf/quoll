@@ -14,9 +14,8 @@
 // theme/canWrite at CALL time (freshness contract preserved).
 //
 // ⚠️ Disposed-guard scope (do NOT over-apply). The `isDisposed()` guard belongs
-// ONLY where the panel closure had it: `post`'s early-return + its `.then` OK
-// arm (NOT the false/reject arms — those log unconditionally), and
-// ordinary guarded delivery. `runEffects` itself is
+// in `post`'s early-return + its `.then` OK arm (NOT the false/reject arms —
+// those log unconditionally). `runEffects` itself is
 // NEVER wrapped in a disposed guard (nor are the `showError` and
 // `rescueUnsavedDraft` cases), and `runApplyEdit`'s `applyEditSettled`
 // dispatch fires EVEN post-dispose in every arm (ok / refused / rejected, plus
@@ -190,9 +189,9 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
   // the `postDocument` build-failure guard, since the ⚠️ above is a different
   // claim): where a reducer-side list pairs a signal with a triage log, the
   // signal goes first — defence in depth against a future edit removing a
-  // per-effect guard. Cited by name from `withholdAckEffects`, the
-  // `settlementTransitionFailed` arm — CONSUMERS, not a census: other lists satisfy it uncited
-  // (the post-dispose rescue lists) or invert it on purpose
+  // per-effect guard. Cited by name from `withholdAckEffects` and the
+  // `settlementTransitionFailed` arm — CONSUMERS, not a census: other lists
+  // satisfy it uncited (the post-dispose rescue lists) or invert it on purpose
   // (`settlementEffects`' `refused` arm).
   const reportContained = (report: () => void): void => {
     try {
@@ -332,7 +331,7 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
   //
   // Name it `readVersionGuarded` (NOT "retry"): it is the ONE guarded version
   // reader, with ONE contract — `number | null`, null ⇔ unobserved, never a
-  // fabricated value — serving THREE call families, only one of which is a
+  // fabricated value — serving TWO call families, only one of which is a
   // retry:
   //   1. the resolved settlement's RETRY (`runApplyEdit`'s fulfilment arm), the
   //      one the paragraph above describes: the pipeline already read the version
@@ -342,8 +341,8 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
   //      (not a second chance at one).
   // The consequences differ per family, so the call site is NAMED and travels on
   // the warn: without it unrelated outcomes collapse into one log line and
-  // triage cannot tell "the retry lost a transient" from "the recovery reseed was
-  // withheld".
+  // triage cannot tell a failed settlement retry from a failed first read
+  // after the write pipeline rejected.
   //
   // The roster IS the contract: a closed set of triage tokens, one per call
   // SITE. Typing it as a union (not `string`) makes ONE of the two
@@ -353,8 +352,8 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
   // evaluate anything that can throw (a helper returning the union, or a ternary
   // over two valid tokens, type-checks fine and would re-open exactly that hole).
   // The union also cannot catch a copy-paste that stamps one VALID token onto
-  // the wrong arm (the three adjacent recovery sites are exactly that shape), so
-  // each site also has a per-site assertion in `effect-executor.test.ts`.
+  // the wrong arm, so each site also has a per-site assertion in
+  // `effect-executor.test.ts`.
   type GuardedVersionReadSite = "settlement-retry" | "rejection-arm-first-read";
   const readVersionGuarded = (site: GuardedVersionReadSite): number | null => {
     try {

@@ -18,7 +18,7 @@ import type { DocumentEol, DocumentMessage } from "../../shared/protocol.js";
 import { type BuildDocumentMessageInput, buildDocumentMessage } from "./document-message.js";
 
 /** Everything a Document message carries besides its bytes and separator —
- *  derived from the builder input so both adapters below stay in lockstep
+ *  derived from the builder input so the document adapter stays in lockstep
  *  with it. */
 type DocumentMessageMetadata = Omit<BuildDocumentMessageInput, "content" | "eol">;
 
