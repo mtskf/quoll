@@ -326,8 +326,9 @@ export type HostSessionEffect =
   | { readonly type: "postTheme"; readonly themeKind: ThemeKind }
   | { readonly type: "applyEdit"; readonly content: string; readonly baseDocVersion: number }
   | { readonly type: "showError"; readonly message: string }
-  // Post-dispose stash rescue after an undrainable settlement, drain refusal,
-  // or transition failure. Delivery is owned by surface/unsaved-draft-rescue.ts.
+  // Post-dispose rescue of a stash or of the final in-flight target after an
+  // undrainable settlement, drain refusal, or transition failure. Delivery is
+  // owned by surface/unsaved-draft-rescue.ts.
   // The `disposed` arm itself emits no rescue; the panel projects a pending
   // Markdown rejection at close through the same helper.
   | {
@@ -388,7 +389,7 @@ function contentMatches(a: string, b: string | null): boolean {
 }
 
 const rescueStash = (
-  stash: PendingEdit | null,
+  stash: Pick<PendingEdit, "content"> | null,
   observed: string | null,
   reason: string
 ): HostSessionEffect[] =>
@@ -554,11 +555,11 @@ function ackEffects(
 }
 
 // A settlement's user-visible FAILURE toasts, and the ONE owner of their text.
-// Split out because the disposed-no-stash arm wants exactly these and nothing
-// else: asking `settlementEffects` for the full set and filtering it down to
-// `showError` made that arm depend on the filter for its correctness, and
-// forced it to hand the ack gate a fabricated `ackLabelObserved: true` for an
-// ack it never wanted built. `ok` has no toast — a settlement that succeeded is
+// Split out because the disposed-no-stash arm wants exactly these (when it
+// rescues nothing) and nothing else. Asking `settlementEffects` for the full
+// set and filtering it down to `showError` made that arm depend on the filter
+// for its correctness, and forced it to hand the ack gate a fabricated
+// `ackLabelObserved: true` for an ack it never wanted built. `ok` has no toast — a settlement that succeeded is
 // not a failure, and an unverified landing is not a failed save.
 function failureToasts(
   outcome: ApplyEditOutcome,
@@ -672,10 +673,12 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
     // user (post-dispose the stash is the edit's only carrier — the webview's
     // retained replay buffer is gone with the iframe — and the `disposed` arm's
     // `effects: []` is what used to make the loss silent). With NO stash waiting
-    // neither arm touches the stash or resyncs the webview; the HOST-side
-    // signals are the exception — a failed settlement keeps its toast, and the
-    // recovery keeps its internal-error toast plus triage, because after a close
-    // a VS Code window toast is the only surface left.
+    // both arms still read `inFlightContent` (the final in-flight target the
+    // `disposed` arm retains) and rescue it by the same observation rule as a
+    // stash; neither resyncs the webview. When nothing is rescued the HOST-side
+    // signals remain — a failed settlement keeps its toast, and the recovery
+    // keeps its internal-error toast plus triage, because after a close a VS Code
+    // window toast is the only surface left.
     if (
       state.disposed &&
       event.type !== "disposed" &&
@@ -872,27 +875,20 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
       }
 
       case "applyEditSettled": {
-        // ARCHITECTURE.md's surface/unsaved-draft-rescue.ts entry owns
-        // disposed no-stash notification behavior.
+        // After disposal, the final in-flight target is rescued by the same
+        // observation rule as a stash; repeated settlements cannot rescue twice.
         if (state.disposed && state.pendingEdit === null) {
-          const effects = failureToasts(event.outcome, state.context);
-          if (
-            event.outcome.kind === "ok" &&
-            state.inFlightContent === null &&
-            (event.currentContent === null || event.divergedAfterApply)
-          ) {
-            return {
-              state,
-              effects: [
-                {
-                  type: "showError",
-                  message:
-                    "Quoll could not verify the final edit after the editor closed. Reopen the file to check its contents.",
-                },
-              ],
-            };
-          }
-          return { state, effects };
+          const target = state.inFlightContent;
+          const observed = event.currentContent;
+          const rescueTarget = target === null ? null : { content: target };
+          const rescue =
+            event.outcome.kind !== "ok" || observed === null || event.divergedAfterApply
+              ? rescueStash(rescueTarget, observed, undrainableReason(event, observed, target))
+              : [];
+          return {
+            state: { ...state, inFlightContent: null },
+            effects: rescue.length > 0 ? rescue : failureToasts(event.outcome, state.context),
+          };
         }
         const heldBase = state.pendingApplyBaseVersion;
         const stash = state.pendingEdit;
@@ -1242,12 +1238,10 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         }
         switch (verdict.kind) {
           case "accept":
-            // Re-acquire the lock and track drained content while alive.
-            // Post-dispose returns bare settled state; omitted inFlightContent
-            // identifies the drain's own settlement for the no-stash rule.
+            // Track drained content on both paths; re-acquire the lock only while alive.
             return {
               state: state.disposed
-                ? settled
+                ? { ...settled, inFlightContent: stash.content }
                 : {
                     ...settled,
                     pendingApplyBaseVersion: settled.lastAppliedDocVersion,
@@ -1367,7 +1361,7 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // behavior. After disposal the captured observation decides rescue.
         const rescued = state.disposed
           ? rescueStash(
-              stash,
+              stash ?? (state.inFlightContent === null ? null : { content: state.inFlightContent }),
               event.currentContent,
               "an internal error interrupted the preceding save"
             )
@@ -1594,8 +1588,7 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         return { state, effects: [{ type: "openExternal", href: event.href }] };
 
       case "disposed":
-        // Keep inFlightContent: the no-stash settlement contract distinguishes
-        // a plain in-flight edit from the post-dispose drain's own settlement.
+        // Keep the final in-flight target available for post-dispose rescue.
         return { state: { ...state, disposed: true, pendingApplyBaseVersion: null }, effects: [] };
 
       default: {
