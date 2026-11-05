@@ -877,13 +877,10 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         if (state.disposed && state.pendingEdit === null) {
           const target = state.inFlightContent;
           const observed = event.currentContent;
+          const rescueTarget = target === null ? null : { content: target };
           const rescue =
             event.outcome.kind !== "ok" || observed === null || event.divergedAfterApply
-              ? rescueStash(
-                  target === null ? null : { content: target },
-                  observed,
-                  undrainableReason(event, observed, target)
-                )
+              ? rescueStash(rescueTarget, observed, undrainableReason(event, observed, target))
               : [];
           return {
             state: { ...state, inFlightContent: null },
