@@ -326,8 +326,9 @@ export type HostSessionEffect =
   | { readonly type: "postTheme"; readonly themeKind: ThemeKind }
   | { readonly type: "applyEdit"; readonly content: string; readonly baseDocVersion: number }
   | { readonly type: "showError"; readonly message: string }
-  // Post-dispose stash rescue after an undrainable settlement, drain refusal,
-  // or transition failure. Delivery is owned by surface/unsaved-draft-rescue.ts.
+  // Post-dispose rescue of a stash or of the final in-flight target after an
+  // undrainable settlement, drain refusal, or transition failure. Delivery is
+  // owned by surface/unsaved-draft-rescue.ts.
   // The `disposed` arm itself emits no rescue; the panel projects a pending
   // Markdown rejection at close through the same helper.
   | {
@@ -554,11 +555,11 @@ function ackEffects(
 }
 
 // A settlement's user-visible FAILURE toasts, and the ONE owner of their text.
-// Split out because the disposed-no-stash arm wants exactly these and nothing
-// else: asking `settlementEffects` for the full set and filtering it down to
-// `showError` made that arm depend on the filter for its correctness, and
-// forced it to hand the ack gate a fabricated `ackLabelObserved: true` for an
-// ack it never wanted built. `ok` has no toast — a settlement that succeeded is
+// Split out because the disposed-no-stash arm wants exactly these (when it
+// rescues nothing) and nothing else. Asking `settlementEffects` for the full
+// set and filtering it down to `showError` made that arm depend on the filter
+// for its correctness, and forced it to hand the ack gate a fabricated
+// `ackLabelObserved: true` for an ack it never wanted built. `ok` has no toast — a settlement that succeeded is
 // not a failure, and an unverified landing is not a failed save.
 function failureToasts(
   outcome: ApplyEditOutcome,
@@ -672,10 +673,12 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
     // user (post-dispose the stash is the edit's only carrier — the webview's
     // retained replay buffer is gone with the iframe — and the `disposed` arm's
     // `effects: []` is what used to make the loss silent). With NO stash waiting
-    // neither arm touches the stash or resyncs the webview; the HOST-side
-    // signals are the exception — a failed settlement keeps its toast, and the
-    // recovery keeps its internal-error toast plus triage, because after a close
-    // a VS Code window toast is the only surface left.
+    // both arms still read `inFlightContent` (the final in-flight target the
+    // `disposed` arm retains) and rescue it by the same observation rule as a
+    // stash; neither resyncs the webview. When nothing is rescued the HOST-side
+    // signals remain — a failed settlement keeps its toast, and the recovery
+    // keeps its internal-error toast plus triage, because after a close a VS Code
+    // window toast is the only surface left.
     if (
       state.disposed &&
       event.type !== "disposed" &&
