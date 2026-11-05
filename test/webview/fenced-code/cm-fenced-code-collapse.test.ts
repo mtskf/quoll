@@ -117,6 +117,7 @@ describe("fencedBlockGeometry", () => {
     expect(state.field(fencedCodeCollapseField).blocks).toHaveLength(1);
     expect(state.field(fencedCodeCollapseField).blocks[0].key).toBe(prefix.length);
   });
+
   it("returns null for a block at the threshold (10 body lines → not collapsible)", () => {
     const state = stateWith(fencedDoc(10));
     expect(fencedBlockGeometry(state, firstFencedNode(state))).toBeNull();
