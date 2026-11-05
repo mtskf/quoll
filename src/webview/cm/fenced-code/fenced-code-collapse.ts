@@ -189,9 +189,13 @@ function computeExtendedSpan(tr: Transaction): Interval[] {
 // header owns that rationale.
 //
 // A frontmatter boundary move flips the geometry's `fmEnd` gate for a fence arbitrarily far
-// away without touching its bytes (image-field.ts G3). Today every such move edits a `---`
-// line, which STRUCTURAL's list-marker alt happens to catch; the explicit check keeps this
-// field correct if STRUCTURAL is ever narrowed.
+// away without touching its bytes (image-field.ts G3). `fmEnd` is the closer line's `.to`, so
+// even a one-keystroke rigid shift inside the frontmatter body changes it and takes "full" —
+// the same accepted over-trigger as image G3; the fence hot path (editing inside a code
+// fence) never reaches it. Every move that can flip the gate (a closer appearing, vanishing
+// or re-identified) edits a `---` line, which STRUCTURAL already catches, so this arm is a
+// defence against STRUCTURAL being narrowed: no test goes red on it alone (bounded ≡ full pins
+// the behaviour).
 const fencedCollapseSpec: LineCollapseSpec<null> = {
   ...fencedCollapseTarget,
   makeWidget: ({ key, expanded, hiddenCount }) =>

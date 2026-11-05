@@ -132,6 +132,16 @@ describe("fencedCodeCollapseField bounded ≡ full", () => {
       { changes: { from: closing, to: closing + "metadata: shifted\n".length } },
     ]);
   });
+  it("tracks frontmatter edits that touch no `---` line and add no newline", () => {
+    const closing = masked.lastIndexOf("---\n") + 1; // +1: the "x" below shifts it
+    run(masked, [
+      // rigid shift of the whole frontmatter tail
+      { changes: { from: 4 + "description: |".length, insert: "x" } },
+      // `---` → `--` (closer vanishes without removing a newline), then restore it
+      { changes: { from: closing + 1, to: closing + 2 } },
+      { changes: { from: closing + 1, insert: "-" } },
+    ]);
+  });
   const cases: Array<{ name: string; initial: string; edits: Edit[] }> = [
     {
       name: "type prose far above a block",
