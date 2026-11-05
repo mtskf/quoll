@@ -84,21 +84,11 @@ export interface HostSessionStepDeps {
    *  only the reducer's own exhaustive-arm throws.
    *
    *  A throw from `applyEditSettled` itself IS paid, but not here: see
-   *  `commitWriteLockRecovery` and `recoverStrandedWriteLock`, which release the
-   *  write lock and dispose of the stash before the barrier is settled. */
+   *  `recoverStrandedWriteLock` commits the recovery through this same
+   *  `commitTransition` dependency. The reducer disposes of or rescues the
+   *  stash before the barrier is settled; webview delivery stays suppressed
+   *  after disposal (ARCHITECTURE.md's surface/unsaved-draft-rescue.ts entry). */
   readonly commitTransition: (event: HostSessionEvent) => readonly HostSessionEffect[];
-  /** Commit the `settlementTransitionFailed` recovery transition and return its
-   *  effects — the panel's own state-committing lambda, called with the THROWING
-   *  SETTLEMENT's `settledVersion` so the recovery re-bases on the label that
-   *  settlement already observed (no second version read anywhere; see the event
-   *  member's comment in `host-session-core.ts`). REQUIRED, not optional: a
-   *  no-op default would let a call site forget the wiring and keep the
-   *  stranded-lock bug with every test green — measured, `?` plus a
-   *  `?? (() => [])` default leaves all 335 `test/extension/session` tests
-   *  passing. So the modifier is PINNED, in
-   *  `test/extension/types-equality.test.ts` (this file's own suite is in no
-   *  tsconfig, which is why the pin cannot live next to it). */
-  readonly commitWriteLockRecovery: (settledVersion: number | null) => readonly HostSessionEffect[];
   readonly runEffects: (effects: readonly HostSessionEffect[]) => void;
   /** `editSettledBarrier.settle` — the deferred side channels' ONLY release. */
   readonly settleEditBarrier: (applied: boolean) => void;
@@ -217,7 +207,7 @@ type SettlementEvent = Extract<HostSessionEvent, { readonly type: "applyEditSett
  *  ternary's `null` fallback silently (measured by moving
  *  `settlementTransitionFailed` into the arm below: with the boolean signature
  *  tsc stays CLEAN, with this one it is `TS2322` — the member is "missing the
- *  following properties … outcome, canWrite, currentContent, preApplyContent").
+ *  following properties … outcome, canWrite, preApplyContent").
  *  NOT a `event is Extract<…>` type predicate: a predicate body is
  *  UNCHECKED, which would turn today's safe restatement into an unsound
  *  narrowing — strictly worse than the boolean it replaces.
@@ -377,7 +367,12 @@ export function createHostSessionStep(
     }
     let recoveryEffects: readonly HostSessionEffect[];
     try {
-      recoveryEffects = deps.commitWriteLockRecovery(settlement.settledVersion);
+      const recovery: Extract<HostSessionEvent, { readonly type: "settlementTransitionFailed" }> = {
+        type: "settlementTransitionFailed",
+        settledVersion: settlement.settledVersion,
+        currentContent: settlement.currentContent,
+      };
+      recoveryEffects = deps.commitTransition(recovery);
     } catch (recoveryErr) {
       reportSecondaryError(recoveryErr);
       return;

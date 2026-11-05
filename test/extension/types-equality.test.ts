@@ -207,30 +207,10 @@ describe("status-bar type pins", () => {
 });
 
 describe("host-session step type pins", () => {
-  it("keeps HostSessionStepDeps' write-lock recovery dep REQUIRED", () => {
-    // `commitWriteLockRecovery` is the panel's only path to releasing a write
-    // lock that a THROWING `applyEditSettled` transition left held. The dep's
-    // own doc says "REQUIRED, not optional: a no-op default would let a call
-    // site forget the wiring and keep the stranded-lock bug with every test
-    // green" — and until this pin, nothing enforced it. Adding `?` plus a
-    // `?? (() => [])` default compiles clean, and because
-    // `test/extension/session/` was in NO tsconfig when this pin was written
-    // (vitest is transpile-only), a harness that omitted the dep raised a
-    // runtime `TypeError` that `recoverStrandedWriteLock`'s own `try` funnelled
-    // into `onSettleError` — the test still PASSED while measuring no recovery
-    // at all. That directory is in the unit program now.
-    //
-    // Lives here for the reason the status-bar and table-model pins spell out:
-    // this file is type-checked by `pnpm compile`, so the assertion is
-    // non-vacuous. `Required<T>` is homomorphic, so the identity holds only
-    // while the picked member carries no `?`. Revert-check: add `?` to
-    // `commitWriteLockRecovery` and this resolves to `false`, failing the
-    // `= true` assignment. The technique's non-vacuity is measured against the
-    // deliberately OPTIONAL `onSettleError`, for which the same assertion
-    // fails — that member is the control, and is deliberately not pinned here.
+  it("keeps HostSessionStepDeps' commitTransition required", () => {
     const _check: AssertEqual<
-      Pick<HostSessionStepDeps, "commitWriteLockRecovery">,
-      Required<Pick<HostSessionStepDeps, "commitWriteLockRecovery">>
+      Pick<HostSessionStepDeps, "commitTransition">,
+      Required<Pick<HostSessionStepDeps, "commitTransition">>
     > = true;
     expect(_check).toBe(true);
   });

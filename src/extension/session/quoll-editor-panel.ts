@@ -81,7 +81,6 @@ import { toLintDiagnostics } from "../lint/lint-diagnostics.js";
 import { LintMirror } from "../lint/lint-mirror.js";
 import type { StatusBarSlots } from "../status-bar.js";
 import { openInQuollEditor } from "../surface/open-in-quoll.js";
-import { type RescuableDraft, rescueRejectedDraft } from "../surface/rejected-draft-rescue.js";
 import {
   REJECTION_BLOCKS_SWITCH_MESSAGE,
   registerPendingRejection,
@@ -95,6 +94,7 @@ import { createRevertRescueWiring } from "../surface/revert-rescue-wiring.js";
 import { showSafely } from "../surface/show-safely.js";
 import { noteSurface } from "../surface/surface-memory.js";
 import { finalizeForwardSwap, findSourceTab } from "../surface/surface-swap.js";
+import { rescueUnsavedDraft, type UnsavedDraft } from "../surface/unsaved-draft-rescue.js";
 import type { PanelControls, TestHarness } from "../test-harness.js";
 import {
   buildLocalResourceRoots,
@@ -381,7 +381,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // below can close over it — they are only invoked once a dispatch is in
     // flight, after this assignment.
     // Typed `HostSessionInputEvent`, not `HostSessionEvent`: the write-lock
-    // recovery is COMMITTED (see `commitWriteLockRecovery` below), never queued,
+    // recovery is COMMITTED (see `recoverStrandedWriteLock` in host-session-step.ts), never queued,
     // and that exclusion is now enforced by the type rather than by this comment
     // — a dispatched recovery would land behind a sibling whose lock-held stash
     // arm then loses its stash to it.
@@ -414,17 +414,6 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     };
     const step = createHostSessionStep({
       commitTransition,
-      // Committed when an `applyEditSettled` TRANSITION throws: the panel never
-      // assigned the state that would have released the write lock, so without
-      // this the lock stays held for the rest of this panel's life and every
-      // later edit piles into a stash with no drain. Same lambda, so the
-      // release goes through the REDUCER — the panel never patches `state`
-      // itself (host-session-core.ts's header). The version is the throwing
-      // settlement's own observation, handed over by the step; nothing is
-      // re-read here (a second guarded reader would falsify
-      // `effect-executor.ts`'s "ONE guarded version reader" contract).
-      commitWriteLockRecovery: (settledVersion) =>
-        commitTransition({ type: "settlementTransitionFailed", settledVersion }),
       // `runEffects` is LATE-BOUND: the executor that owns it is destructured
       // BELOW this point, so it must be reached through a lambda (a direct
       // reference here would be a TDZ error). `editSettledBarrier` is already
@@ -457,10 +446,11 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     const liveLineageSince = (readLiveText: () => string): number | null =>
       isWriteLockHeld(state) ? null : lineage.lineageSince(readLiveText);
 
-    // The one rescue path for a refused draft: `onDidDispose` (rejection pending
-    // at close) and the executor's `rescueRejectedDraft` effect (post-dispose drain).
-    const rescueDraft = (draft: RescuableDraft): void =>
-      rescueRejectedDraft(draft, document.uri.fsPath, {
+    // Untitled delivery for both pending Markdown rejection at close and
+    // reducer-owned post-dispose stash rescue. Recovery ownership and limits:
+    // ARCHITECTURE.md's surface/unsaved-draft-rescue.ts entry.
+    const rescueDraft = (draft: UnsavedDraft): void =>
+      rescueUnsavedDraft(draft, document.uri.fsPath, {
         openUntitled: (content) => {
           // Test mode routes the open through the harness so E2E suites that are
           // not about the rescue never get a dirty untitled document. Branch on
@@ -476,8 +466,8 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
             .openTextDocument({ language: "markdown", content })
             .then((doc) => window.showTextDocument(doc, { preview: false }));
         },
-        showWarning: (message) =>
-          showSafely(window.showWarningMessage(message), "showWarningMessage"),
+        showWarning: (message) => window.showWarningMessage(message),
+        showError: (message) => window.showErrorMessage(message),
       });
 
     // Effect executor — owns `post`, `sendEditRejected`, `runApplyEdit`, and
@@ -509,7 +499,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       // posts, not tell which webview a command reached.
       recordEvent: (m) => this.harness?.recordEvent(m, document.uri.toString()),
       showError,
-      rescueRejectedDraft: rescueDraft,
+      rescueUnsavedDraft: rescueDraft,
       canWrite: canWriteNow,
       readLineageSince: () => liveLineageSince(() => canonicalDocumentText(document)),
       buildSeedDocument: (docVersion, externalEpoch, epochGeneration, settledEditId) => {
@@ -1237,18 +1227,17 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       // A draft the write-gate refused never reached the TextDocument, so VS
       // Code raised no save prompt and revert-rescue cannot see it: once the
       // webview is gone the reducer state holds the only copy. Reopen it as an
-      // untitled document (see surface/rejected-draft-rescue.ts). Runs BEFORE
+      // untitled document (see surface/unsaved-draft-rescue.ts). Runs BEFORE
       // the teardown below, so a step that throws there cannot take the draft
       // with it; the rescue reads `state.rejection` and touches nothing else.
-      // Only a rejection pending NOW is covered here: a stash the write-gate
-      // refuses on a drain after dispose reaches the same `rescueDraft` through
-      // the `rescueRejectedDraft` effect (the two are mutually exclusive).
+      // A pending rejection at close is projected here. Later settlement and
+      // drain rescues reach the same helper through the reducer effect.
       if (state.rejection.kind === "pending") {
-        rescueDraft(state.rejection);
+        rescueDraft({ content: state.rejection.content, reason: state.rejection.error.message });
       }
       // Set the local guard FIRST (arms the executor / listener guards), then drive
-      // the core's `disposed` transition (clears the write lock so any late
-      // settlement is a no-op), then tear down. The edit-settled barrier does
+      // the core's `disposed` transition (releases the lock while retaining the
+      // stash for reducer disposition), then tear down. The edit-settled barrier does
       // not need this order: the `disposed` step drops the deferred side
       // channels by its own verdict (`isEditApplied`). Flag-first stays as the
       // defence for a `disposed` transition that throws.

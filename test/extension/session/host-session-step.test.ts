@@ -28,9 +28,21 @@ import {
   isWriteLockHeld,
 } from "../../../src/extension/session/host-session-core.js";
 import {
-  createHostSessionStep,
+  createHostSessionStep as createRealHostSessionStep,
+  type HostSessionStepDeps,
   isEditApplied,
 } from "../../../src/extension/session/host-session-step.js";
+
+const createHostSessionStep = (
+  deps: HostSessionStepDeps & { recover?: (version: number | null) => readonly HostSessionEffect[] }
+) =>
+  createRealHostSessionStep({
+    ...deps,
+    commitTransition: (event) =>
+      event.type === "settlementTransitionFailed" && deps.recover
+        ? deps.recover(event.settledVersion)
+        : deps.commitTransition(event),
+  });
 
 // The executor's real settlement event, minus the optional `divergedAfterApply`.
 const settled = (
@@ -55,7 +67,7 @@ const harness = (opts: { effects?: () => void; settle?: () => void } = {}) => {
       order.push("commit");
       return [] as readonly HostSessionEffect[];
     },
-    commitWriteLockRecovery: () => [],
+    recover: () => [],
     runEffects: () => {
       order.push("effects");
       opts.effects?.();
@@ -146,7 +158,7 @@ describe("createHostSessionStep", () => {
       commitTransition: () => {
         throw new Error("reducer bug");
       },
-      commitWriteLockRecovery: () => [],
+      recover: () => [],
       runEffects: () => {},
       settleEditBarrier: (applied) => settles.push(applied),
     });
@@ -168,7 +180,7 @@ describe("createHostSessionStep", () => {
       commitTransition: () => {
         throw new Error("reducer bug");
       },
-      commitWriteLockRecovery: () => [],
+      recover: () => [],
       runEffects: () => {},
       settleEditBarrier: (applied) => settles.push(applied),
     });
@@ -185,18 +197,34 @@ describe("createHostSessionStep", () => {
     }
   });
 
-  // Mutation coverage: `releasesWriteLockOnCommit`'s `disposed` case answers
-  // `null`, but no other test in this suite drives a `disposed` event through
-  // `step` — so a mutation that moved `disposed` into the same rescue arm as
-  // `applyEditSettled` passed the whole suite unnoticed. (Since that helper
-  // returns the SETTLEMENT rather than a boolean, tsc now rejects such a move
-  // outright; this test still covers the runtime behaviour.) `disposed` needs no
-  // rescue of its own here: see `releasesWriteLockOnCommit`'s doc for why the
-  // drop, if any, rides a LATER, independent `applyEditSettled` step instead.
-  // The half PR #406 did not pay: the rescue released the deferred side
-  // channels' at-receipt guards but never the lock itself, so the payment was
-  // one-shot — a retried side channel re-deferred behind a lock nothing would
-  // ever release.
+  it("carries only the captured settlement observation through direct recovery", () => {
+    const calls: HostSessionEvent[] = [];
+    const step = createRealHostSessionStep({
+      commitTransition: (event) => {
+        calls.push(event);
+        if (event.type === "applyEditSettled") {
+          throw new Error("transition failed");
+        }
+        return [];
+      },
+      runEffects: () => {},
+      settleEditBarrier: () => {},
+    });
+    const event = {
+      ...settled({ kind: "ok" }, 7),
+      currentContent: "observed",
+      extraRuntimeProperty: "exclude",
+    };
+    expect(() => step(event)).toThrow("transition failed");
+    expect(calls[1]).toStrictEqual({
+      type: "settlementTransitionFailed",
+      settledVersion: 7,
+      currentContent: "observed",
+    });
+  });
+
+  // The recovery must release the write lock before settling the barrier;
+  // otherwise retried side channels defer behind a lock that remains held.
   it("commits the write-lock recovery when an applyEditSettled transition throws — BEFORE the barrier settle", () => {
     const order: string[] = [];
     const step = createHostSessionStep({
@@ -204,7 +232,7 @@ describe("createHostSessionStep", () => {
         order.push("commit");
         throw new Error("reducer bug");
       },
-      commitWriteLockRecovery: () => {
+      recover: () => {
         order.push("recover");
         return [{ type: "logWarn", message: "m", detail: {} }] as readonly HostSessionEffect[];
       },
@@ -226,7 +254,7 @@ describe("createHostSessionStep", () => {
         commitTransition: () => {
           throw new Error("reducer bug");
         },
-        commitWriteLockRecovery: (settledVersion) => {
+        recover: (settledVersion) => {
           seen.push(settledVersion);
           return [];
         },
@@ -244,7 +272,7 @@ describe("createHostSessionStep", () => {
       commitTransition: () => {
         throw new Error("reducer bug");
       },
-      commitWriteLockRecovery: recovered,
+      recover: recovered,
       runEffects: () => {},
       settleEditBarrier: () => {},
     });
@@ -266,19 +294,19 @@ describe("createHostSessionStep", () => {
   // pass for a member that fell through to the default instead.
   it("does NOT recover a throwing RECOVERY transition (no rescue of the rescue)", () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const recovered = vi.fn(() => [] as readonly HostSessionEffect[]);
-    const step = createHostSessionStep({
-      commitTransition: () => {
-        throw new Error("reducer bug");
-      },
-      commitWriteLockRecovery: recovered,
+    const commit = vi.fn(() => {
+      throw new Error("reducer bug");
+    });
+    const step = createRealHostSessionStep({
+      commitTransition: commit,
       runEffects: () => {},
       settleEditBarrier: () => {},
     });
-    expect(() => step({ type: "settlementTransitionFailed", settledVersion: 3 })).toThrow(
-      "reducer bug"
-    );
-    expect(recovered).not.toHaveBeenCalled();
+    expect(() =>
+      step({ type: "settlementTransitionFailed", settledVersion: 3, currentContent: null })
+    ).toThrow("reducer bug");
+    // One commit only: a second would be a recovery of the recovery.
+    expect(commit).toHaveBeenCalledTimes(1);
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
   });
@@ -290,7 +318,7 @@ describe("createHostSessionStep", () => {
       commitTransition: () => {
         throw new Error("reducer bug");
       },
-      commitWriteLockRecovery: () => {
+      recover: () => {
         throw new Error("recovery threw");
       },
       runEffects: () => {},
@@ -316,8 +344,7 @@ describe("createHostSessionStep", () => {
       commitTransition: () => {
         throw new Error("reducer bug");
       },
-      commitWriteLockRecovery: () =>
-        [{ type: "showResyncFailure" }] as readonly HostSessionEffect[],
+      recover: () => [{ type: "showResyncFailure" }] as readonly HostSessionEffect[],
       runEffects: () => {
         throw new Error("recovery effect threw");
       },
@@ -332,7 +359,9 @@ describe("createHostSessionStep", () => {
   // Same non-vacuity reasoning as the "no rescue of the rescue" test above.
   it("treats the recovery event itself as NOT applied, from an explicit arm", () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(isEditApplied({ type: "settlementTransitionFailed", settledVersion: 3 })).toBe(false);
+    expect(
+      isEditApplied({ type: "settlementTransitionFailed", settledVersion: 3, currentContent: null })
+    ).toBe(false);
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
   });
@@ -350,7 +379,7 @@ describe("createHostSessionStep", () => {
       commitTransition: () => {
         throw new Error("teardown bug");
       },
-      commitWriteLockRecovery: () => [],
+      recover: () => [],
       runEffects: () => {},
       settleEditBarrier: (applied) => settles.push(applied),
     });
@@ -389,7 +418,7 @@ describe("createHostSessionStep", () => {
         locked = false; // the in-flight apply's own settlement releases the lock
         return [];
       },
-      commitWriteLockRecovery: () => [],
+      recover: () => [],
       runEffects: () => {},
       settleEditBarrier: (applied) => barrier.settle(applied),
     });
@@ -433,7 +462,7 @@ describe("createHostSessionStep", () => {
         locked = false; // the real settlement releases the write lock
         return [];
       },
-      commitWriteLockRecovery: () => [],
+      recover: () => [],
       runEffects: () => {},
       settleEditBarrier: (applied) => barrier.settle(applied),
     });
@@ -473,7 +502,7 @@ describe("createHostSessionStep", () => {
       commitTransition: () => {
         throw new Error("reducer bug");
       },
-      commitWriteLockRecovery: () => [],
+      recover: () => [],
       runEffects: () => {},
       settleEditBarrier: (applied) => barrier.settle(applied),
     });
@@ -489,7 +518,7 @@ describe("createHostSessionStep", () => {
   // `settle(false)`, not `settle(true)`: the recovery cannot establish that the
   // edit landed (it is outcome-blind), so the thunks must be DROPPED, never
   // drained. ⚠️ Do not read the stub below as the production mechanism: the
-  // `commitWriteLockRecovery: () => []` stub does NOT release the lock, so in
+  // `recover: () => []` stub does NOT release the lock, so in
   // THIS test a `true` verdict would merely WAIT. In production the recovery
   // frees the lock in the same catch (see the note ~25 lines above), so `true`
   // would take the barrier's DRAIN arm and RUN the thunks — the worse failure,
@@ -502,7 +531,7 @@ describe("createHostSessionStep", () => {
       commitTransition: () => {
         throw new Error("reducer bug");
       },
-      commitWriteLockRecovery: () => [],
+      recover: () => [],
       runEffects: () => {},
       settleEditBarrier: (applied) => settles.push(applied),
     });
@@ -520,7 +549,7 @@ describe("createHostSessionStep", () => {
       commitTransition: () => {
         throw transitionErr;
       },
-      commitWriteLockRecovery: () => [],
+      recover: () => [],
       runEffects: () => {},
       settleEditBarrier: () => {
         throw settleErr;
@@ -549,7 +578,7 @@ describe("createHostSessionStep", () => {
       commitTransition: () => {
         throw transitionErr;
       },
-      commitWriteLockRecovery: () => [],
+      recover: () => [],
       runEffects: () => {},
       settleEditBarrier: (applied) => {
         settles.push(applied);
@@ -580,7 +609,7 @@ describe("createHostSessionStep", () => {
       commitTransition: () => {
         throw new Error("reducer bug");
       },
-      commitWriteLockRecovery: () => [recoveryEffect],
+      recover: () => [recoveryEffect],
       runEffects,
       settleEditBarrier: () => {},
     });
@@ -606,7 +635,7 @@ describe("createHostSessionStep", () => {
         locked = false; // the settlement released the write lock
         return [];
       },
-      commitWriteLockRecovery: () => [],
+      recover: () => [],
       runEffects: () => {
         throw new Error("ack reseed threw");
       },
@@ -636,7 +665,7 @@ describe("createHostSessionStep", () => {
         locked = false;
         return [];
       },
-      commitWriteLockRecovery: () => [],
+      recover: () => [],
       runEffects: () => {
         throw new Error("ack reseed threw");
       },
@@ -677,7 +706,7 @@ describe("createHostSessionStep", () => {
     const effectErr = new Error("effect threw");
     const step = createHostSessionStep({
       commitTransition: () => [],
-      commitWriteLockRecovery: () => [],
+      recover: () => [],
       runEffects: () => {
         throw effectErr;
       },
@@ -701,7 +730,7 @@ describe("createHostSessionStep", () => {
     const settleErr = new Error("settle threw");
     const step = createHostSessionStep({
       commitTransition: () => [],
-      commitWriteLockRecovery: () => [],
+      recover: () => [],
       runEffects: () => {
         throw effectErr;
       },
@@ -728,7 +757,7 @@ describe("createHostSessionStep", () => {
     const reported: unknown[] = [];
     const step = createHostSessionStep({
       commitTransition: () => [],
-      commitWriteLockRecovery: () => [],
+      recover: () => [],
       runEffects: () => {
         // A non-Error throw is the whole point of this test: it is the value the
         // boxing exists for, so the rule is suppressed rather than satisfied.
@@ -771,7 +800,7 @@ describe("createHostSessionStep", () => {
           seen.push(event.type === "themeChanged" ? `themeChanged:${event.themeKind}` : event.type);
           return [];
         },
-        commitWriteLockRecovery: () => [],
+        recover: () => [],
         runEffects: () => {
           if (!firstEffects) {
             return;
@@ -862,8 +891,8 @@ describe("createHostSessionStep", () => {
     };
     const step = createHostSessionStep({
       commitTransition: commit,
-      commitWriteLockRecovery: (settledVersion) =>
-        commit({ type: "settlementTransitionFailed", settledVersion }),
+      recover: (settledVersion) =>
+        commit({ type: "settlementTransitionFailed", settledVersion, currentContent: null }),
       runEffects: (list) => effects.push(...list),
       settleEditBarrier: (applied) => barrier.settle(applied),
     });
@@ -918,35 +947,78 @@ describe("createHostSessionStep", () => {
     expect(effects.some((e) => e.type === "applyEdit" && e.content === "next")).toBe(true);
   });
 
-  // Catches a revert of the panel wiring. A source-contract pin, not an
-  // executable one, for the same reason the neighbouring composition pin is:
-  // this closure is vscode-bound and cannot be constructed in a unit test.
-  it("is the panel's write-lock recovery wiring", () => {
+  it("real core, step, barrier and dispatcher rescue a disposed stash after a throwing settlement", () => {
+    const core = createHostSessionCore(
+      { uriString: "file:///x.md", fsPath: "/x.md" },
+      {
+        validateForWrite: (content) => {
+          if (content === "later") {
+            throw new Error("validator failed");
+          }
+          return { ok: true } as const;
+        },
+        mintEpochGeneration: () => 7,
+      }
+    );
+    let state: HostSessionState = {
+      ...core.initialState(5),
+      pendingApplyBaseVersion: 5,
+      inFlightContent: "first",
+      pendingEdit: { content: "later", baseDocVersion: 5 },
+    };
+    const effects: HostSessionEffect[] = [];
+    const calls: HostSessionEvent[] = [];
+    const barrier = createEditSettledBarrier({
+      isLocked: () => isWriteLockHeld(state),
+      isDisposed: () => state.disposed,
+      onError: () => {},
+    });
+    const step = createRealHostSessionStep({
+      commitTransition: (event) => {
+        calls.push(event);
+        const result = core.transition(state, event);
+        state = result.state;
+        return result.effects;
+      },
+      runEffects: (list) => effects.push(...list),
+      settleEditBarrier: (applied) => barrier.settle(applied),
+    });
+    const dispatch = createDrainingDispatcher<HostSessionEvent>(step);
+    dispatch({ type: "disposed" });
+    expect(() =>
+      dispatch({
+        type: "applyEditSettled",
+        outcome: { kind: "ok" },
+        settledVersion: 6,
+        canWrite: true,
+        currentContent: "first",
+        preApplyContent: "seed",
+      })
+    ).toThrow("validator failed");
+    expect(calls.at(-1)).toStrictEqual({
+      type: "settlementTransitionFailed",
+      settledVersion: 6,
+      currentContent: "first",
+    });
+    expect(isWriteLockHeld(state)).toBe(false);
+    expect(effects.filter((effect) => effect.type === "rescueUnsavedDraft")).toEqual([
+      {
+        type: "rescueUnsavedDraft",
+        content: "later",
+        reason: "an internal error interrupted the preceding save",
+      },
+    ]);
+    expect(
+      effects.some((effect) => effect.type === "postDocument" || effect.type === "showError")
+    ).toBe(false);
+  });
+
+  it("shares the panel's committing lambda with direct recovery", () => {
     const panel = readFileSync(
       new URL("../../../src/extension/session/quoll-editor-panel.ts", import.meta.url),
       "utf8"
-    )
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/^(.*?)\/\/.*$/gm, "$1");
-    expect(panel).toContain("commitWriteLockRecovery:");
-    // The recovery must go through the panel's own committing lambda (so the
-    // release happens in the REDUCER, never by patching `state`) and carry the
-    // settlement's version through.
-    expect(panel).toMatch(
-      /commitWriteLockRecovery:\s*\(settledVersion\)\s*=>\s*commitTransition\(\{/
     );
-    // NEGATIVE pin over the recovery lambda's ACTUAL span, not a character
-    // window: slice from `commitWriteLockRecovery:` to the next dep property
-    // (`runEffects:`) and assert the read seams are absent inside it. The
-    // `not.toBe("")` guard is what keeps the pin from going vacuous if the
-    // properties are ever renamed or reordered.
-    const recoveryWiring = panel.match(/commitWriteLockRecovery:([\s\S]*?)runEffects:/)?.[1] ?? "";
-    expect(recoveryWiring).not.toBe("");
-    expect(recoveryWiring).toContain('type: "settlementTransitionFailed"');
-    expect(recoveryWiring).toContain("settledVersion");
-    // The panel's `applyEditSeam.readVersion` keeps its own `document.version`
-    // read — that is why the pin is scoped to this span rather than the file.
-    expect(recoveryWiring).not.toContain("document.version");
-    expect(recoveryWiring).not.toContain("readVersionGuarded");
+    expect(panel).toContain("const commitTransition =");
+    expect(panel).toContain("createHostSessionStep({\n      commitTransition,");
   });
 });

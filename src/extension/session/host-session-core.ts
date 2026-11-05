@@ -270,8 +270,11 @@ export type HostSessionEvent =
       // dispatches it, and the transition throws synchronously on the
       // single-threaded host), so it is also still the LIVE version here.
       // Reusing it keeps `effect-executor.ts`'s "ONE guarded version reader"
-      // contract true: the recovery adds no read seam of its own.
+      // contract true: the recovery adds no read seam of its own. The content
+      // is the same captured snapshot, carried so disposed rescue can compare
+      // the whole document without a second read.
       readonly settledVersion: number | null;
+      readonly currentContent: string | null;
     }
   | { readonly type: "disposed" };
 
@@ -286,7 +289,7 @@ export type HostSessionEvent =
  *
  *  DERIVED with `Exclude`, not written out as a parallel union: a new member is
  *  then carried automatically and only the EXCLUSION has to be stated, so the
- *  two types cannot drift. `commitTransition` / `commitWriteLockRecovery` keep
+ *  two types cannot drift. `commitTransition` keeps
  *  the WIDE `HostSessionEvent` — committing the recovery is the one legitimate
  *  path and must stay expressible. */
 export type HostSessionInputEvent = Exclude<
@@ -323,13 +326,14 @@ export type HostSessionEffect =
   | { readonly type: "postTheme"; readonly themeKind: ThemeKind }
   | { readonly type: "applyEdit"; readonly content: string; readonly baseDocVersion: number }
   | { readonly type: "showError"; readonly message: string }
-  // Post-dispose drain refused by the write-gate: reopen the stash as an
-  // untitled document. Never emitted by the `disposed` arm (the panel rescues a
-  // pending rejection at close; the two are mutually exclusive).
+  // Post-dispose stash rescue after an undrainable settlement, drain refusal,
+  // or transition failure. Delivery is owned by surface/unsaved-draft-rescue.ts.
+  // The `disposed` arm itself emits no rescue; the panel projects a pending
+  // Markdown rejection at close through the same helper.
   | {
-      readonly type: "rescueRejectedDraft";
+      readonly type: "rescueUnsavedDraft";
       readonly content: string;
-      readonly error: MarkdownError;
+      readonly reason: string;
     }
   | { readonly type: "logWarn"; readonly message: string; readonly detail: Record<string, unknown> }
   | { readonly type: "openExternal"; readonly href: string }
@@ -372,7 +376,7 @@ function defaultMintEpochGeneration(): number {
  *  The comparison itself is `sameTextIgnoringEol` (src/shared/), which the
  *  webview's loss judgement asks of the same document — ONE definition, so the
  *  two sides cannot drift. This wrapper adds only the NULLABLE operand, which is
- *  local to the host's state shape: `b` is `inFlightContent`, which is `null`
+ *  local to the host's state shape: `b` is `inFlightContent` or a stash’s content, and is `null`
  *  while no Edit is held (the other `b`, `preApplyContent`, is never null — see
  *  its field comment), and absent never matches. */
 function contentMatches(a: string, b: string | null): boolean {
@@ -382,6 +386,60 @@ function contentMatches(a: string, b: string | null): boolean {
   }
   return sameTextIgnoringEol(a, b);
 }
+
+const rescueStash = (
+  stash: PendingEdit | null,
+  observed: string | null,
+  reason: string
+): HostSessionEffect[] =>
+  stash !== null && (observed === null || !contentMatches(observed, stash.content))
+    ? [{ type: "rescueUnsavedDraft", content: stash.content, reason }]
+    : [];
+
+const undrainableReason = (
+  event: Extract<HostSessionEvent, { readonly type: "applyEditSettled" }>,
+  observed: string | null,
+  inFlight: string | null
+): string => {
+  switch (event.outcome.kind) {
+    case "refused":
+      return "the preceding save was refused";
+    case "constructThrew":
+    case "applyThrew":
+    case "rejected":
+      return `the preceding save failed (${event.outcome.message})`;
+    case "ok":
+      if (event.divergedAfterApply) {
+        return "the preceding write did not leave the intended text in the document";
+      }
+      if (observed === null || inFlight === null) {
+        return "the preceding save completed but Quoll could not verify the document";
+      }
+      return "the document changed before this later edit could be saved";
+    default: {
+      const _exhaustive: never = event.outcome;
+      throw new Error(`Unhandled outcome: ${JSON.stringify(_exhaustive)}`);
+    }
+  }
+};
+
+const drainRefusalReason = (verdict: ReturnType<typeof decideEdit>): string | null => {
+  switch (verdict.kind) {
+    case "parse-failed":
+      return verdict.error.message;
+    case "readonly":
+      return "the file could not be confirmed writable";
+    case "stale":
+      return "the document changed before this later edit could be saved";
+    case "no-op":
+    case "accept":
+      return null;
+    default: {
+      const _exhaustive: never = verdict;
+      throw new Error(`Unhandled drain verdict: ${JSON.stringify(_exhaustive)}`);
+    }
+  }
+};
 
 /** Resync `lastAppliedDocVersion` to the live document version, raising it as
  *  `max(old, live)` so a late/reordered event or a future call site passing a
@@ -443,19 +501,9 @@ const postDoc = (s: HostSessionState, docVersion: number): HostSessionEffect => 
 // that. On the path that reaches HERE — alive, ack withheld — that clause is the
 // HEDGED one ("may not have been saved"), which deliberately reuses this pair's
 // own `RESYNC_FAILURE_MESSAGE` phrasing so the two toasts cannot disagree about
-// certainty when both appear. The DEFINITE wording belongs to the post-dispose
-// branch, where this pair is never built at all (see the four routes below).
-// POST-DISPOSE the pair never reaches the executor, by FOUR different routes:
-// the no-stash arm (`state.disposed && state.pendingEdit === null`, the early
-// return in the `applyEditSettled` case) builds only failure toasts, so the pair
-// is not even constructed; the undrainable arm keeps only `showError`s from the
-// settlement effects; a stash that DRAINS post-dispose never calls
-// `ackEffects` at all (the drain's readonly/stale/no-op arm emits at most a
-// dropped-stash `showError` when disposed — never a Document — and its accept /
-// parse-failed arms post no Document); and the
-// recovery arm, whose disposed branch emits only its toast + triage and never
-// calls `ackEffects`. Deliberate in all four: there is no view left to resync,
-// and the only loss worth reporting there (a dropped stash) has its own toast.
+// certainty when both appear. Post-dispose this pair is never built: there is
+// no webview to resync. ARCHITECTURE.md's surface/unsaved-draft-rescue.ts
+// entry owns notification and stash disposition there.
 function withholdAckEffects(
   settled: HostSessionState,
   heldBase: number | null,
@@ -824,30 +872,27 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
       }
 
       case "applyEditSettled": {
-        // Post-dispose with nothing to drain: stay a strict no-op (preserves the
-        // disposed-settlement invariant) — EXCEPT a FAILED save still surfaces
-        // its toast. `showError` survives dispose (a VS Code window toast, not
-        // webview-bound) and after a close there is no editor left to retry, so
-        // it matters more, not less. This covers BOTH a plain in-flight edit
-        // failing post-dispose AND the DRAIN's own applyEdit failing — the
-        // latter re-dispatches an `applyEditSettled` whose stash is already
-        // drained (null), so it lands here; without this it would be a silent
-        // data-loss (the stashed edit could not be saved and the user is never
-        // told). A clean `ok` settle (incl. the applyEdit no-op on a GC'd
-        // sole-editor document) has no showError, so no false alarm.
+        // ARCHITECTURE.md's surface/unsaved-draft-rescue.ts entry owns
+        // disposed no-stash notification behavior.
         if (state.disposed && state.pendingEdit === null) {
-          // Toasts ONLY, built directly rather than filtered out of the full
-          // settlement effects: this arm has no ack to gate, so it must not have
-          // to name an ack-label observation it does not have. What it drops
-          // along the way is the withhold pair — a logWarn plus
-          // `showResyncFailure`, which the executor turns into a VS Code WINDOW
-          // TOAST, not a webview-bound message (same distinction as the
-          // `showError` note above). That suppression is for a DIFFERENT reason
-          // than the ack's: post-dispose there is no view left to resync, so
-          // telling the user it could not be resynced is noise. A dropped stash
-          // is the one loss that still matters post-dispose, and it gets its own
-          // toast below.
-          return { state, effects: failureToasts(event.outcome, state.context) };
+          const effects = failureToasts(event.outcome, state.context);
+          if (
+            event.outcome.kind === "ok" &&
+            state.inFlightContent === null &&
+            (event.currentContent === null || event.divergedAfterApply)
+          ) {
+            return {
+              state,
+              effects: [
+                {
+                  type: "showError",
+                  message:
+                    "Quoll could not verify the final edit after the editor closed. Reopen the file to check its contents.",
+                },
+              ],
+            };
+          }
+          return { state, effects };
         }
         const heldBase = state.pendingApplyBaseVersion;
         const stash = state.pendingEdit;
@@ -1020,8 +1065,8 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         //     that refusal a deterministic loss. On a document whose version never
         //     advances again the epoch stays put and the buffer is still replayed
         //     (the quiet-document residual the follow-up TODO entry carries).
-        // Post-dispose the stash is its only carrier, which is why the drop is
-        // LOGGED below.
+        // Post-dispose the stash is its only carrier, which is why the branch
+        // below hands it to rescueStash instead of dropping it.
         // The ACK LABEL is deliberately NOT a conjunct below: the drain is a new
         // WRITE, not an ack, and its safety rests on the CONTENT evidence above.
         // ⛔ Do NOT re-add an `(ackLabelObserved || state.disposed)` conjunct here
@@ -1059,21 +1104,12 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         const canDrain =
           stash !== null &&
           event.outcome.kind === "ok" &&
+          !event.divergedAfterApply &&
           inFlight !== null &&
           observed !== null &&
           contentMatches(observed, inFlight);
 
         if (!canDrain) {
-          // Post-dispose the no-stash case already returned above, so a stash
-          // is present here but undrainable (edit #1 failed, or an external
-          // edit raced the apply→settle window). Suppress webview-bound effects
-          // (the webview is gone) but KEEP a failed save's `showError`: after a
-          // close there is no editor left to retry, so the toast matters more,
-          // not less. What `baseEffects` contributes post-dispose: an `ok`
-          // settle (clean or ok-but-mismatch) carries no showError → nothing; a
-          // failure → its showError. That is NOT the whole post-dispose output:
-          // a stash dropped on an `ok` settle gets its own toast from
-          // unobservedStashDrop / observedStashDrop below. Alive: full effects.
           const baseEffects = settlementEffects(
             event.outcome,
             settled,
@@ -1081,56 +1117,6 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
             state.context,
             ackLabelObserved
           );
-          // Diagnostic log for the post-apply divergence. THREE arms, in this
-          // order — and the `null` semantics are written LITERALLY here so nobody
-          // "fixes" a condition with `observed ?? ""`:
-          //  1. `divergedAfterApply` (Plan S6) takes precedence and is emitted
-          //     even with NO stash — a wrong-offset splice / lost external race
-          //     must be visible for triage regardless of whether a keystroke was
-          //     queued.
-          //  2. An UNOBSERVED settlement holding a stash: `canDrain` refused for
-          //     want of a CONTENT observation, so the keystroke is dropped.
-          //     Post-dispose the stash was its only carrier, so the loss must be
-          //     observable.
-          //  3. The narrower ok-but-mismatch log (external edit won a stash's
-          //     apply→settle race), which now REQUIRES an observation: claiming
-          //     "external edit won the race" without having read the document
-          //     would be a fabricated diagnosis, and an unobserved snapshot is not
-          //     a mismatch.
-          // None is a save failure, so none adds a showError (the ok baseEffects
-          // carry none) — an unverified landing is not a failed save. ALIVE they
-          // stay log-only. POST-DISPOSE is the exception for all three arms
-          // (arm 2 via `unobservedStashDrop`, arms 1 and 3 via
-          // `observedStashDrop`): there the log is the whole signal and nobody
-          // is left to read it, so a stash that was dropped gets its own toast
-          // below — unless the observed document already carries its text.
-          //
-          // There is deliberately no fourth arm for "the content matched but the
-          // ack label was never observed": that configuration DRAINS (see
-          // `canDrain`), so it never reaches this branch at all.
-          const unobservedStashDrop =
-            !divergedAfterApply &&
-            stash !== null &&
-            event.outcome.kind === "ok" &&
-            observed === null;
-          // The stash was dropped on an `ok` settlement although the document WAS
-          // observed (or the executor reported a divergence): something other
-          // than the in-flight edit is on the document, so the drain was
-          // refused. Post-dispose the stash is the edit's only carrier, exactly
-          // as for `unobservedStashDrop`, so this is the same loss with a
-          // different cause. Silent when the observed document already carries
-          // the stash's text — nothing was lost. A divergence with NO
-          // observation cannot prove that, so it reports. (`ok` + stash +
-          // `!unobservedStashDrop` + `observed === null` can only be
-          // `divergedAfterApply`: that flag is the sole thing the unobserved
-          // predicate excludes.)
-          const observedStashDrop =
-            stash !== null &&
-            event.outcome.kind === "ok" &&
-            !unobservedStashDrop &&
-            (observed === null || !contentMatches(observed, stash.content));
-          // Arms 2 and 3 share one guard — a stash present on an `ok`
-          // settlement — stated ONCE below; only the observation splits them.
           let extraEffects: HostSessionEffect[] = [];
           if (divergedAfterApply) {
             extraEffects = [
@@ -1150,9 +1136,6 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
               settledDocVersion: settled.lastAppliedDocVersion,
             };
             if (observed === null) {
-              // Arm 2 — the same predicate as `unobservedStashDrop` above (this
-              // branch has already excluded `divergedAfterApply`), which is what
-              // drives the post-dispose toast below.
               extraEffects = [
                 {
                   type: "logWarn",
@@ -1173,64 +1156,27 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
             }
           }
           if (state.disposed) {
-            return {
-              state: settled,
-              effects: [
-                // POST-DISPOSE the stash was the dropped edit's ONLY carrier (no
-                // webview, so no replay buffer to fall back on), so the loss must
-                // stay USER-VISIBLE — not just logged. Before the settle-time
-                // reads were guarded, this same physical event rejected the
-                // pipeline and produced a `rejected` outcome, whose "Failed to
-                // save" toast survived the dispose filter below; making the
-                // settlement `ok` removed that toast and left the drop silent.
-                // The wording must NOT re-introduce the false alarm the guarding
-                // fixed: the write pipeline COMPLETED without failing, it is the
-                // VERIFICATION that is missing, and what was dropped is the edit
-                // stashed BEHIND it. Deliberately not "the apply landed" — the
-                // no-op short-circuit (execute-write.ts) reaches this family
-                // WITHOUT submitting an edit at all, so `appliedUnverified` is not
-                // a landing claim and its ⚠️ note at `settle` binds caller text
-                // too. The TOAST BODY below is unaffected and stays as written:
-                // on the no-op route the document already holds the intended
-                // bytes, and on the landed-but-unverified route the apply
-                // resolved ok — which is why the toast pairs "saved your change"
-                // with "could not verify it" and tells the user to reopen and
-                // check. Do not drop that hedge: without the settle-time read a
-                // misplaced splice (execute-write.ts's S5 escape) cannot be ruled
-                // out.
-                // ALIVE stays toast-free WHEN AN ACK GOES OUT: the webview's
-                // single-flight replay buffer (which this settlement does not
-                // invalidate) still holds the edit, and the ack Document below
-                // re-posts it. ⚠️ NOT unconditional — with the LABEL also
-                // unobserved the ack is WITHHELD (`withholdAckEffects`, no
-                // `postDocument` at all), nothing replays the buffer here, and
-                // the apply's own lock-free echo then bumps `externalEpoch` and
-                // drops it (`canDrain`'s "with the ack WITHHELD" note spells out
-                // the chain link by link). That sub-case is silent by DECISION,
-                // not by safety — the deliberate, unreconciled divergence
-                // recorded at the `settlementTransitionFailed` arm's ⚠️ ("NOT the
-                // same gate as the settlement arm's `unobservedStashDrop`
-                // toast").
-                ...(unobservedStashDrop
-                  ? [
-                      {
-                        type: "showError" as const,
-                        message: `Quoll saved your change to ${state.context.fsPath} but could not verify it before the editor closed, so a later unsaved edit was dropped. Reopen the file to check its contents.`,
-                      },
-                    ]
-                  : []),
-                ...(observedStashDrop
-                  ? [
-                      {
-                        type: "showError" as const,
-                        message: `Quoll could not save a later edit to ${state.context.fsPath} before the editor closed: the document no longer matched the change Quoll had just written, so that edit was dropped. Reopen the file to check its contents.`,
-                      },
-                    ]
-                  : []),
-                ...extraEffects,
-                ...baseEffects.filter((e) => e.type === "showError"),
-              ],
-            };
+            const rescue = rescueStash(
+              stash,
+              observed,
+              undrainableReason(event, observed, inFlight)
+            );
+            const failure =
+              rescue.length === 0
+                ? baseEffects.filter((effect) => effect.type === "showError")
+                : [];
+            const triage = extraEffects.map((effect) =>
+              effect.type === "logWarn" && rescue.length > 0
+                ? {
+                    ...effect,
+                    message: effect.message.replace(
+                      "pending stash dropped",
+                      "pending stash handed to rescue"
+                    ),
+                  }
+                : effect
+            );
+            return { state: settled, effects: [...rescue, ...triage, ...failure] };
           }
           return {
             state: settled,
@@ -1287,11 +1233,18 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
                   },
                 },
               ];
+        if (state.disposed && verdict.kind !== "accept") {
+          const reason = drainRefusalReason(verdict);
+          return {
+            state: settled,
+            effects: reason === null ? [] : rescueStash(stash, observed, reason),
+          };
+        }
         switch (verdict.kind) {
           case "accept":
-            // Re-acquire the lock + track the drained content as the new
-            // in-flight — but NOT post-dispose (no more edits arrive; a
-            // lingering lock would just sit in the discarded state).
+            // Re-acquire the lock and track drained content while alive.
+            // Post-dispose returns bare settled state; omitted inFlightContent
+            // identifies the drain's own settlement for the no-stash rule.
             return {
               state: state.disposed
                 ? settled
@@ -1317,57 +1270,22 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
                 rejection: { kind: "pending", id, content: stash.content, error: verdict.error },
                 nextRejectionId: id + 1,
               },
-              // Post-dispose: `rescueRejectedDraft` instead of a toast (its own
-              // warning carries the reason). The banner post is webview-bound —
-              // suppressed post-dispose (post() would drop it anyway); when
-              // alive it REDELIVERS the draft as a Document at the
-              // SETTLED version (postRejectedDraft), not a bare postEditRejected.
-              // The drained-over apply already advanced lastAppliedDocVersion, so
-              // a bare rejection would leave the webview on the pre-A version →
-              // its next retry arrives stale → an authoritative reseed wipes the
-              // draft (finding #2). The draft Document carries the SAME bytes the
-              // editor already shows (never disk bytes — §6 holds; the live-path
-              // parse-failed arm stays Document-free) while advancing the
-              // webview's docVersion bookkeeping (so the next retry lands on a
-              // live base instead of stale-rejecting). Mirrors the `ready`-arm
-              // redelivery precedent.
-              //
-              // UNLIKE the readonly/stale/no-op repost BELOW (the next case in
-              // this switch), this arm is DELIBERATELY NOT gated on
-              // `ackLabelObserved` (round-2 reversal — see the plan's
-              // dispositions table): in the unobserved-label corner (version
-              // unread + no lock-held resync + the stash parse-failing) every
-              // reviewed local variant, a Document-free degrade included,
-              // converges to the same terminal state anyway — without an
-              // observation no correct label-advance exists, and a `ready` replay
-              // redelivers at the STORED label with no resync regardless. So this
-              // draft CAN go out stamped with a stale label; that is an ACCEPTED
-              // RESIDUAL, reachable because `canDrain` gates on CONTENT evidence
-              // only (see its comment). A durable fix needs rejection-state
-              // provenance + observed-version catch-up — its own slice, tracked in
-              // the follow-up TODO entry.
-              effects: state.disposed
-                ? [
-                    {
-                      type: "rescueRejectedDraft",
-                      content: stash.content,
-                      error: verdict.error,
-                    },
-                  ]
-                : [
-                    ...staleReBaseWarn,
-                    {
-                      type: "postRejectedDraft",
-                      content: stash.content,
-                      error: verdict.error,
-                      docVersion: settled.lastAppliedDocVersion,
-                      externalEpoch: settled.externalEpoch,
-                      epochGeneration: settled.epochGeneration,
-                      settledEditId: settled.lastEditId,
-                      id,
-                    },
-                    { type: "showError", message: `Cannot save: ${verdict.error.message}` },
-                  ],
+              // The disposed refusal was handled before this switch. Alive,
+              // redeliver the rejected draft at the settled version.
+              effects: [
+                ...staleReBaseWarn,
+                {
+                  type: "postRejectedDraft",
+                  content: stash.content,
+                  error: verdict.error,
+                  docVersion: settled.lastAppliedDocVersion,
+                  externalEpoch: settled.externalEpoch,
+                  epochGeneration: settled.epochGeneration,
+                  settledEditId: settled.lastEditId,
+                  id,
+                },
+                { type: "showError", message: `Cannot save: ${verdict.error.message}` },
+              ],
             };
           }
           case "readonly":
@@ -1382,31 +1300,9 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
             // unobserved label takes the withhold arm. The shared `ackEffects` is
             // what keeps this site and `settlementEffects` from drifting apart.
             //
-            // POST-DISPOSE a `readonly` verdict is the one LOSS in this arm: alive,
-            // the repost shows the user their edit reverting; disposed, the stash
-            // was the keystroke's only carrier (no webview, no replay buffer), so
-            // it gets a toast, where the parse-failed arm above gets a rescue.
-            // `decideEdit` checks readonly BEFORE content equality, so the stash
-            // may already carry the settled text — nothing was lost then, and
-            // the toast would be a false alarm. `stale` (unreachable here, the
-            // base is current by construction) and `no-op` stay silent. The wording does not claim
-            // the file IS read-only: `canWrite: false` also covers the executor's
-            // fallback for a writability read that threw, and the reducer cannot
-            // tell the two apart.
-            if (state.disposed) {
-              return {
-                state: settled,
-                effects:
-                  verdict.kind === "readonly" && !sameTextIgnoringEol(stash.content, observed)
-                    ? [
-                        {
-                          type: "showError",
-                          message: `Quoll could not confirm ${state.context.fsPath} was writable, so your last change was not saved, and the editor closed before it could be shown. Reopen the file to check its contents.`,
-                        },
-                      ]
-                    : [],
-              };
-            }
+            // Disposed refusals are rescued before this switch. `canWrite: false`
+            // can also mean the writability check threw, so the rescue reason
+            // does not claim the file is read-only.
             return {
               state: settled,
               effects: ackEffects(ackLabelObserved, settled, heldBase, state.context),
@@ -1426,14 +1322,9 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // because a throwing settlement TRANSITION leaves the lock held with no
         // second settlement coming — see the event member's comment.
         //
-        // The arm is deliberately a PURE FIELD RESET plus effects: no
-        // `decideEdit`, no outcome switch, no document read. Each of those is a
-        // throw source of the transition being recovered from, and a recovery
-        // that re-enters the seam that just threw can throw the recovery away
-        // (docs/LEARNING.md 2026-08-09). That is ALSO why the stash is DROPPED
-        // rather than re-run: `canDrain`'s safety condition ("the settled
-        // document IS edit #1's exact result") needs an OBSERVED canonical
-        // snapshot this arm must not go and read.
+        // Recovery uses the captured observation and never re-enters the
+        // failing transition's read or verdict seams. ARCHITECTURE.md's
+        // surface/unsaved-draft-rescue.ts entry owns disposed stash disposition.
         const heldBase = state.pendingApplyBaseVersion;
         const stash = state.pendingEdit;
         // Resync BEFORE the release so that ON THE ALIVE PATH
@@ -1463,119 +1354,32 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         const ackLabelObserved =
           event.settledVersion !== null ||
           (heldBase !== null && recovered.lastAppliedDocVersion > heldBase);
-        // UNCONDITIONAL, because the throwing transition ABANDONED its effect
-        // list — and every non-ok outcome OWED a save-failure `showError` ahead
+        // Emitted on every path EXCEPT a post-dispose rescue (the rescue helper
+        // owns the user notice there), because the throwing transition ABANDONED
+        // its effect list — and every non-ok outcome OWED a save-failure `showError` ahead
         // of its ack (`settlementEffects`' toast-before-reseed order; the
         // `refused` arm puts a triage `logWarn` first, so "owed before the ack"
         // is the true form, not "began the list"). This toast stands in for the
         // one that was owed. Outcome-BLIND wording: the arm never learns whether
         // the write landed, so it claims neither.
         //
-        // The LOSS CLAUSE is the only conditional part, and its gate is "will
-        // ANY ack Document go out to replay those bytes?" — NOT merely "are we
-        // alive?". Alive WITH AN ACK the dropped stash is not a loss: the
-        // webview still holds those bytes in the replay buffer `forcePost`
-        // RETAINED under single-flight (`webview/cm/edit-sync.ts`), and the ack
-        // below is the next ack that replays them — claiming a dropped edit
-        // there would be a false alarm.
-        //
-        // The two branches with NO ack both report a loss, for different reasons
-        // and — this is what the wording turns on — with different CERTAINTY:
-        //   - POST-DISPOSE the retained buffer went with the iframe, so the
-        //     stash was the edit's only carrier. CERTAIN.
-        //   - ALIVE but `!ackLabelObserved`, the ack is WITHHELD
-        //     (`withholdAckEffects` — no `postDocument` at all), and from there
-        //     the bytes are lost in four steps, each in a different file:
-        //     (1) no ack Document ⇒ the retained replay buffer is never
-        //     replayed; (2) this arm sets `pendingApplyBaseVersion: null`, which
-        //     makes the lock-free `foreignAdvance` branch of `resyncLiveVersion`
-        //     reachable again; (3) the next `viewStateVisible` / `documentChanged`
-        //     takes it and bumps `externalEpoch`; (4) the webview then satisfies
-        //     `recordedEpoch > buf.epoch` and DROPS the buffer
-        //     (`webview/cm/edit-sync.ts`). Spelled out link by link because a
-        //     four-file chain is exactly the claim that goes stale silently.
-        //     `showResyncFailure` does not cover it — that says the view could
-        //     not be resynced, not that an edit was dropped.
-        //     ⚠️ STEP (3) IS CONDITIONAL, and that is why the clause hedges
-        //     rather than asserts: `resyncLiveVersion` bumps `externalEpoch` only
-        //     on a lock-free FORWARD advance (`liveVersion >
-        //     lastAppliedDocVersion`), so on a document whose version never moves
-        //     again the epoch stays put, the next same-epoch Document REPLAYS the
-        //     retained buffer (`edit-sync.ts`'s `shouldDropBufferedForEpoch`
-        //     returns false for "same generation, epoch unchanged") and the bytes
-        //     land after all. Outcome-blind, this arm cannot tell the two apart.
-        // ⚠️ NOT the same gate as the settlement arm's `unobservedStashDrop`
-        // toast, and the two are NOT reconciled by this change. That toast is
-        // still emitted only inside the settlement arm's `if (state.disposed)`
-        // branch, so in the structurally identical ALIVE state (ok, unobserved
-        // content, unobserved version, stash present) the settlement arm emits NO
-        // showError at all — measured. The divergence is deliberate for now:
-        // widening that arm alone would hand the alive path a second toast that
-        // contradicts `RESYNC_FAILURE_MESSAGE` on remedy, and its loss is
-        // near-DETERMINISTIC there (the apply landed) rather than uncertain, so it
-        // cannot reuse this wording either. Unifying the two behind one shared
-        // predicate — with one incident yielding one remedy — is a follow-up
-        // slice, stated here so the gap stays findable instead of silent.
-        //
-        // ACCEPTED RESIDUAL, stated here because this arm is where it is
-        // created: the settlement's site-2 foreign-bytes check would have
-        // bumped `externalEpoch` when an external edit raced the apply, and
-        // this arm cannot — it is outcome-blind and must not read. So for a
-        // non-ok settlement that BOTH raced a foreign edit and threw, the
-        // same-epoch Document keeps the replay buffer alive and its replay can
-        // land on top of the foreign bytes, inverting "external wins". Paying it
-        // is worse either way: deciding needs a read through the seam that just
-        // threw, and bumping unconditionally drops the replay buffer on EVERY
-        // recovery — a deterministic loss on the common path to cover a
-        // double-fault race that needs a type violation to reach at all. The
-        // throw source is one of the two exhaustive-guard `default`s — the
-        // `settlementEffects` switch, which is the one the ALIVE non-ok path
-        // this residual describes actually reaches, or `failureToasts`' own on
-        // the disposed-no-stash early return (where there is neither a stash nor
-        // a replay buffer). The drain's two sources sit behind `canDrain`'s
-        // content match, which by construction means no foreign edit raced.
-        const lostStash = stash !== null && (state.disposed || !ackLabelObserved);
-        // THREE branches, each ending in its own instruction rather than sharing
-        // an appended one: a toast carrying three imperatives (copy, reload,
-        // reopen) is a toast nobody follows.
-        //
-        // ⚠️ Do NOT copy the ALIVE branch's hedge onto the settlement arm's
-        // `unobservedStashDrop` toast. The two arms are alike in STATE and
-        // OPPOSITE in the CERTAINTY of the loss: there the apply LANDED
-        // (`outcome.kind === "ok"`), so its echo `documentChanged` arrives
-        // lock-free, bumps `externalEpoch` and drops the replay buffer — the
-        // near-DETERMINISTIC loss the settlement block's own "No second fault is
-        // needed" note describes. A settlement-side message needs its own design,
-        // not this wording.
+        // Alive recovery retains its outcome-blind hedge and withheld-ack
+        // behavior. After disposal the captured observation decides rescue.
+        const rescued = state.disposed
+          ? rescueStash(
+              stash,
+              event.currentContent,
+              "an internal error interrupted the preceding save"
+            )
+          : [];
         let lossClause: string;
-        if (!lostStash && (state.disposed || ackLabelObserved)) {
-          // GENUINELY LOSS-FREE, which is why this is the only branch keyed on
-          // BOTH halves. Exactly two states reach it:
-          //   - ALIVE with an ack coming (`ackLabelObserved`), so the retained
-          //     replay buffer gets replayed. Nothing was lost.
-          //   - POST-DISPOSE with nothing stashed: no stash to drop, and the
-          //     in-flight bytes went with the iframe, so there is no remedy left
-          //     to advise beyond checking the file.
-          // ⚠️ The third state that used to land here — ALIVE, ack WITHHELD,
-          // `stash === null` — does NOT any more, and must not be routed back:
-          // this arm is outcome-blind, so the webview's IN-FLIGHT bytes sit under
-          // exactly the conditional four-step loss the ⚠️ above spells out for a
-          // stash, and "Reopen" would destroy the buffer still holding them. It
-          // takes the hedge below instead, which is why that hedge no longer
-          // names a stash.
+        if (state.disposed || ackLabelObserved) {
           lossClause = " Reopen the file to check its contents.";
-        } else if (state.disposed) {
-          // POST-DISPOSE — DEFINITE. There is no webview, so the stash was the
-          // edit's only carrier and nothing can replay it. "Reopen" is the only
-          // available action; there is nothing left on screen to copy.
-          lossClause = " A later unsaved edit was dropped. Reopen the file to check its contents.";
         } else {
-          // ALIVE with a WITHHELD ack — HEDGED (the ⚠️ above already covers why
-          // this spans both carriers and drops the word "stash"). This arm is
-          // outcome-blind, and one corner really does land the bytes (the
-          // never-advancing document above), so MAY is the strongest honest
-          // claim. "may not have been saved" is deliberately the SAME phrase
-          // `RESYNC_FAILURE_MESSAGE` uses (pinned against that constant in
+          // Without an ack Document, the webview's replay buffer can be dropped
+          // on the next version advance. If the version stays put, it can still
+          // replay. The outcome is unknown, so "may not have been saved" matches
+          // the phrase in `RESYNC_FAILURE_MESSAGE` (pinned in
           // `host-session-core.test.ts`), so if both toasts appear they cannot
           // contradict each other on certainty. The remedy is SELF-SUFFICIENT
           // rather than sequenced: presentation order in the notification stack
@@ -1598,11 +1402,21 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // the invariant test greps that identifier's `:` form over
         // comment-stripped source, and a detail key of that name would read as a
         // hand-rolled version write and redden it.
+        let stashStatus = "";
+        if (stash !== null) {
+          if (rescued.length > 0) {
+            stashStatus = " and the pending stash was handed to rescue";
+          } else if (state.disposed) {
+            stashStatus = " and the pending stash was already present";
+          } else {
+            stashStatus = " and the pending stash was dropped";
+          }
+        }
         const triage: HostSessionEffect = {
           type: "logWarn",
           message:
             "[quoll] settlement transition threw; the write lock was force-released by the recovery arm" +
-            (stash !== null ? " and the pending stash was DROPPED" : ""),
+            stashStatus,
           detail: {
             uri: state.context.uriString,
             heldBase,
@@ -1622,7 +1436,10 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         const ack = state.disposed
           ? []
           : ackEffects(ackLabelObserved, recovered, heldBase, state.context);
-        return { state: recovered, effects: [toast, ...ack, triage] };
+        return {
+          state: recovered,
+          effects: rescued.length ? [...rescued, triage] : [toast, ...ack, triage],
+        };
       }
       case "editRejectedDeliveryFailed": {
         // Per-delivery identity (Codex N2/N6): only the delivery this failure
@@ -1777,6 +1594,8 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         return { state, effects: [{ type: "openExternal", href: event.href }] };
 
       case "disposed":
+        // Keep inFlightContent: the no-stash settlement contract distinguishes
+        // a plain in-flight edit from the post-dispose drain's own settlement.
         return { state: { ...state, disposed: true, pendingApplyBaseVersion: null }, effects: [] };
 
       default: {
@@ -1824,7 +1643,7 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
  *  never committed. What pays it is the step's own recovery
  *  (`host-session-step.ts` commits `settlementTransitionFailed`, which releases
  *  the lock and disposes of the stash) together with the side-channel drop it
- *  performs alongside — see `HostSessionStepDeps.commitWriteLockRecovery`.
+ *  performs alongside — see `recoverStrandedWriteLock via commitTransition`.
  *  Draining on is simply the least-bad of the three, not a rescue.
  *
  *  ⚠️ LIVENESS is unchanged and still the caller's to keep: a `step` that

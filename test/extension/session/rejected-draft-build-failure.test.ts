@@ -60,7 +60,7 @@ function harness(initial: (seed: HostSessionState) => HostSessionState) {
     showError: (message) => {
       toasts.push(message);
     },
-    rescueRejectedDraft: () => undefined,
+    rescueUnsavedDraft: () => undefined,
     canWrite: () => true,
     readLineageSince: () => null,
     buildSeedDocument: unreachable("buildSeedDocument"),
