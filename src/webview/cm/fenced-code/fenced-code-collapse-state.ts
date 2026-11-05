@@ -9,6 +9,7 @@ import { type EditorState, StateEffect } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import { COLLAPSE_THRESHOLD, parkSelectionOutsideConceal } from "../collapse/collapse-shared.js";
 import { type CollapseTarget, toggleCollapse } from "../collapse/line-collapse-field.js";
+import { leadingFrontmatterEnd } from "../frontmatter/detect.js";
 import { fencedCodeFenceLandmarks } from "./fenced-code-body.js";
 
 type Tree = ReturnType<typeof syntaxTree>;
@@ -50,14 +51,20 @@ export interface FencedBlockGeometry {
   closed: boolean;
 }
 
-/** Geometry for `node` iff it is a TOP-LEVEL FencedCode whose body exceeds the
- *  threshold; `null` otherwise. Top-level gate matches fenced-code-copy-button.ts. */
+/** Geometry for `node` iff it is a TOP-LEVEL FencedCode outside the leading frontmatter
+ *  whose body exceeds the threshold; `null` otherwise. Top-level gate matches
+ *  fenced-code-copy-button.ts. */
 export function fencedBlockGeometry(
   state: EditorState,
   node: SyntaxNode
 ): FencedBlockGeometry | null {
   const parent = node.parent;
   if (parent === null || parent.name !== "Document") {
+    return null;
+  }
+  // The frontmatter block (frontmatterBlockField) owns the outermost block over
+  // [0, fmEnd]; never emit a competing block replace inside it.
+  if (node.from < leadingFrontmatterEnd(state)) {
     return null;
   }
   const doc = state.doc;

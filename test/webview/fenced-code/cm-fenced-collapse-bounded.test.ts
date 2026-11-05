@@ -120,6 +120,18 @@ function run(initial: string, edits: Edit[]): void {
 
 describe("fencedCodeCollapseField bounded ≡ full", () => {
   const F = fence(15); // closed, 15 body lines → collapsible
+  const masked = `---\ndescription: |\n  \`\`\`\n${Array.from({ length: 14 }, (_, i) => `  metadata ${i}`).join("\n")}\n  \`\`\`\n---\n`;
+  it("tracks frontmatter boundary removal, restoration, and movement", () => {
+    const closing = masked.lastIndexOf("---\n");
+    run(masked, [
+      { changes: { from: closing, to: closing + 4 } },
+      { changes: { from: closing, insert: "---\n" } },
+      { changes: { from: 0, to: 4 } },
+      { changes: { from: 0, insert: "---\n" } },
+      { changes: { from: closing, insert: "metadata: shifted\n" } },
+      { changes: { from: closing, to: closing + "metadata: shifted\n".length } },
+    ]);
+  });
   const cases: Array<{ name: string; initial: string; edits: Edit[] }> = [
     {
       name: "type prose far above a block",

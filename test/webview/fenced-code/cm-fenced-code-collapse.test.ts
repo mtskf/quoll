@@ -4,6 +4,7 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
 import { fencedCodeBodyLineSpan } from "../../../src/webview/cm/fenced-code/fenced-code-body.js";
+import { leadingFrontmatterEnd } from "../../../src/webview/cm/frontmatter/detect.js";
 import { fullTree } from "../helpers/full-tree.js";
 import { settledState } from "../helpers/settled-state.js";
 import { settledMount } from "../helpers/settled-view.js";
@@ -97,6 +98,25 @@ function firstFencedNode(state: EditorState): SyntaxNode {
 }
 
 describe("fencedBlockGeometry", () => {
+  it("ignores a top-level fence-shaped run inside the leading frontmatter", () => {
+    const body = Array.from({ length: 14 }, (_, i) => `  metadata ${i}`).join("\n");
+    const state = stateWith(`---\ndescription: |\n  \`\`\`\n${body}\n  \`\`\`\n---\nprose\n`);
+    const node = firstFencedNode(state);
+    expect(leadingFrontmatterEnd(state)).toBeGreaterThan(0);
+    expect(node.parent?.name).toBe("Document");
+    expect(node.from).toBeLessThan(leadingFrontmatterEnd(state));
+    const field = stateWithField(state.doc.toString()).field(fencedCodeCollapseField);
+    expect(field.decorations.size).toBe(0);
+    expect(field.blocks).toEqual([]);
+  });
+
+  it("collapses a fence immediately after the closing frontmatter line", () => {
+    const prefix = "---\ntitle: x\n---\n";
+    const state = stateWithField(fencedDoc(14, prefix));
+    expect(leadingFrontmatterEnd(state)).toBeGreaterThan(0);
+    expect(state.field(fencedCodeCollapseField).blocks).toHaveLength(1);
+    expect(state.field(fencedCodeCollapseField).blocks[0].key).toBe(prefix.length);
+  });
   it("returns null for a block at the threshold (10 body lines → not collapsible)", () => {
     const state = stateWith(fencedDoc(10));
     expect(fencedBlockGeometry(state, firstFencedNode(state))).toBeNull();
