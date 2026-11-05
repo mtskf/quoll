@@ -14,12 +14,11 @@ export interface UnsavedDraft {
   readonly reason: string;
 }
 
-const report = (...args: unknown[]): boolean => {
+const report = (...args: unknown[]): void => {
   try {
     console.error(...args);
-    return true;
   } catch {
-    return false;
+    // Nothing left to report to.
   }
 };
 
@@ -46,13 +45,16 @@ export function rescueUnsavedDraft(
     `Quoll could not save an edit to ${fsPath}. Opening the unsaved draft in a new untitled document. Reason: ${draft.reason}`
   );
   const failed = (cause: unknown): void => {
-    const logged = report("[quoll] could not open unsaved draft", cause, draft.content);
-    notify(
-      deps.showError,
-      logged
-        ? `Quoll could not open the unsaved draft for ${fsPath}. Copy it from the log: the draft content was logged to the extension host console.`
-        : `Quoll could not open the unsaved draft for ${fsPath}, and could not write its content to the extension host console.`
-    );
+    // Metadata only: the draft is the user's document and the forwarded console
+    // is persisted to VS Code's window log; never write document bytes there.
+    report("[quoll] could not open unsaved draft", cause, {
+      fsPath,
+      reason: draft.reason,
+      contentLength: draft.content.length,
+    });
+    // `openUntitled` chains create + show; a failed show can leave the untitled
+    // document alive, so never claim the draft is lost.
+    notify(deps.showError, `Quoll could not reopen the unsaved draft for ${fsPath}.`);
   };
   try {
     void Promise.resolve(deps.openUntitled(draft.content)).then(undefined, failed);

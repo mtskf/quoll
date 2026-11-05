@@ -97,8 +97,9 @@ export interface EffectExecutorDeps<TEdit> {
   /** harness?.recordEvent ?? noop — called only on an accepted (ok=true) send. */
   recordEvent: (message: HostToWebview) => void;
   showError: (message: string) => void;
-  /** Reopen a refused draft as an untitled document. Required: an absent dep
-   *  would silently lose the post-dispose draft. */
+  /** Reopen an unsaved post-dispose draft (a stash the reducer could not write,
+   *  or a pending write-gate rejection at close) as an untitled document.
+   *  Required: an absent dep would silently lose that draft. */
   rescueUnsavedDraft: (draft: UnsavedDraft) => void;
   canWrite: () => boolean;
   /** The panel's lineage answer for the live text (session/edit-lineage.ts),
@@ -1006,7 +1007,7 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
           break;
         case "rescueUnsavedDraft":
           // Runs after disposal. The helper owns notices; a helper contract
-          // violation is contained and logged with the original content.
+          // violation is contained and logged as metadata only (never the draft).
           try {
             deps.rescueUnsavedDraft({ content: effect.content, reason: effect.reason });
           } catch (err) {
@@ -1014,7 +1015,7 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
               console.error(
                 "[quoll] rescueUnsavedDraft threw while running settlement effects",
                 err,
-                effect.content
+                { reason: effect.reason, contentLength: effect.content.length }
               )
             );
           }

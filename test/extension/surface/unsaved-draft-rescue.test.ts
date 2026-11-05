@@ -57,7 +57,7 @@ describe("rescueUnsavedDraft", () => {
     "throw",
     "getter",
     "thenable",
-  ])("logs original bytes and reports %s open failure", async (kind) => {
+  ])("logs metadata only and reports %s open failure", async (kind) => {
     const cause = new Error(kind);
     const s = setup(() => {
       if (kind === "throw") {
@@ -84,25 +84,24 @@ describe("rescueUnsavedDraft", () => {
     expect(() => rescueUnsavedDraft(draft, path, s.deps)).not.toThrow();
     await flush();
     expect(s.order).toEqual(["warning", "open", "error"]);
-    expect(s.log).toHaveBeenCalledWith(
-      "[quoll] could not open unsaved draft",
-      cause,
-      draft.content
-    );
-    expect(s.error).toHaveBeenCalledWith(
-      `Quoll could not open the unsaved draft for ${path}. Copy it from the log: the draft content was logged to the extension host console.`
-    );
+    expect(s.log).toHaveBeenCalledWith("[quoll] could not open unsaved draft", cause, {
+      fsPath: path,
+      reason: draft.reason,
+      contentLength: draft.content.length,
+    });
+    // The draft is the user's document: its bytes must never reach the log.
+    expect(JSON.stringify(s.log.mock.calls)).not.toContain("original");
+    expect(s.error).toHaveBeenCalledWith(`Quoll could not reopen the unsaved draft for ${path}.`);
   });
-  it("reports a logging failure with the fallback message", async () => {
+  it("a throwing reporter still shows the single error toast", async () => {
     const s = setup(() => Promise.reject(new Error("open")));
     s.log.mockImplementation(() => {
       throw new Error("log");
     });
     rescueUnsavedDraft(draft, path, s.deps);
     await flush();
-    expect(s.error).toHaveBeenCalledWith(
-      `Quoll could not open the unsaved draft for ${path}, and could not write its content to the extension host console.`
-    );
+    expect(s.error).toHaveBeenCalledOnce();
+    expect(s.error).toHaveBeenCalledWith(`Quoll could not reopen the unsaved draft for ${path}.`);
   });
   it("contains rejecting notifications and a throwing reporter without an unhandled rejection", async () => {
     const s = setup();

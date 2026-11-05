@@ -1276,7 +1276,8 @@ describe("effect-executor runEffects other cases", () => {
   });
 
   // `rescueUnsavedDraft` is deliberately UNGUARDED by `isDisposed`: it exists for
-  // the post-dispose drain, where the webview is gone but the draft is not.
+  // post-dispose unsaved drafts (an unwritable stash or a pending write-gate
+  // rejection at close), where the webview is gone but the draft is not.
   const rescueReason = "bad link";
 
   it("rescueUnsavedDraft: runs the dep with { content, reason } even when disposed", () => {
@@ -1310,7 +1311,7 @@ describe("effect-executor runEffects other cases", () => {
       expect(errorSpy).toHaveBeenCalledWith(
         "[quoll] rescueUnsavedDraft threw while running settlement effects",
         expect.any(Error),
-        "draft"
+        { reason: rescueReason, contentLength: 5 }
       );
     } finally {
       errorSpy.mockRestore();
