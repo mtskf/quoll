@@ -19,7 +19,7 @@
 // arm (NOT the false/reject arms — those log unconditionally), and
 // `sendEditRejected`'s early-return + BOTH `.then` arms. `runEffects` itself is
 // NEVER wrapped in a disposed guard (nor are the `showError` and
-// `rescueRejectedDraft` cases), and `runApplyEdit`'s `applyEditSettled`
+// `rescueUnsavedDraft` cases), and `runApplyEdit`'s `applyEditSettled`
 // dispatch fires EVEN post-dispose in every arm (ok / refused / rejected, plus
 // the pipeline-rejection arm) — the core is the decision authority and needs the
 // settlement to drain a stashed last-keystroke edit (the
@@ -40,7 +40,7 @@ import type {
   DocumentWriteOutcome,
 } from "../document-write/execute-write.js";
 import { executeDocumentWrite } from "../document-write/execute-write.js";
-import type { RescuableDraft } from "../surface/rejected-draft-rescue.js";
+import type { UnsavedDraft } from "../surface/unsaved-draft-rescue.js";
 import type {
   ApplyEditOutcome,
   HostSessionEffect,
@@ -99,7 +99,7 @@ export interface EffectExecutorDeps<TEdit> {
   showError: (message: string) => void;
   /** Reopen a refused draft as an untitled document. Required: an absent dep
    *  would silently lose the post-dispose draft. */
-  rescueRejectedDraft: (draft: RescuableDraft) => void;
+  rescueUnsavedDraft: (draft: UnsavedDraft) => void;
   canWrite: () => boolean;
   /** The panel's lineage answer for the live text (session/edit-lineage.ts),
    *  carried on the edit-rejected recovery dispatches. Never throws: the
@@ -217,7 +217,7 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
   // per-effect guard. Cited by name from `withholdAckEffects`, the
   // `settlementTransitionFailed` arm, and the `editRejectedDeliveryFailed`
   // unobserved arm — CONSUMERS, not a census: other lists satisfy it uncited
-  // (the disposed `unobservedStashDrop` toast) or invert it on purpose
+  // (the post-dispose rescue lists) or invert it on purpose
   // (`settlementEffects`' `refused` arm, the drain's parse-failed arm).
   const reportContained = (report: () => void): void => {
     try {
@@ -585,20 +585,9 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
   // unreachable for the closed tag union `execute-write.ts` produces). A throw
   // here escapes the `.then` (an `onRejected` sibling does NOT catch its own
   // `onFulfilled`) and strands the write lock forever, so read it defensively.
-  // Assume NOT writable on a throw. That is a real trade-off, not a free win:
-  // `canDrain` does NOT consult `canWrite`, so a false negative still runs the
-  // drain, `decideEdit` then returns `readonly`, and the core's `readonly` arm
-  // drops the stash. While the panel is alive the keystroke survives
-  // regardless — the webview's single-flight replay buffer
-  // (`webview/cm/edit-sync.ts`) still holds it and re-posts after the reseed.
-  // Post-dispose the stash is the only carrier: that keystroke is lost, and the
-  // core's disposed readonly arm surfaces the loss as a toast. That loss is
-  // PRE-EXISTING and NOT introduced by this fallback — the identical drop
-  // happens for a genuine read-only flip mid-flight, and it is strictly better
-  // than the behaviour this arm replaced (an unguarded throw stranded the lock,
-  // losing that keystroke AND every later edit for the session). The
-  // alternative here is worse: optimistically claiming writability would let
-  // the reducer replay a write we could not confirm is permitted.
+  // Assume not writable on a throw. The reducer decides whether a pending
+  // stash can drain and whether it needs rescue after disposal; see
+  // ARCHITECTURE.md's surface/unsaved-draft-rescue.ts entry.
   const readCanWrite = (): boolean => {
     try {
       return deps.canWrite();
@@ -1015,16 +1004,17 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
             );
           }
           break;
-        case "rescueRejectedDraft":
-          // UNGUARDED by `isDisposed` (see the header). Contained like
-          // `showError`, including the thunk-form log.
+        case "rescueUnsavedDraft":
+          // Runs after disposal. The helper owns notices; a helper contract
+          // violation is contained and logged with the original content.
           try {
-            deps.rescueRejectedDraft({ content: effect.content, error: effect.error });
+            deps.rescueUnsavedDraft({ content: effect.content, reason: effect.reason });
           } catch (err) {
             reportContained(() =>
               console.error(
-                "[quoll] rescueRejectedDraft threw while running settlement effects",
-                err
+                "[quoll] rescueUnsavedDraft threw while running settlement effects",
+                err,
+                effect.content
               )
             );
           }

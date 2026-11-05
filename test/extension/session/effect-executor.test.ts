@@ -30,7 +30,7 @@ function makeDeps(over: Partial<EffectExecutorDeps<FakeEdit>> = {}): EffectExecu
     send: vi.fn(async () => true),
     recordEvent: vi.fn(),
     showError: vi.fn(),
-    rescueRejectedDraft: vi.fn(),
+    rescueUnsavedDraft: vi.fn(),
     canWrite: () => true,
     readLineageSince: () => null,
     buildSeedDocument: (v, externalEpoch, epochGeneration, settledEditId) => ({
@@ -1275,21 +1275,21 @@ describe("effect-executor runEffects other cases", () => {
     expect(showError).toHaveBeenCalledWith("nope");
   });
 
-  // `rescueRejectedDraft` is deliberately UNGUARDED by `isDisposed`: it exists for
+  // `rescueUnsavedDraft` is deliberately UNGUARDED by `isDisposed`: it exists for
   // the post-dispose drain, where the webview is gone but the draft is not.
-  const rescueError = { code: "unsafe_url" as const, message: "bad link" };
+  const rescueReason = "bad link";
 
-  it("rescueRejectedDraft: runs the dep with { content, error } even when disposed", () => {
+  it("rescueUnsavedDraft: runs the dep with { content, reason } even when disposed", () => {
     const rescue = vi.fn();
     const { runEffects } = createEffectExecutor(
-      makeDeps({ isDisposed: () => true, rescueRejectedDraft: rescue })
+      makeDeps({ isDisposed: () => true, rescueUnsavedDraft: rescue })
     );
-    runEffects([{ type: "rescueRejectedDraft", content: "draft", error: rescueError }]);
+    runEffects([{ type: "rescueUnsavedDraft", content: "draft", reason: rescueReason }]);
     expect(rescue).toHaveBeenCalledOnce();
-    expect(rescue).toHaveBeenCalledWith({ content: "draft", error: rescueError });
+    expect(rescue).toHaveBeenCalledWith({ content: "draft", reason: rescueReason });
   });
 
-  it("rescueRejectedDraft: a throwing dep is contained — logged, and the following effects still run", () => {
+  it("rescueUnsavedDraft: a throwing dep is contained — logged, and the following effects still run", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const showError = vi.fn();
@@ -1297,23 +1297,27 @@ describe("effect-executor runEffects other cases", () => {
         throw new Error("rescue failed");
       });
       const { runEffects } = createEffectExecutor(
-        makeDeps({ rescueRejectedDraft: rescue, showError })
+        makeDeps({ rescueUnsavedDraft: rescue, showError })
       );
       expect(() =>
         runEffects([
-          { type: "rescueRejectedDraft", content: "draft", error: rescueError },
+          { type: "rescueUnsavedDraft", content: "draft", reason: rescueReason },
           { type: "showError", message: "after" },
         ])
       ).not.toThrow();
       expect(rescue).toHaveBeenCalledOnce();
       expect(showError).toHaveBeenCalledWith("after");
-      expect(errorSpy).toHaveBeenCalled();
+      expect(errorSpy).toHaveBeenCalledWith(
+        "[quoll] rescueUnsavedDraft threw while running settlement effects",
+        expect.any(Error),
+        "draft"
+      );
     } finally {
       errorSpy.mockRestore();
     }
   });
 
-  it("rescueRejectedDraft: the dep AND console.error both throwing still runs the following effects", () => {
+  it("rescueUnsavedDraft: the dep AND console.error both throwing still runs the following effects", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {
       throw new Error("console broken");
     });
@@ -1323,11 +1327,11 @@ describe("effect-executor runEffects other cases", () => {
         throw new Error("rescue failed");
       });
       const { runEffects } = createEffectExecutor(
-        makeDeps({ rescueRejectedDraft: rescue, showError })
+        makeDeps({ rescueUnsavedDraft: rescue, showError })
       );
       expect(() =>
         runEffects([
-          { type: "rescueRejectedDraft", content: "draft", error: rescueError },
+          { type: "rescueUnsavedDraft", content: "draft", reason: rescueReason },
           { type: "showError", message: "after" },
         ])
       ).not.toThrow();

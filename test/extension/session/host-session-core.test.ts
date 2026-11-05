@@ -610,214 +610,166 @@ describe("host-session-core: applyEditSettled drain", () => {
     expect(r.effects).toEqual([{ type: "applyEdit", content: "edit1plus", baseDocVersion: 2 }]);
   });
 
-  it("POST-DISPOSE drain parse-failed → rescueRejectedDraft only (webview post suppressed, no duplicate toast)", () => {
+  it("POST-DISPOSE drain parse-failed → rescueUnsavedDraft only (webview post suppressed, no duplicate toast)", () => {
     const r = core.transition(
       lockedWithStash("edit1", "hasBAD", { disposed: true }),
       settled({ settledVersion: 2, currentContent: "edit1" })
     );
-    expect(r.effects).toEqual([{ type: "rescueRejectedDraft", content: "hasBAD", error: unsafe }]);
-    expect(r.state.rejection).toMatchObject({ kind: "pending", content: "hasBAD" });
+    expect(r.effects).toEqual([
+      { type: "rescueUnsavedDraft", content: "hasBAD", reason: unsafe.message },
+    ]);
+    expect(r.state.rejection).toEqual({ kind: "none" });
+    expect(r.state.pendingEdit).toBeNull();
+    expect(r.state.nextRejectionId).toBe(1);
   });
 
-  it("POST-DISPOSE drain readonly, stash DIFFERS from the settled document → showError once: the dropped edit is not silent", () => {
-    // Alive, this arm reposts the authoritative Document and the user watches
-    // the edit revert. Post-dispose there is no webview and no replay buffer, so
-    // the stash is the keystroke's only carrier and a toast is the only signal.
+  it("post-dispose readonly drain rescues only a stash absent from observed text", () => {
     const r = core.transition(
       lockedWithStash("edit1", "edit1plus", { disposed: true }),
-      settled({ settledVersion: 2, canWrite: false, currentContent: "edit1" })
+      settled({ canWrite: false, currentContent: "edit1" })
     );
-    expect(r.effects).toHaveLength(1);
-    expect(r.effects[0]).toMatchObject({
-      type: "showError",
-      message: expect.stringContaining(ctx.fsPath),
-    });
-    // The wording must not assert a cause the reducer cannot know:
-    // `canWrite: false` is also what the executor reports when the writability
-    // read itself threw.
-    expect(r.effects[0]).toMatchObject({ message: expect.stringContaining("could not confirm") });
-    expect(r.effects[0]).toMatchObject({ message: expect.not.stringContaining("is not writable") });
+    expect(r.effects).toEqual([
+      {
+        type: "rescueUnsavedDraft",
+        content: "edit1plus",
+        reason: "the file could not be confirmed writable",
+      },
+    ]);
   });
 
   it.each([
     ["byte-identical", "a\nb", "a\nb"],
-    ["EOL-only difference", "a\nb", "a\r\nb"],
-  ])("POST-DISPOSE drain readonly, stash carries the settled text (%s) → silent: nothing was lost", (_label, stash, current) => {
-    // `decideEdit` checks readonly BEFORE content equality, so a stash that
-    // already matches the settled document lands in the same arm. Announcing a
-    // dropped edit there would be a false alarm.
+    ["EOL-equivalent", "a\nb", "a\r\nb"],
+  ])("post-dispose readonly observed stash stays silent (%s)", (_name, stash, observed) => {
     const r = core.transition(
-      lockedWithStash("a\nb", stash, { disposed: true }),
-      settled({ settledVersion: 2, canWrite: false, currentContent: current })
+      lockedWithStash("first", stash, { disposed: true }),
+      settled({ canWrite: false, currentContent: observed })
     );
-    expect(r.effects).toEqual([]);
-  });
-
-  it("POST-DISPOSE non-ok WITH a stash → showError only (failed save still surfaced), NO webview post", () => {
-    const r = core.transition(
-      lockedWithStash("edit1", "edit1plus", { disposed: true }),
-      settled({
-        outcome: { kind: "rejected", message: "boom" },
-        settledVersion: 1,
-        currentContent: "edit1",
-      })
+    expect(r.effects.some((e) => e.type === "rescueUnsavedDraft" || e.type === "showError")).toBe(
+      false
     );
-    expect(r.effects).toEqual([{ type: "showError", message: "Failed to save: boom" }]);
-  });
-
-  it("POST-DISPOSE ok but external-mismatch WITH a stash → showError (cause-neutral) THEN logWarn: the dropped edit is not silent", () => {
-    // Post-dispose the stash is the edit's only carrier (no webview, no replay
-    // buffer), so an observed mismatch that refuses the drain is the same loss
-    // as the unobserved one, just with a different cause.
-    const r = core.transition(
-      lockedWithStash("edit1", "edit1plus", { disposed: true }),
-      settled({ settledVersion: 2, currentContent: "external" })
-    );
-    expect(r.effects).toEqual([
-      {
-        type: "showError",
-        message: expect.stringContaining(ctx.fsPath),
-      },
-      {
-        type: "logWarn",
-        message:
-          "[quoll] ok-but-mismatch on settle: external edit won the race, pending stash dropped",
-        detail: { stashBase: 1, settledDocVersion: 2 },
-      },
-    ]);
-    const toast = r.effects[0] as { message: string };
-    expect(toast.message).toContain("was dropped");
-    // Cause-neutral on purpose: a mismatch is not necessarily an external write.
-    expect(toast.message).not.toContain("external");
   });
 
   it.each([
-    ["byte-identical", "edit1plus", "edit1plus"],
-    ["EOL-only difference", "a\nb", "a\r\nb"],
-  ])("POST-DISPOSE ok-but-mismatch, observed document already carries the stash (%s) → NO toast, logWarn stays", (_label, text, observedText) => {
-    // The other writer wrote the same bytes: nothing was lost.
+    [{ kind: "refused" }, "the preceding save was refused"],
+    [{ kind: "constructThrew", message: "construct!" }, "the preceding save failed (construct!)"],
+    [{ kind: "applyThrew", message: "apply!" }, "the preceding save failed (apply!)"],
+    [{ kind: "rejected", message: "reject!" }, "the preceding save failed (reject!)"],
+  ] as const)("post-dispose failed settlement rescues distinct stash once for every failure outcome %#", (outcome, reason) => {
     const r = core.transition(
-      lockedWithStash("edit1", text, { disposed: true }),
-      settled({ settledVersion: 2, currentContent: observedText })
+      lockedWithStash("first", "later", { disposed: true }),
+      settled({ outcome, currentContent: "first" })
     );
-    expect(r.effects.some((e) => e.type === "showError")).toBe(false);
-    expect(
-      r.effects.some((e) => e.type === "logWarn" && e.message.includes("ok-but-mismatch"))
-    ).toBe(true);
+    expect(r.effects.filter((e) => e.type === "rescueUnsavedDraft")).toEqual([
+      { type: "rescueUnsavedDraft", content: "later", reason },
+    ]);
+    expect(r.effects.some((e) => e.type === "showError" || e.type === "postDocument")).toBe(false);
+    expect(r.state.pendingEdit).toBeNull();
   });
 
-  it("POST-DISPOSE divergedAfterApply WITH a stash, observed differs → exactly one showError + the diverged logWarn", () => {
+  it("non-ok plus divergence chooses the non-ok reason", () => {
     const r = core.transition(
-      lockedWithStash("edit1", "edit1plus", { disposed: true }),
-      settled({ settledVersion: 2, currentContent: "external", divergedAfterApply: true })
-    );
-    expect(r.effects.filter((e) => e.type === "showError")).toHaveLength(1);
-    expect(
-      r.effects.some((e) => e.type === "logWarn" && e.message.includes("divergedAfterApply"))
-    ).toBe(true);
-  });
-
-  it("POST-DISPOSE divergedAfterApply WITH a stash, observed equals the stash → NO toast", () => {
-    const r = core.transition(
-      lockedWithStash("edit1", "edit1plus", { disposed: true }),
-      settled({ settledVersion: 2, currentContent: "edit1plus", divergedAfterApply: true })
-    );
-    expect(r.effects.some((e) => e.type === "showError")).toBe(false);
-  });
-
-  it("POST-DISPOSE divergedAfterApply WITH a stash, NOT observed → exactly one showError, the neutral text (not 'could not verify')", () => {
-    // No observation cannot prove nothing was lost, so it reports; and it is
-    // not the unobserved-drop arm (divergedAfterApply excludes that).
-    const r = core.transition(
-      lockedWithStash("edit1", "edit1plus", { disposed: true }),
-      settled({ settledVersion: 2, currentContent: null, divergedAfterApply: true })
-    );
-    const toasts = r.effects.filter((e) => e.type === "showError");
-    expect(toasts).toHaveLength(1);
-    expect(toasts[0]).toMatchObject({ message: expect.not.stringContaining("could not verify") });
-    expect(toasts[0]).toMatchObject({ message: expect.stringContaining("was dropped") });
-  });
-
-  it("ALIVE ok-but-mismatch WITH a stash → NO toast (the webview replay buffer still carries it)", () => {
-    const r = core.transition(
-      lockedWithStash("edit1", "edit1plus"),
-      settled({ settledVersion: 2, currentContent: "external" })
-    );
-    expect(r.effects.some((e) => e.type === "showError")).toBe(false);
-  });
-
-  it("POST-DISPOSE UNOBSERVED settle WITH a stash → showError: the dropped edit is not silent", () => {
-    // REGRESSION PIN. Before the settle-time reads were guarded, this exact
-    // physical event (the settle-time canonical read threw) rejected the pipeline
-    // and settled `rejected`, so its "Failed to save" toast reached the user
-    // through the dispose filter. Guarding the reads makes the settlement `ok`,
-    // whose baseEffects carry no toast at all — so without a toast of its own
-    // this branch drops the stashed edit with nothing but a `logWarn`, and
-    // post-dispose there is no webview replay buffer left to carry it.
-    const r = core.transition(
-      lockedWithStash("edit1", "edit1plus", { disposed: true }),
-      settled({ settledVersion: 2, currentContent: null })
-    );
-    const toasts = r.effects.filter((e) => e.type === "showError");
-    expect(toasts).toHaveLength(1);
-    // The wording must not re-introduce the false alarm that guarding the reads
-    // removed: the write pipeline COMPLETED, only its verification is missing.
-    // (Not "the apply landed" — the no-op short-circuit reaches this same family
-    // without submitting an edit; see execute-write.ts's ⚠️ note at `settle`.)
-    expect(toasts[0]).toMatchObject({ message: expect.stringContaining("could not verify") });
-    expect(toasts[0]).toMatchObject({ message: expect.not.stringContaining("Failed to save") });
-    // ...and it is IN ADDITION to the triage log, not instead of it.
-    expect(
-      r.effects.some((e) => e.type === "logWarn" && e.message.includes("unverified settle"))
-    ).toBe(true);
-  });
-
-  it("ALIVE UNOBSERVED settle WITH a stash → NO toast (the webview replay buffer still carries it)", () => {
-    // The other half of the same gate. Alive, the settlement deliberately does not
-    // invalidate the webview's single-flight replay buffer, so the edit is
-    // re-posted after the ack and a toast would be a false alarm. Dropping the
-    // `state.disposed` gate above turns this red.
-    const r = core.transition(
-      lockedWithStash("edit1", "edit1plus"),
-      settled({ settledVersion: 2, currentContent: null })
-    );
-    expect(r.effects.some((e) => e.type === "showError")).toBe(false);
-    expect(
-      r.effects.some((e) => e.type === "logWarn" && e.message.includes("unverified settle"))
-    ).toBe(true);
-  });
-
-  it("POST-DISPOSE ok-but-MISMATCH settle WITH a stash → exactly ONE toast, and it is NOT the unobserved text", () => {
-    // Non-vacuity for `unobservedStashDrop`'s CONDITION: widening it to any
-    // post-dispose stash drop would make this settle fire the "could not verify"
-    // toast as well (two toasts) or instead of the mismatch one.
-    const r = core.transition(
-      lockedWithStash("edit1", "edit1plus", { disposed: true }),
-      settled({ settledVersion: 2, currentContent: "external" })
-    );
-    const toasts = r.effects.filter((e) => e.type === "showError");
-    expect(toasts).toHaveLength(1);
-    expect(toasts[0]).toMatchObject({ message: expect.not.stringContaining("could not verify") });
-  });
-
-  it("POST-DISPOSE REJECTED settle (unobserved) WITH a stash → the 'Failed to save' toast ONLY, never both", () => {
-    // Non-vacuity for the `kind === "ok"` conjunct of `unobservedStashDrop`.
-    // This is the executor's rejection-arm settlement shape verbatim: a pipeline
-    // rejection dispatches `kind: "rejected"` together with `currentContent: null`,
-    // so EVERY other conjunct of the unverified-drop predicate holds and only the
-    // ok-gate keeps the "saved but could not verify" toast off it. Two toasts here
-    // would contradict each other about one event: the save FAILED, so there is no
-    // save left to describe as unverified.
-    const r = core.transition(
-      lockedWithStash("edit1", "edit1plus", { disposed: true }),
+      lockedWithStash("first", "later", { disposed: true }),
       settled({
         outcome: { kind: "rejected", message: "boom" },
-        settledVersion: 1,
+        divergedAfterApply: true,
         currentContent: null,
       })
     );
-    const toasts = r.effects.filter((e) => e.type === "showError");
-    expect(toasts).toEqual([{ type: "showError", message: "Failed to save: boom" }]);
+    expect(r.effects.find((e) => e.type === "rescueUnsavedDraft")).toEqual({
+      type: "rescueUnsavedDraft",
+      content: "later",
+      reason: "the preceding save failed (boom)",
+    });
+  });
+
+  it("an already observed stash keeps the preceding failure toast", () => {
+    const r = core.transition(
+      lockedWithStash("first", "later", { disposed: true }),
+      settled({ outcome: { kind: "rejected", message: "boom" }, currentContent: "later" })
+    );
+    expect(r.effects.filter((e) => e.type === "rescueUnsavedDraft")).toEqual([]);
+    expect(r.effects.some((e) => e.type === "showError")).toBe(true);
+  });
+
+  it.each([
+    [
+      { currentContent: null },
+      "the preceding save completed but Quoll could not verify the document",
+    ],
+    [{ currentContent: "external" }, "the document changed before this later edit could be saved"],
+    [
+      { currentContent: "external", divergedAfterApply: true },
+      "the preceding write did not leave the intended text in the document",
+    ],
+    [
+      { currentContent: null, divergedAfterApply: true },
+      "the preceding write did not leave the intended text in the document",
+    ],
+  ] as const)("post-dispose undrainable successful settlement rescues once without changing external winner %#", (over, reason) => {
+    const r = core.transition(lockedWithStash("first", "later", { disposed: true }), settled(over));
+    expect(r.effects.filter((e) => e.type === "rescueUnsavedDraft")).toEqual([
+      { type: "rescueUnsavedDraft", content: "later", reason },
+    ]);
+    expect(r.effects.some((e) => e.type === "showError" || e.type === "postDocument")).toBe(false);
+    expect(r.state.pendingEdit).toBeNull();
+    expect(r.state.lastAppliedDocVersion).toBe(2);
+  });
+
+  it("missing in-flight baseline takes the unobserved reason", () => {
+    const r = core.transition(
+      lockedWithStash("first", "later", { disposed: true, inFlightContent: null }),
+      settled({ currentContent: "external" })
+    );
+    expect(r.effects.find((e) => e.type === "rescueUnsavedDraft")).toEqual({
+      type: "rescueUnsavedDraft",
+      content: "later",
+      reason: "the preceding save completed but Quoll could not verify the document",
+    });
+  });
+
+  it("full-text equality does not mistake a substring for an observed stash", () => {
+    const r = core.transition(
+      lockedWithStash("first", "later", { disposed: true }),
+      settled({ currentContent: "later plus other content" })
+    );
+    expect(r.effects.filter((e) => e.type === "rescueUnsavedDraft")).toHaveLength(1);
+  });
+
+  it("plain in-flight late ok settlement without a stash stays silent", () => {
+    const locked = base({ pendingApplyBaseVersion: 1, inFlightContent: "first" });
+    const disposed = core.transition(locked, { type: "disposed" }).state;
+    const r = core.transition(disposed, settled({ currentContent: null }));
+    expect(r.effects).toEqual([]);
+    expect(r.state.inFlightContent).toBe("first");
+  });
+
+  it("the post-dispose drain's own unverified settlement warns exactly once", () => {
+    const disposed = core.transition(lockedWithStash("first", "later"), { type: "disposed" }).state;
+    const drained = core.transition(
+      disposed,
+      settled({ currentContent: "first", settledVersion: 5 })
+    );
+    expect(drained.state.lastAppliedDocVersion).toBe(5);
+    expect(drained.state.inFlightContent).toBeNull();
+    expect(drained.effects).toEqual([{ type: "applyEdit", content: "later", baseDocVersion: 5 }]);
+    const own = core.transition(
+      drained.state,
+      settled({ currentContent: null, settledVersion: 6 })
+    );
+    expect(own.effects).toEqual([
+      {
+        type: "showError",
+        message:
+          "Quoll could not verify the final edit after the editor closed. Reopen the file to check its contents.",
+      },
+    ]);
+  });
+
+  it("post-dispose no-op drain does not rescue", () => {
+    const disposed = core.transition(lockedWithStash("first", "first"), { type: "disposed" }).state;
+    const r = core.transition(disposed, settled({ currentContent: "first" }));
+    expect(r.effects).toEqual([]);
   });
 
   it("POST-DISPOSE settle with NO stash → strict no-op, state unchanged", () => {
@@ -1763,7 +1715,13 @@ describe("host-session-core: settlement ack-label gate (ackLabelObserved)", () =
     // at all, `refused` leaves toasts and nothing else.
     const disposed = base({ disposed: true, pendingApplyBaseVersion: null });
     const ok = core.transition(disposed, settled({ settledVersion: null, currentContent: null }));
-    expect(ok.effects).toEqual([]);
+    expect(ok.effects).toEqual([
+      {
+        type: "showError",
+        message:
+          "Quoll could not verify the final edit after the editor closed. Reopen the file to check its contents.",
+      },
+    ]);
     const refused = core.transition(
       disposed,
       settled({ outcome: { kind: "refused" }, settledVersion: null, currentContent: null })
@@ -2141,9 +2099,12 @@ describe("host-session-core: an unobserved ack label still DRAINS (bytes first)"
 // panel's life, every later edit piled into a `pendingEdit` with no drain, and
 // at dispose that stash was lost silently. This arm is the recovery.
 describe("host-session-core: settlementTransitionFailed (write-lock recovery)", () => {
-  const recovery = (settledVersion: number | null = 6): HostSessionEvent => ({
+  const recovery = (
+    settledVersion: number | null = 6
+  ): Extract<HostSessionEvent, { type: "settlementTransitionFailed" }> => ({
     type: "settlementTransitionFailed",
     settledVersion,
+    currentContent: null,
   });
   const locked = (over: Partial<HostSessionState> = {}) =>
     base({
@@ -2206,7 +2167,7 @@ describe("host-session-core: settlementTransitionFailed (write-lock recovery)", 
     expect(r.state.pendingEdit).toBeNull();
     const warn = r.effects.find((e) => e.type === "logWarn");
     expect(warn).toBeDefined();
-    expect(messageOf(warn)).toContain("DROPPED");
+    expect(messageOf(warn)).toContain("pending stash was dropped");
   });
 
   it("logs the release even with no stash to lose", () => {
@@ -2374,24 +2335,26 @@ describe("host-session-core: settlementTransitionFailed (write-lock recovery)", 
     expect(r.effects).toContainEqual(pDoc(6));
   });
 
-  // Post-dispose the retained replay buffer went with the iframe, so here the
-  // stash really was the only carrier — nothing left to replay it, and no remedy
-  // that could preserve the bytes. That is why this branch keeps the DEFINITE
-  // claim while the alive one hedges, and why its instruction is "reopen" rather
-  // than the alive branch's "copy before reloading": there is nothing left to
-  // copy from.
-  it("POST-DISPOSE drops the stash, CLAIMS the loss DEFINITELY, and posts no Document", () => {
+  it("post-dispose transition failure rescues from carried observation without another read", () => {
     const r = core.transition(afterDispose({ pendingEdit: STASH }), recovery(6));
     expect(r.state.pendingEdit).toBeNull();
-    const toast = r.effects.find((e) => e.type === "showError");
-    expect(messageOf(toast)).toContain("internal error");
-    expect(messageOf(toast)).toContain("A later unsaved edit was dropped.");
-    // NOT the hedge: the definite wording is correct here, and must not drift
-    // into the uncertain one alongside the alive branch.
-    expect(messageOf(toast)).not.toContain("may not have been saved");
-    expect(messageOf(toast)).toContain("Reopen the file to check its contents.");
-    expect(r.effects.some((e) => e.type === "postDocument")).toBe(false);
-    expect(r.effects.some((e) => e.type === "showResyncFailure")).toBe(false);
+    expect(r.effects.filter((e) => e.type === "rescueUnsavedDraft")).toEqual([
+      {
+        type: "rescueUnsavedDraft",
+        content: STASH.content,
+        reason: "an internal error interrupted the preceding save",
+      },
+    ]);
+    expect(r.effects.some((e) => e.type === "showError" || e.type === "postDocument")).toBe(false);
+  });
+
+  it("post-dispose transition failure with an observed equal stash keeps the internal-error toast", () => {
+    const r = core.transition(afterDispose({ pendingEdit: STASH }), {
+      ...recovery(6),
+      currentContent: STASH.content,
+    });
+    expect(r.effects.some((e) => e.type === "rescueUnsavedDraft")).toBe(false);
+    expect(r.effects.some((e) => e.type === "showError")).toBe(true);
   });
 
   it("POST-DISPOSE with no stash still toasts the internal error, without claiming a loss", () => {
@@ -2660,7 +2623,11 @@ describe("Edit id (settledEditId on every Document)", () => {
 
   it("the settlementTransitionFailed recovery carries the id", () => {
     const accepted = core.transition(base(), edit({ editId: 5 })).state;
-    const r = core.transition(accepted, { type: "settlementTransitionFailed", settledVersion: 2 });
+    const r = core.transition(accepted, {
+      type: "settlementTransitionFailed",
+      settledVersion: 2,
+      currentContent: null,
+    });
     expect(docIds(r.effects)).toEqual([5]);
   });
 
@@ -2703,8 +2670,8 @@ describe("Edit id (settledEditId on every Document)", () => {
         { type: "editRejectedDeliveryFailed", id: 1, documentVersion: 2, lineageSince: null },
       ],
       settlementTransitionFailed: [
-        { type: "settlementTransitionFailed", settledVersion: 2 },
-        { type: "settlementTransitionFailed", settledVersion: null },
+        { type: "settlementTransitionFailed", settledVersion: 2, currentContent: null },
+        { type: "settlementTransitionFailed", settledVersion: null, currentContent: null },
       ],
       disposed: [{ type: "disposed" }],
     } satisfies Record<HostSessionEvent["type"], HostSessionEvent[]>;

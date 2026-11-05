@@ -10,27 +10,12 @@ import {
   tick,
 } from "./harness";
 
-// Sub-ms in-flight-apply + dispose data-loss race (follow-up to #224's teardown
-// flush). An Edit is applying (host write lock held) when a SECOND edit arrives,
-// then the panel is disposed within the same turn. The second edit must still
-// reach the TextDocument: the host stashes it under the lock and drains it on
-// the first apply's settlement — which fires AFTER onDidDispose — re-running the
-// FULL decideEdit / validateMarkdownForWrite gates (no bypass), re-based onto
-// edit #1's applied result.
-//
-// The document is held open in a plain text editor alongside Quoll. Why: the
-// drain writes via `workspace.applyEdit`, which is a no-op on a CLOSED
-// TextDocument. Disposing the SOLE editor for a document lets VS Code GC the
-// backing document, so a post-dispose write would silently do nothing — a VS
-// Code lifecycle constraint, NOT a limit of the host reducer/wiring (whose
-// post-dispose drain logic is pinned deterministically by the host-session-core
-// unit suite). Holding the document open isolates THIS test to the drain
-// mechanism, and mirrors the real case where the post-dispose drain matters:
-// the file is open in another editor, so it outlives the Quoll tab. A lone-tab
-// close-without-save has no bytes to preserve in the first place.
-//
-// A drained stash the write-gate REFUSES is reopened as an untitled document
-// (the dispose-time rescue's twin), not just toasted: the second case below.
+// Close-race integration tests: successful drain, write-gate refusal,
+// and refusal of the preceding apply.
+// Keep the backing document open to isolate settlement behavior.
+// Recovery eligibility, ownership, and limits:
+// ARCHITECTURE.md's surface/unsaved-draft-rescue.ts entry.
+// Real untitled delivery is pinned by rejected-draft-rescue-on-close.test.ts.
 describe("pending-edit-dispose-drain", function () {
   this.timeout(20000);
 
@@ -203,5 +188,56 @@ describe("pending-edit-dispose-drain", function () {
     assert.deepStrictEqual(rescued, [refused], "the refused stash must be reopened exactly once");
     assert.strictEqual(calls, 1, "a refused stash must not be written to the document");
     assert.strictEqual(doc.getText(), "first");
+  });
+  it("rescues the later stash when the preceding apply is refused after close", async () => {
+    const harness = await getHarness();
+    await openFixtureWithQuoll("sample.md");
+    const seed = await harness.waitForEvent(isDocumentEvent, 8000);
+    const panel = harness.activePanel;
+    assert.ok(panel, "no active panel after open");
+    const doc = panel.document;
+    const original = doc.getText();
+    await vscode.window.showTextDocument(doc, {
+      viewColumn: vscode.ViewColumn.Beside,
+      preserveFocus: true,
+    });
+    const gate = deferred<boolean>();
+    let calls = 0;
+    harness.applyEditOverride = () => {
+      calls += 1;
+      return gate.promise;
+    };
+    const rescued: string[] = [];
+    harness.openRescuedDraftOverride = (content) => {
+      rescued.push(content);
+      return Promise.resolve();
+    };
+    panel.simulateInbound({
+      protocol: PROTOCOL_VERSION,
+      type: "edit",
+      editId: 1,
+      content: "first",
+      baseDocVersion: seed.message.docVersion,
+    });
+    assert.strictEqual(calls, 1);
+    const later = "exact later\r\nbytes!";
+    panel.simulateInbound({
+      protocol: PROTOCOL_VERSION,
+      type: "edit",
+      editId: 2,
+      content: later,
+      baseDocVersion: seed.message.docVersion,
+    });
+    panel.webviewPanel.dispose();
+    await tick(50);
+    gate.resolve(false);
+    const deadline = Date.now() + 3000;
+    while (rescued.length < 1 && Date.now() < deadline) {
+      await tick(20);
+    }
+    assert.deepStrictEqual(rescued, [later]);
+    assert.strictEqual(harness.lastError, null);
+    assert.strictEqual(doc.getText(), original);
+    assert.strictEqual(calls, 1);
   });
 });
