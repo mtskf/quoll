@@ -139,13 +139,12 @@ export type EditSyncOptions = {
    *  this callback is the USER-visible one — the shell renders a notice. At most
    *  ONE call per drain, NOT latched here: "is a notice already on screen" is
    *  only knowable on the display side, so the aggregation rule lives in
-   *  shell.ts. Zero arguments by design — the notice says the same thing
-   *  regardless of how much was lost.
+   *  shell.ts. Pass the newest lost bytes so the notice can offer Copy draft.
    *
    *  CALLED AFTER both holders have settled, and wrapped in a local try/catch —
    *  see the call site for why the two halves are independent.
    *  Defaults to a no-op. */
-  onLocalEditDiscarded?: () => void;
+  onLocalEditDiscarded?: (draft: string) => void;
   /** Fired from `onHostSnapshot` when the host REFUSED the in-flight Edit and
    *  nothing newer is held: the bytes stay on screen, are not in the file, and
    *  the drain will not repost them at this version by itself. Not latched —
@@ -1053,7 +1052,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
       // escapes into the dispatch chain. Both are pinned in cm-edit-sync.test.ts
       // ("RE-ENTRANT notifier" / "THROWING notifier"), for BOTH holders.
       try {
-        opts.onLocalEditDiscarded?.();
+        opts.onLocalEditDiscarded?.(lostSubject.content);
       } catch (err) {
         console.error("[quoll] onLocalEditDiscarded threw", err);
       }

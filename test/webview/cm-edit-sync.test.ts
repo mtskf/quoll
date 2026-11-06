@@ -84,7 +84,7 @@ function setup(opts?: {
   failPost?: boolean;
   now?: () => number;
   onResyncStorm?: () => void;
-  onLocalEditDiscarded?: () => void;
+  onLocalEditDiscarded?: (draft: string) => void;
   onReadonlyHold?: () => boolean;
   onEditRefused?: () => void;
   showHeld?: (content: string) => void;
@@ -2466,6 +2466,7 @@ describe("cm edit-sync — epoch-bounded buffers (S3b)", () => {
     s.setDoc("external");
     ackPair(s, 2, 1, 42); // same generation, epoch 0→1 → foreign bytes won
     expect(onLocalEditDiscarded).toHaveBeenCalledTimes(1);
+    expect(onLocalEditDiscarded).toHaveBeenCalledWith("ab");
     expect(s.posted.length).toBe(1); // dropped, not replayed
   });
 
@@ -2558,6 +2559,7 @@ describe("cm edit-sync — epoch-bounded buffers (S3b)", () => {
     s.setDoc("foreign"); // reseeded: the host's bytes are not ours
     ackPair(s, 2, 1, 42);
     expect(onLocalEditDiscarded).toHaveBeenCalledTimes(1);
+    expect(onLocalEditDiscarded).toHaveBeenCalledWith("a");
     expect(s.posted.length).toBe(1); // nothing left to replay
   });
 
@@ -3535,6 +3537,7 @@ describe("cm edit-sync — stored Markdown acknowledgements", () => {
     s.sync.onReducerCommit(false);
     s.sync.onReducerCommit(false);
     expect(discarded).toHaveBeenCalledTimes(1);
+    expect(discarded).toHaveBeenCalledWith("unsent bytes");
     expect(s.posted).toEqual([]);
   });
 });

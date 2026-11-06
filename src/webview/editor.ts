@@ -157,7 +157,7 @@ export type EditorOptions = {
    *  The full rule lives on `EditSyncOptions.onLocalEditDiscarded` (cm/edit-sync.ts)
    *  — do not restate it here; this is a pass-through.
    */
-  onLocalEditDiscarded?: () => void;
+  onLocalEditDiscarded?: (draft: string) => void;
   /** Fired when edit-sync is holding un-posted edits under a readonly document
    *  (shown at most once per readonly episode). The shell wires it to a
    *  user-visible notice and returns whether that notice was shown — `false`

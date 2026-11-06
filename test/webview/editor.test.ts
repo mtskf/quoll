@@ -127,7 +127,7 @@ function mount(
     state?: WebviewState;
     onDispatch?: (action: Action) => void;
     nonce?: string;
-    onLocalEditDiscarded?: () => void;
+    onLocalEditDiscarded?: (draft: string) => void;
     onHandoffSynced?: (synced: boolean) => void;
   } = {}
 ): MountResult {
@@ -2967,6 +2967,7 @@ describe("editor — failed-send carrier and synchronous re-entry", () => {
     m.commit(false);
     expect(hostBytes(m.view)).toBe("theirs");
     expect(discard).toHaveBeenCalledTimes(1);
+    expect(discard).toHaveBeenCalledWith("seedx");
     expect(state.sendFailure).toBeNull();
     expect(editPosts()).toHaveLength(1);
   });

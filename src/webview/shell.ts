@@ -211,6 +211,10 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   };
   let noticeKind: NoticeKind | null = null;
   let stormNoticeShown = false;
+  // The latest lost text stays available until the notice is dismissed.
+  let discardedDraft: string | null = null;
+  // A late clipboard result cannot relabel a newer draft or copy attempt.
+  let copyAttempt = 0;
   // Returns whether the slot now carries `kind`: false only for the priority
   // decline. showHoldNotice forwards it; the other writers ignore it.
   function showNotice(kind: NoticeKind): boolean {
@@ -248,14 +252,57 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
     dismiss.addEventListener("click", () => {
       noticeHost.replaceChildren();
       noticeKind = null;
+      discardedDraft = null;
+      copyAttempt++;
     });
     notice.append(text, dismiss);
     noticeHost.replaceChildren(notice);
     noticeKind = kind;
     return true;
   }
-  function showDiscardNotice(): void {
+  function offerDraftCopy(): void {
+    const dismiss = noticeHost.querySelector(".quoll-resync-notice-dismiss");
+    if (dismiss === null) {
+      return;
+    }
+    let copy = noticeHost.querySelector<HTMLButtonElement>(".quoll-resync-notice-copy");
+    if (copy === null) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "quoll-resync-notice-copy";
+      button.addEventListener("click", () => {
+        const draft = discardedDraft;
+        if (draft === null) {
+          return;
+        }
+        const attempt = ++copyAttempt;
+        const failed = (err: unknown): void => {
+          if (attempt !== copyAttempt) {
+            return;
+          }
+          console.warn("[quoll] copy draft failed", err);
+          button.textContent = "Copy failed";
+        };
+        try {
+          navigator.clipboard.writeText(draft).then(() => {
+            if (attempt === copyAttempt) {
+              button.textContent = "Copied";
+            }
+          }, failed);
+        } catch (err) {
+          failed(err);
+        }
+      });
+      dismiss.before(button);
+      copy = button;
+    }
+    copyAttempt++;
+    copy.textContent = "Copy draft";
+  }
+  function showDiscardNotice(draft: string): void {
     showNotice("discard");
+    discardedDraft = draft;
+    offerDraftCopy();
   }
   // A Format Document that formatted: whatever an earlier run reported no
   // longer describes the last one. Empties the slot only when it holds one of
