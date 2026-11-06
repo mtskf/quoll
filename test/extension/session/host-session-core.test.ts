@@ -1757,6 +1757,132 @@ describe("host-session-core: settlementTransitionFailed (write-lock recovery)", 
   });
 });
 
+// An EOL-mode switch advances the document version without changing the text.
+// The panel proves "same text" with `lineageSince` (session/edit-lineage.ts);
+// the reducer must then treat the advance as NOT foreign and keep accepting the
+// webview's Edits built on the pre-switch version.
+describe("host-session-core: EOL-only advance keeps the Edit lineage", () => {
+  it("a lock-free advance whose text is unchanged posts nothing and keeps the epoch", () => {
+    const r = core.transition(base(), documentChanged(2, 1));
+    expect(r.effects).toEqual([]);
+    expect(r.state.lastAppliedDocVersion).toBe(2);
+    expect(r.state.externalEpoch).toBe(0);
+  });
+
+  it("an Edit built before the switch is still accepted afterwards (Done-when, reducer half)", () => {
+    const switched = core.transition(base(), documentChanged(2, 1)).state;
+    const r = core.transition(
+      switched,
+      edit({
+        baseDocVersion: 1,
+        documentVersion: 2,
+        content: "ab",
+        currentContent: "a",
+        lineageSince: 1,
+      })
+    );
+    // The apply records the version it STARTS from (2), not the Edit's base.
+    expect(r.effects).toEqual([{ type: "applyEdit", content: "ab", baseDocVersion: 2 }]);
+    expect(r.state.pendingApplyBaseVersion).toBe(2);
+    expect(r.state.externalEpoch).toBe(0);
+  });
+
+  it("the Edit may arrive before the debounced documentChanged", () => {
+    const r = core.transition(
+      base(),
+      edit({
+        baseDocVersion: 1,
+        documentVersion: 2,
+        content: "ab",
+        currentContent: "a",
+        lineageSince: 1,
+      })
+    );
+    expect(r.effects).toEqual([{ type: "applyEdit", content: "ab", baseDocVersion: 2 }]);
+    expect(r.state.externalEpoch).toBe(0);
+  });
+
+  it("an old-base accept whose settlement observed no version withholds the ack", () => {
+    // heldBase must be the apply-start version (2): holding the Edit's base (1)
+    // would make `lastApplied (2) > heldBase` read as an observed post-apply
+    // version and post live bytes under the pre-apply label.
+    const accepted = core.transition(
+      base({ lastAppliedDocVersion: 2 }),
+      edit({
+        baseDocVersion: 1,
+        documentVersion: 2,
+        content: "ab",
+        currentContent: "a",
+        lineageSince: 1,
+      })
+    ).state;
+    const r = core.transition(accepted, settled({ settledVersion: null, currentContent: null }));
+    expect(r.effects.find((e) => e.type === "postDocument")).toBeUndefined();
+  });
+
+  it("a base older than the lineage is stale, but the unchanged text does not bump the epoch", () => {
+    const r = core.transition(
+      base({ lastAppliedDocVersion: 2 }),
+      edit({ baseDocVersion: 1, documentVersion: 3, lineageSince: 2 })
+    );
+    expect(r.effects).toEqual([pDoc(3, 0, 1)]);
+  });
+
+  it("an unexpected-newer base stays stale even with a lineage", () => {
+    const r = core.transition(
+      base({ lastAppliedDocVersion: 2 }),
+      edit({ baseDocVersion: 99, documentVersion: 2, lineageSince: 1 })
+    );
+    expect(r.effects).toEqual([pDoc(2, 0, 1)]);
+  });
+
+  it("without a lineage the advance is foreign, exactly as before", () => {
+    const r = core.transition(base(), documentChanged(2));
+    expect(r.effects).toEqual([pDoc(2, 1)]);
+    const e = core.transition(
+      base(),
+      edit({ baseDocVersion: 1, documentVersion: 2, lineageSince: null })
+    );
+    expect(e.effects).toEqual([pDoc(2, 1, 1)]);
+  });
+
+  it("under the write lock the lineage changes nothing (deferred, adjudicated at settlement)", () => {
+    const r = core.transition(base({ pendingApplyBaseVersion: 1 }), documentChanged(2, 1));
+    expect(r.effects).toEqual([]);
+    expect(r.state.externalEpoch).toBe(0);
+  });
+
+  // The arms that resync AND post: the Document still goes out (a seed / a
+  // resync needs one), but on the SAME epoch, so the webview replays its buffer.
+  describe.each([
+    {
+      arm: "ready",
+      from: base(),
+      event: (lineageSince: number | null) =>
+        ({ type: "ready", documentVersion: 2, lineageSince }) as const,
+    },
+    {
+      arm: "viewStateVisible",
+      from: base(),
+      event: (lineageSince: number | null) =>
+        ({ type: "viewStateVisible", documentVersion: 2, lineageSince }) as const,
+    },
+  ])("$arm", ({ from, event }) => {
+    it("an advance whose text is unchanged posts the Document on the same epoch", () => {
+      const r = core.transition(from, event(1));
+      expect(r.effects).toEqual([pDoc(2, 0)]);
+      expect(r.state.lastAppliedDocVersion).toBe(2);
+      expect(r.state.externalEpoch).toBe(0);
+    });
+
+    it("without a lineage the advance is foreign, exactly as before", () => {
+      const r = core.transition(from, event(null));
+      expect(r.effects).toEqual([pDoc(2, 1)]);
+      expect(r.state.externalEpoch).toBe(1);
+    });
+  });
+});
+
 describe("Edit id (settledEditId on every Document)", () => {
   const docIds = (effects: readonly HostSessionEffect[]) =>
     effects.flatMap((e) => (e.type === "postDocument" ? [e.settledEditId] : []));
