@@ -19,6 +19,7 @@ All notable changes to Quoll are documented here.
 - In a file with Windows line endings (CRLF), copying or cutting whole lines with several cursors and no selection now pastes them back as whole lines. They used to be spliced into the middle of the lines the cursors were on.
 
 ### Changed
+- separate Markdown storage from execution checks (remove the write gate) (#482)
 
 - Format Document now tells you whether it changed anything, found nothing to change, or could not run, instead of giving the same message for all three.
 - Headings and lists inside a blockquote no longer show a fold chevron.
