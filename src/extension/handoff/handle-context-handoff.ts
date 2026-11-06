@@ -249,14 +249,12 @@ export function clampHandoffSelection(
 }
 
 /** Tier 0 — reveal the document (activeTextEditor choreography) and delegate
- *  to Claude Code's own insert command. Two outcomes:
- *    "delegated" — the insert command resolved.
- *    "fallback"  — the reveal or the command rejected (Claude Code missing /
- *                  too old), or the activeTextEditor guard failed → the
- *                  caller takes the clipboard fallback tier.
+ *  to Claude Code's own insert command. Returns true when the command resolved;
+ *  a failed reveal, command, or activeTextEditor guard returns false so the
+ *  caller takes the clipboard fallback tier.
  *  Between the reveal and the command, the activeTextEditor guard verifies the
  *  reveal actually took — the command silently no-ops on a wrong/absent
- *  activeTextEditor, so a failed guard resolves "fallback" rather than firing
+ *  activeTextEditor, so a failed guard returns false rather than firing
  *  a command whose failure the host could never observe. The cleanup ALWAYS
  *  runs (finally) — including when the guard fails, the command rejects or
  *  the reveal rejects — and its own failure is swallowed (warn) so it can
@@ -265,7 +263,7 @@ export function clampHandoffSelection(
 async function tryDelegateToClaudeCode(
   selection: HandoffRevealSelection,
   deps: HandleContextHandoffDeps
-): Promise<"delegated" | "fallback"> {
+): Promise<boolean> {
   let cleanup: (() => Thenable<void>) | undefined;
   try {
     cleanup = await deps.revealForMention(selection);
@@ -274,13 +272,13 @@ async function tryDelegateToClaudeCode(
         "[quoll] context-handoff: reveal did not make the document the active text editor; " +
           "skipping insertAtMentioned and falling back"
       );
-      return "fallback";
+      return false;
     }
     await deps.executeCommand(CLAUDE_INSERT_AT_MENTIONED_COMMAND);
-    return "delegated";
+    return true;
   } catch (err) {
     console.warn("[quoll] context-handoff: delegation to Claude Code failed; falling back", err);
-    return "fallback";
+    return false;
   } finally {
     if (cleanup !== undefined) {
       try {
@@ -345,12 +343,10 @@ export async function handleContextHandoff(
   // document path, which bypasses stripControlChars — so a hostile POSIX
   // filename (e.g. an embedded newline) would reach Claude Code un-sanitized on
   // the primary path. Dropping straight to the fallback tier surfaces ONLY the
-  // already-stripped `reference`, keeping the sanitizer invariant intact. (The
-  // ternary skips tryDelegateToClaudeCode entirely when the path is hostile.)
-  const outcome = hasControlChar(deps.relativePath)
-    ? "fallback"
-    : await tryDelegateToClaudeCode(selection, deps);
-  if (outcome === "delegated") {
+  // already-stripped `reference`, keeping the sanitizer invariant intact.
+  const delegated =
+    !hasControlChar(deps.relativePath) && (await tryDelegateToClaudeCode(selection, deps));
+  if (delegated) {
     try {
       await deps.writeClipboard(reference);
     } catch (err) {

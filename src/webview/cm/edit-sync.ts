@@ -6,7 +6,7 @@
 // authoritative document still carries a given set of bytes.
 //
 // The host holds a write lock (QuollEditorPanel — `case "edit":` arm):
-// while an Edit is applying, inbound Edits are dropped. So the webview
+// while an Edit is applying, inbound Edits are stashed for settlement. The webview
 // posts at most ONE Edit at a time (editInFlight) and buffers the latest
 // doc string for replay once a Document says the host has judged that Edit.
 // Text-canonical has no serialize step and no frontmatter side-channel — the
