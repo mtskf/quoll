@@ -23,10 +23,6 @@ vi.mock("../../../src/extension/surface/reopen-text-editor.js", () => ({
   openInTextEditor: vi.fn(async () => undefined),
 }));
 
-import {
-  REJECTION_BLOCKS_SWITCH_MESSAGE,
-  registerPendingRejection,
-} from "../../../src/extension/surface/rejection-registry.js";
 import { openInTextEditor } from "../../../src/extension/surface/reopen-text-editor.js";
 import {
   __clearSurfaceMemoryForTest,
@@ -64,8 +60,6 @@ describe("reopenActiveQuollTabAsText (forward command wiring)", () => {
   const finalizeMock = vi.mocked(finalizeForwardSwap);
   const openMock = vi.mocked(openInTextEditor);
   let sourceTab: { input: TabInputCustom };
-  let flag: boolean;
-  let registration: { dispose(): void };
   let savedActiveTab: unknown;
 
   beforeEach(() => {
@@ -74,40 +68,21 @@ describe("reopenActiveQuollTabAsText (forward command wiring)", () => {
     savedActiveTab = activeTabGroup.activeTab;
     sourceTab = { input: new TabInputCustom(uri, "quoll.editMarkdown") };
     activeTabGroup.activeTab = sourceTab;
-    flag = false;
-    // The REAL registry seam, keyed by the uri string — pins the key the
-    // command consults.
-    registration = registerPendingRejection(KEY, () => flag);
   });
 
   afterEach(() => {
-    registration.dispose();
     activeTabGroup.activeTab = savedActiveTab;
   });
 
-  it("hands the swap to finalizeForwardSwap once, with the live rejection predicate", async () => {
+  it("hands the swap to finalizeForwardSwap once, with the captured source tab", async () => {
     await reopenActiveQuollTabAsText();
     expect(openMock).toHaveBeenCalledTimes(1);
     expect(finalizeMock).toHaveBeenCalledTimes(1);
-    const [calledUri, calledTab, calledDeps, predicate] = finalizeMock.mock.calls[0] ?? [];
+    const [calledUri, calledTab] = finalizeMock.mock.calls[0] ?? [];
     expect(calledUri).toBe(uri);
     expect(calledTab).toBe(sourceTab);
-    expect(calledDeps).toBeUndefined();
-    expect(predicate?.()).toBeNull();
-    flag = true;
-    expect(predicate?.()).toBe(REJECTION_BLOCKS_SWITCH_MESSAGE);
     // The command itself writes nothing on this path — the wrapper owns it.
     expect(__getRememberedSurfaceForTest(KEY)).toBeUndefined();
-  });
-
-  it('records "quoll" and skips the wrapper when a rejection lands during the open', async () => {
-    noteSurface(KEY, "text"); // the watcher's sibling-adopt when the text tab opened
-    openMock.mockImplementationOnce(async () => {
-      flag = true;
-    });
-    await reopenActiveQuollTabAsText();
-    expect(__getRememberedSurfaceForTest(KEY)).toBe("quoll");
-    expect(finalizeMock).not.toHaveBeenCalled();
   });
 
   it("writes nothing and skips the wrapper when the open itself fails", async () => {

@@ -13,9 +13,8 @@
 // because this is an explicit keypress, not the keystroke critical path — and
 // apply only what the CURRENT bytes warrant. The resulting change rides the
 // parent dispatch -> edit-sync -> host write-lock pipeline like every other
-// webview edit (it never postMessages the host directly). If the host
-// write-gate rejected it (it won't, for pure whitespace deletion), the standard
-// edit-rejected flow applies; no lint-specific handling is needed here.
+// webview edit (it never postMessages the host directly). Normal write
+// settlement and recovery apply; no lint-specific handling is needed here.
 
 import { type EditorState, type Extension, Prec } from "@codemirror/state";
 import { type Command, keymap } from "@codemirror/view";

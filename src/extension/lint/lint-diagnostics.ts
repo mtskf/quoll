@@ -7,8 +7,8 @@
 // self-heals once the host document converges; line/character is re-rendered
 // against whatever the document becomes). Severity is mapped Warning/Information
 // ONLY. The webview is the single source of truth — this never re-lints.
-// Write-gate failures are NOT lint and never reach here (they ride the
-// edit-rejected/toast path).
+// Lint is advisory and never blocks storage; render/open sinks validate
+// destinations independently.
 
 import { Diagnostic, DiagnosticSeverity, Position, Range } from "vscode";
 

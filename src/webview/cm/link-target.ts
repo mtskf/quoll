@@ -80,7 +80,7 @@ const OPENABLE_SCHEMES = new Set(["http", "https", "mailto"]);
  *      cause (a C0/DEL byte in the destination is the usual one), which is the
  *      single most useful thing that warn can tell a reporter.
  *    - javascript / vbscript / data / blob / file / about — the scheme families
- *      the render gate and the write validator exist to stop. Naming them turns
+ *      the render and open gates exist to stop. Naming them turns
  *      "this link does nothing" into "this link was blocked, and here is why". */
 const LOGGABLE_SCHEMES = [
   "http",

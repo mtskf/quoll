@@ -9,15 +9,8 @@
 // actually land in each bundle, so a forbidden module reaching either bundle
 // through ANY import chain fails CI.
 //
-// Three directions are proven:
-//   - host (dist/extension.cjs)        MUST NOT contain the webview's advisory
-//                                      lint engine (src/webview/cm/lint/**)
-//   - host (dist/extension.cjs)        MUST NOT contain ANY @codemirror/* editor
-//                                      module — the host URL-walker builds its
-//                                      parser from pure @lezer/markdown, so the
-//                                      entire CM editor stack stays webview-only
-//   - webview (dist/webview/index.js)  MUST NOT contain the host-side write
-//                                      gate (validate-for-write / lezer-url-walker)
+// Host imports no CodeMirror, Lezer or webview lint modules. Its only Markdown
+// dependency is the pure URL allowlist. Webview imports no nested HTML stack.
 //
 // We build with `metafile: true, write: false` against the SAME configs the
 // production build uses (imported from esbuild.config.mjs), in production mode,
@@ -69,12 +62,12 @@ async function metafileShippedBytes(
 // Tied to the source layout. Non-anchored at the start so an absolute-path
 // prefix (if esbuild ever reports one) still matches; `.ts$` pins the file.
 const HOST_FORBIDDEN = /src\/webview\/cm\/lint\//;
-const WEBVIEW_FORBIDDEN = /src\/markdown\/(?:validate-for-write|lezer-url-walker)\.ts$/;
 // The whole @codemirror/* editor stack must stay OUT of the host bundle: the
-// URL-walker builds its parser from pure @lezer/markdown (@lezer/* only). Matches
+// host depends only on url-allowlist.ts for Markdown URL policy. Matches
 // the pnpm virtual-store path shape
 // (node_modules/.pnpm/@codemirror+view@x/node_modules/@codemirror/view/dist/…).
 const HOST_CM_FORBIDDEN = /@codemirror\//;
+const HOST_LEZER_FORBIDDEN = /@lezer\//;
 // The nested-HTML language stack MUST NOT SHIP in the webview bundle. The editor
 // language is built directly from `markdownLanguage` (see src/webview/cm/markdown.ts),
 // NOT via `markdown()`, whose runtime-default `htmlTagLanguage` drags
@@ -114,8 +107,11 @@ describe("bundle independence (esbuild metafile)", () => {
     expect(hostInputs.filter((p) => HOST_FORBIDDEN.test(p))).toEqual([]);
   });
 
-  it("the webview bundle contains no write-gate module", () => {
-    expect(webviewInputs.filter((p) => WEBVIEW_FORBIDDEN.test(p))).toEqual([]);
+  it("the host contains no Lezer modules and only the Markdown URL allowlist", () => {
+    expect(hostInputs.filter((p) => HOST_LEZER_FORBIDDEN.test(p))).toEqual([]);
+    expect(hostInputs.filter((p) => /src\/markdown\//.test(p))).toEqual([
+      "src/markdown/url-allowlist.ts",
+    ]);
   });
 
   it("the webview bundle SHIPS no bytes from the nested-HTML language stack", () => {
@@ -139,12 +135,7 @@ describe("bundle independence (esbuild metafile)", () => {
   // these positive assertions fail instead, forcing the matchers to be kept in
   // sync with the source layout.
   it("the forbidden modules each live on their own side of the split", () => {
-    // Both arms of WEBVIEW_FORBIDDEN (validate-for-write AND lezer-url-walker)
-    // must be anchored — otherwise renaming/removing one would let that arm's
-    // exclusion pass vacuously. lezer-url-walker is bundled host-side
-    // transitively via validate-for-write.ts.
-    expect(hostInputs.some((p) => /src\/markdown\/validate-for-write\.ts$/.test(p))).toBe(true);
-    expect(hostInputs.some((p) => /src\/markdown\/lezer-url-walker\.ts$/.test(p))).toBe(true);
+    expect(webviewInputs.some((p) => HOST_LEZER_FORBIDDEN.test(p))).toBe(true);
     expect(webviewInputs.some((p) => HOST_FORBIDDEN.test(p))).toBe(true);
     // @codemirror/* is REAL and legitimately bundled webview-side (the editor
     // runs there). Without this, the host @codemirror exclusion above could

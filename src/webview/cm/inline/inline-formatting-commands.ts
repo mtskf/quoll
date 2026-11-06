@@ -7,7 +7,7 @@
 // guards read-only (a raw `changes` dispatch is NOT blocked by the readOnly
 // facet — same reason as cm/lint/apply-fix.ts) and rides the normal dispatch ->
 // edit-sync -> host write-lock pipeline via view.dispatch. There is no raw write
-// path; a gate-rejecting result surfaces edit-rejected like any other edit.
+// path; normal write settlement and recovery apply to these edits too.
 //
 // Unwrap detection is PURE STRING / DELIMITER MATCHING — no Markdown parser.
 // A parser under a time budget can return an incomplete tree on a large doc and

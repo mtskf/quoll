@@ -5,12 +5,11 @@ import type { ScannedLine } from "./line-scan.js";
 // imported from @lezer/common: `@lezer/common` is a direct dep (added in PR #66
 // for the lint incremental parser's `TreeFragment`), but this type is derived
 // rather than imported to avoid widening the direct-dep import surface.
-// Mirrors src/webview/cm/decorations/types.ts and src/markdown/lezer-url-walker.ts.
+// Mirrors src/webview/cm/decorations/types.ts.
 export type LezerTree = ReturnType<typeof syntaxTree>;
 
-// Advisory severities only. The lint layer NEVER emits "error": correctness /
-// security failures that must block a disk write are the host write-gate's
-// domain (validate-for-write.ts), not advisory lint. Keeping "error" out by
+// Advisory severities only. The lint layer NEVER emits "error" and never
+// blocks storage. Render/open sinks validate independently. Keeping "error" out by
 // policy stops an advisory squiggle from ever reading as a write-blocking
 // failure. Shaped to map 1:1 onto CodeMirror's Diagnostic so a future
 // @codemirror/lint adapter is a pure rename, not a redesign.
@@ -24,8 +23,8 @@ export type LintSeverity = "warning" | "info";
 // checked against it via the diagnostic's return type. NOTE the wire boundary
 // (protocol.ts LintDiagnostic) deliberately keeps `code: string` — it cannot
 // import this webview-internal union (the protocol module keeps zero imports)
-// and re-validates `typeof code === "string"` defensively, mirroring the
-// MarkdownErrorCode narrowing in shell.ts. The union lives here, not on-wire.
+// and re-validates `typeof code === "string"` defensively. The union lives
+// here, not on-wire.
 export type LintRuleCode =
   | "heading-increment"
   | "no-trailing-spaces"

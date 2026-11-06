@@ -80,14 +80,6 @@ export type ThemeMessageShape = EnvelopeShape & {
   themeKind: ThemeKindShape;
 };
 
-export type EditRejectedMessageShape = EnvelopeShape & {
-  type: "edit-rejected";
-  error: {
-    code: string;
-    message: string;
-  };
-};
-
 // Local mirrors of the preset unions (the e2e tsconfig cannot import from src/).
 // types-equality.test.ts pins these against the real protocol unions.
 type FontFamilyPrefShape = "default" | "serif" | "sans";
@@ -178,15 +170,10 @@ export type FormatCommandMessageShape = EnvelopeShape & {
 
 export type FormatDocumentMessageShape = EnvelopeShape & { type: "format-document" };
 
-// The host→webview union mirror. Previously omitted because the E2E
-// suite only asserted on outbound message shapes by type-narrowing in
-// the predicates (isDocumentEvent etc.); now that `edit-rejected` joins
-// the union, pin the full union too so a future variant (e.g.
-// `bulk-replace`) does not silently drift past the guard.
+// Pin the full host→webview union so future variants cannot silently drift.
 export type HostToWebviewShape =
   | DocumentMessageShape
   | ThemeMessageShape
-  | EditRejectedMessageShape
   | ImageWriteResultMessageShape
   | EditorConfigMessageShape
   | CaretApplyMessageShape

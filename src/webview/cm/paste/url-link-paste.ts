@@ -11,10 +11,10 @@
 // outside Quoll's url-allowlist were accepted. Ours requires the clipboard text
 // to be EXACTLY one http(s) URL token and reuses the shared `isAllowedUrl`
 // hardening (C0/DEL, protocol-relative) so paste stays in lockstep with the
-// write-/render-gates. It KEEPS the built-in's syntax-context guard
+// render/open sinks. It KEEPS the built-in's syntax-context guard
 // (`selectionIsPlainText`) so a URL is never wrapped into code / an existing
 // link / emphasis / raw HTML. The insert rides the normal dispatch →
-// updateListener → edit-sync → host write-lock → validateMarkdownForWrite
+// updateListener → edit-sync → host write-lock → applyEdit settlement
 // pipeline (no raw write).
 
 import { markdownLanguage } from "@codemirror/lang-markdown";

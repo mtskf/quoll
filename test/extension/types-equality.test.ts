@@ -42,7 +42,6 @@ import type { Cell, DelimiterCell, DelimiterRow, Row, Table } from "../../src/ma
 import type {
   DocumentMessage,
   EditMessage,
-  EditRejectedMessage,
   HostToWebview,
   ReadyMessage,
   WebviewToHost,
@@ -50,7 +49,6 @@ import type {
 import type {
   DocumentMessageShape,
   EditMessageShape,
-  EditRejectedMessageShape,
   HostToWebviewShape,
   PanelControlsShape,
   ReadyMessageShape,
@@ -78,11 +76,6 @@ describe("e2e/types mirror equality", () => {
 
   it("WebviewToHostShape is structurally identical to WebviewToHost", () => {
     const _check: AssertEqual<WebviewToHost, WebviewToHostShape> = true;
-    expect(_check).toBe(true);
-  });
-
-  it("EditRejectedMessageShape is structurally identical to EditRejectedMessage", () => {
-    const _check: AssertEqual<EditRejectedMessage, EditRejectedMessageShape> = true;
     expect(_check).toBe(true);
   });
 

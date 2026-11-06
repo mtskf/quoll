@@ -6,7 +6,7 @@
 // authoritative document still carries a given set of bytes.
 //
 // The host holds a write lock (QuollEditorPanel — `case "edit":` arm):
-// while an Edit is applying, inbound Edits are dropped. So the webview
+// while an Edit is applying, inbound Edits are stashed for settlement. The webview
 // posts at most ONE Edit at a time (editInFlight) and buffers the latest
 // doc string for replay once a Document says the host has judged that Edit.
 // Text-canonical has no serialize step and no frontmatter side-channel — the
@@ -23,15 +23,15 @@
 //     state-changing transition. It is the SOLE drain driver — the
 //     reducer's committed editInFlight is passed in (single source of
 //     truth), so it fires on same-docVersion acks, on a snapshot that
-//     only moves docVersion, and on a serialize-error gate clear; it reads
+//     only moves docVersion, and on a send-failure gate clear; it reads
 //     the FRESH gate because it is post-commit; and it never double-posts a
 //     genuine in-flight Edit. Folding all triggers into one entry point
 //     makes a missed trigger impossible.
 //   - cancelPendingFlush from the reseed path (captures the in-window
 //     keystroke before the host snapshot lands).
-// The reducer's serialize-error gate is injected as `canPost` so this
+// The reducer's send-failure gate is injected as `canPost` so this
 // module does NOT bypass it. (C8 retired the parse/serialize warning-
-// consent gate — the serialize-error arm is the only one left.)
+// consent gate — the send-failure arm is the only one left.)
 
 import { sameTextIgnoringEol } from "../../shared/text-equality.js";
 
@@ -103,7 +103,7 @@ export type EditSyncOptions = {
    *  the buffer is retained so the next ack can retry. `editId` is this
    *  module's own mint (see `nextEditId`). */
   post: (content: string, baseDocVersion: number, editId: number) => boolean;
-  /** Save-policy gate (serialize-error clear? — `canPostEdit` in state.ts,
+  /** Save-policy gate (send-failure clear? — `canPostEdit` in state.ts,
    *  wired through editor.ts). Blocks posting without losing the buffer.
    *  Defaults to always-allowed. */
   canPost?: () => boolean;
@@ -133,19 +133,18 @@ export type EditSyncOptions = {
    *  When it does fire, those bytes are gone: the reseed transaction carries
    *  `Transaction.addToHistory.of(false)`, so Undo cannot bring them back, and
    *  the host answers a `stale` Edit by reposting the authoritative Document
-   *  rather than with an `edit-rejected` banner, so nothing else would say so.
+   *  so the sync drain must announce the loss.
    *  A `console.warn` beside each holder's discard (the buffer drop and the
    *  in-flight discard, one per drain) is the triage signal (lengths, lineage);
    *  this callback is the USER-visible one — the shell renders a notice. At most
    *  ONE call per drain, NOT latched here: "is a notice already on screen" is
    *  only knowable on the display side, so the aggregation rule lives in
-   *  shell.ts. Zero arguments by design — the notice says the same thing
-   *  regardless of how much was lost.
+   *  shell.ts. Pass the newest lost bytes so the notice can offer Copy draft.
    *
    *  CALLED AFTER both holders have settled, and wrapped in a local try/catch —
    *  see the call site for why the two halves are independent.
    *  Defaults to a no-op. */
-  onLocalEditDiscarded?: () => void;
+  onLocalEditDiscarded?: (draft: string) => void;
   /** Fired from `onHostSnapshot` when the host REFUSED the in-flight Edit and
    *  nothing newer is held: the bytes stay on screen, are not in the file, and
    *  the drain will not repost them at this version by itself. Not latched —
@@ -166,9 +165,9 @@ export type EditSyncOptions = {
    *  so the drain finds no buffer and never gets here.
    *  NOT called while a debounce timer is live: the view then holds a keystroke
    *  this module has not captured yet, and a drain that is not a Document's (a
-   *  theme change, `edit-rejected`, a gate clear — none of them cancels the
+   *  theme change or a gate clear — none of them cancels the
    *  timer first) would overwrite it.
-   *  NOT called while the serialize-error gate (`canPost`) is closed. A drain
+   *  NOT called while the send-failure gate (`canPost`) is closed. A drain
    *  that finds it closed is never a Document's — the reducer's `document` arm
    *  always clears the gate — so the view has not been rewound; it can only be
    *  AHEAD of the buffer. That is the drain a failing `post` re-enters, before
@@ -241,8 +240,7 @@ export type EditSync = {
    *      it force-posts). A writable host that had the Edit's own base version
    *      REFUSED it (`refusedAt`, `onEditRefused`); otherwise the drain reposts.
    *  Done HERE rather than in the drain because this is the one entry only a
-   *  Document reaches. The drain also runs for `edit-rejected`, where the host
-   *  has said no to exactly those bytes and they must NOT be re-buffered.
+   *  Document reaches. Local send failures carry no host judgement.
    *  A stale Document (the early return above) judges nothing.
    *
    *  RESPONSIBILITY SPLIT: a Document is both "here is the current snapshot"
@@ -257,7 +255,7 @@ export type EditSync = {
    *  wrapper after every state-changing transition, governed by an
    *  invariant: every reducer field `replayIfNeeded`'s guard reads — the
    *  ack (`state.editInFlight`), the write capability (`state.canWrite`),
-   *  the serialize-error gate (`state.serializeError`) — PLUS the
+   *  the send-failure gate (`state.sendFailure`) — PLUS the
    *  host-snapshot trigger `state.docVersion`. `editInFlight` is the reducer's
    *  COMMITTED value, passed in so edit-sync's flag tracks the single
    *  source of truth rather than being independently derived from
@@ -296,8 +294,8 @@ export type EditSync = {
    *  (which captures the latest doc into the buffer before clearing the
    *  timer) — `discardBuffer` does the opposite: it throws away the
    *  buffered content because the editor's caller knows the buffer is
-   *  stale (e.g. host-rejected pre-reject bytes that, if replayed,
-   *  would just re-reject and flicker the banner). DOES NOT touch
+   *  stale (e.g. buffered bytes preceding a send-failure retry keystroke).
+   *  DOES NOT touch
    *  `editInFlight` — the host still has whatever was in-flight; the
    *  next ack is still its rightful clear point. */
   discardBuffer: () => void;
@@ -343,7 +341,7 @@ export type EditSync = {
    *  the same console trace, but NO notice fires, and a pre-seed capture
    *  (cancelPendingFlush) is left for the seed's drain to judge.
    *  Two other cases keep the buffer WITHOUT posting and without any notice: the
-   *  serialize-error gate is closed, or the post itself fails.
+   *  send-failure gate is closed, or the post itself fails.
    *  NEVER held back by `refusedAt`, unlike the drain: a teardown signal is a
    *  new trigger, and it is the retry for bytes the drain is holding back after
    *  a host refusal.
@@ -383,10 +381,7 @@ export type EditSync = {
    *  `"cancelled"` by `cancelSettleWaits`. Rejects only if `getDoc` throws
    *  while the verdict is first read (the caller's catch handles that).
    *  NOT an end-to-end revision check: it compares against the last Document
-   *  this webview accepted. In particular the Document the host sends to SHOW
-   *  a write-gate-rejected draft reads as settled (it cannot be told from an
-   *  ack — residual (b) in `replayIfNeeded`); the host's own pending-rejection
-   *  gate is what refuses a handoff then. */
+   *  this webview accepted. */
   awaitSettled: (timeoutMs: number) => Promise<SettleOutcome>;
   /** Resolve every pending `awaitSettled` as `"cancelled"` and clear its
    *  timeout. Teardown calls this: a waiter that outlived the view would act on
@@ -463,7 +458,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
   // derivable from it: both trySend and replayIfNeeded raise `editInFlight`
   // BEFORE `opts.post()` and stamp `inFlight` only after it returns (flush reads
   // the pre-post flag as `wasInFlight`), and `post` can re-enter this module
-  // synchronously — `postEditMessage` dispatches `serialize-error`, whose
+  // synchronously — `postEditMessage` dispatches `send-failure`, whose
   // committed state is `editInFlight: false`, which drives a re-entrant
   // onReducerCommit -> drain from inside that call. So the pairing holds BETWEEN
   // statements at every assignment site, not DURING the post: the flag is the
@@ -483,9 +478,8 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
   let buffered: HeldEdit | null = null;
   // Edits posted (post returned true) that a Document may still show. Pruned
   // up to `settledMark`, the PREVIOUS Document's `settledEditId` — one Document
-  // late on purpose: the Document behind a rejected draft shows the draft while
-  // the host holds an EARLIER Edit's bytes, and that Edit must still be
-  // recognised when the next Document shows it. Emptied on supersession.
+  // late so earlier posted bytes remain evidence across Document delivery.
+  // Emptied on supersession.
   let sent: { readonly id: number; readonly content: string }[] = [];
   let settledMark = 0;
   // Content of the last accepted Document ("" before the seed; not read then).
@@ -647,8 +641,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
   // text (`hostContent` — an EOL-only switch moves the version, not the text)
   // or an Edit we posted. A write the host DID count is already an epoch
   // advance and must not be counted twice; and without a version advance the
-  // host holds no new bytes, so the Document is ours whatever it shows (the one
-  // behind a rejected draft shows the draft). Reads state as the PREVIOUS
+  // host holds no new bytes, so the Document is ours. Reads state as the PREVIOUS
   // Document left it: `onHostSnapshot` asks once, before moving any of it.
   const isUncountedForeignWrite = (d: HostDocument): boolean =>
     seeded &&
@@ -866,7 +859,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
     }
     if (!seeded || !canPost()) {
       // Gate held (NOT readonly): keep the content buffered so a later ack
-      // or serialize-error gate clear can replay it; do not drop it.
+      // or send-failure gate clear can replay it; do not drop it.
       // (`!seeded` is defensive — pre-seed never passes the `!canWrite`
       // return above.)
       buffered = stampHeld(opts.getDoc());
@@ -903,7 +896,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
     // holds genuine pre-ack user input, never the host's own bytes.
     //
     // The `editInFlight` guard is load-bearing. Without it, a gate
-    // clear (serialize-error retry) firing while an Edit is already in
+    // clear (send-failure retry) firing while an Edit is already in
     // flight would post a
     // SECOND Edit at the same docVersion. The host write lock
     // (QuollEditorPanel — `case "edit":` arm) drops the second, but
@@ -947,9 +940,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
     //      timer, in `buffered`, or in `inFlight` (the demotion in
     //      `onHostSnapshot` covers the Document that settles an in-flight Edit
     //      without carrying it; `showHeld` below covers the converse — held
-    //      bytes the view stopped showing). The one exception is a draft the
-    //      host answered with `edit-rejected`: it stays on screen behind the
-    //      serialize-error banner, deliberately without a carrier.
+    //      bytes the view stopped showing).
     //   I3 (no automatic retry of a refusal). This drain never re-posts bytes
     //      at the version the host refused them at (`refusedAt`) unless write
     //      was re-granted in between — the same answer would demote and replay
@@ -961,14 +952,6 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
     //       foreign write whose text equals `hostContent` or a `sent` Edit (an
     //       external revert to the last acked text, landing through an
     //       unobserved settle) folds, and held bytes are replayed over it.
-    //   (b) Own bytes this webview never saw read as foreign. The Document
-    //       behind a rejected draft shows the draft, not the host's bytes. A
-    //       webview with no record of the Edit applied behind it — it reloaded
-    //       and was seeded with the replayed draft — reads a later
-    //       version-advancing Document showing those bytes as foreign: the
-    //       pending Edit is discarded WITH the discard notice. Needs a reload, a
-    //       pending rejection, an EOL switch and a refused Edit; not closable
-    //       without the host saying which Documents are drafts.
     //   (c) An in-flight Edit can stay pending. On its own lineage and while
     //       writable it is released only by a Document whose mark covers it (a
     //       readonly Document or a superseding one settles it regardless). Such
@@ -977,12 +960,6 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
     //       `flush` posts nothing when no timer and no buffer is pending, so
     //       those bytes are not retried until the user types and then leaves the
     //       editor.
-    //   (d) `sent` grows under Document-less rejections: one entry per post
-    //       while every Edit is answered by `edit-rejected` alone, released by
-    //       the SECOND Document after that. Not prunable here: `edit-rejected`
-    //       carries no edit id, so a rejection does not say WHICH entry it
-    //       answers, and dropping the wrong one makes that Edit's later Document
-    //       read as foreign. Closing it needs the id on `edit-rejected`.
     // Two more are local to the view:
     //   - The caret after `showHeld` is clamped like any reseed's, so after a
     //     readonly rewind + re-grant it can sit before the restored bytes.
@@ -1075,7 +1052,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
       // escapes into the dispatch chain. Both are pinned in cm-edit-sync.test.ts
       // ("RE-ENTRANT notifier" / "THROWING notifier"), for BOTH holders.
       try {
-        opts.onLocalEditDiscarded?.();
+        opts.onLocalEditDiscarded?.(lostSubject.content);
       } catch (err) {
         console.error("[quoll] onLocalEditDiscarded threw", err);
       }
@@ -1091,10 +1068,10 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
     // buffer was demoted under a Document that reseeded.
     // INSIDE the `canPost()` gate. A drain that finds the gate closed is never
     // one where a host Document rewound the view: the reducer's `document` arm
-    // always commits `serializeError: null`, so a Document's drain runs with
+    // always commits `sendFailure: null`, so a Document's drain runs with
     // the gate open. With the gate closed the view can only be AHEAD of the
     // buffer — the case that matters is the drain a failing `post` re-enters
-    // (`postEditMessage` dispatches `serialize-error` from inside the call),
+    // (`postEditMessage` dispatches `send-failure` from inside the call),
     // which runs before trySend / flush have stamped the bytes being posted.
     // Showing the buffer there would rewind the view behind that keystroke, and
     // the next one would be typed without it.
@@ -1248,7 +1225,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
     // truth. If the reducer says an Edit is still in flight, do nothing
     // (wait for its real ack). Otherwise sync our flag to the reducer's
     // truth and drain. One method fed by one entry point whose deps
-    // carry ALL triggers (ack / snapshot / serialize-error gate clear),
+    // carry ALL triggers (ack / snapshot / send-failure gate clear),
     // so a missed trigger is structurally impossible. Still post-commit, so
     // canPost() reads the fresh gate; fires on same-docVersion acks
     // because editInFlight transitions even when the version does not;
@@ -1311,7 +1288,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
       // flight (bypassing trySend's single-flight buffer arm). Post-success
       // buffer handling is CONDITIONAL on prior in-flight state — see the flush
       // JSDoc for the full rationale (settlement→ack stale recovery vs the
-      // external-edit clobber the accept path would cause). The serialize-error
+      // external-edit clobber the accept path would cause). The send-failure
       // gate keeps the buffer; a failed post keeps the buffer for the next ack.
       const hadTimer = timer !== null;
       clearTimer();

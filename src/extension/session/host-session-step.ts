@@ -78,10 +78,8 @@ export interface HostSessionStepDeps {
    *  `effect-executor.ts`'s `runApplyEdit` header), and it is THAT later,
    *  independent step's call to `settleEditBarrier` — finding `isDisposed()`
    *  true — that drops the deferred thunks. The drop is real; it just rides
-   *  the in-flight apply's own settlement, not this one. Today such a throw
-   *  is defensive-only: the injected write validator is fail-closed
-   *  (validate-for-write.ts turns parser throws into verdicts), which leaves
-   *  only the reducer's own exhaustive-arm throws.
+   *  the in-flight apply's own settlement, not this one. Today only
+   *  the reducer's own exhaustive-arm throws can produce such a failure.
    *
    *  A throw from `applyEditSettled` itself IS paid, but not here: see
    *  `recoverStrandedWriteLock` commits the recovery through this same
@@ -139,7 +137,6 @@ export function isEditApplied(event: HostSessionEvent): boolean {
     case "documentChanged":
     case "themeChanged":
     case "viewStateVisible":
-    case "editRejectedDeliveryFailed":
       return true;
     // Dispose cancels the deferred side channels: `false` ⇒ DROP, even if the
     // panel's local `disposed` flag (the barrier's `isDisposed`) is not set
@@ -248,7 +245,6 @@ function releasesWriteLockOnCommit(event: HostSessionEvent): SettlementEvent | n
     case "documentChanged":
     case "themeChanged":
     case "viewStateVisible":
-    case "editRejectedDeliveryFailed":
     case "disposed":
       return null;
     default: {

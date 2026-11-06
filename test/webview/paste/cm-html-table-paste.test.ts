@@ -3,7 +3,6 @@ import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 
-import { validateMarkdownForWrite } from "../../../src/markdown/validate-for-write.js";
 import { htmlTablePaste, htmlTableToGfm } from "../../../src/webview/cm/paste/index.js";
 
 describe("htmlTableToGfm — structure", () => {
@@ -344,15 +343,13 @@ describe("htmlTableToGfm — security", () => {
     expect(out).not.toContain("pic");
   });
 
-  it("produces output the host write-gate accepts (never rejected)", () => {
+  it("escapes Markdown syntax in table cells", () => {
     // A cell full of gate-adjacent characters: --- , pipes, a would-be link.
     const html =
       "<table><tr><td>---</td><td>a|b</td></tr>" +
       "<tr><td>[x](javascript:alert(1))</td><td>c</td></tr></table>";
     const gfm = htmlTableToGfm(html);
-    expect(gfm).not.toBeNull();
-    const result = validateMarkdownForWrite(`${gfm}\n`);
-    expect(result.ok).toBe(true);
+    expect(gfm).toBe("| --- | a\\|b |\n| --- | --- |\n| \\[x\\](javascript:alert(1)) | c |");
   });
 });
 

@@ -34,8 +34,7 @@ describe("edit lineage", () => {
   });
 
   it("never attributes live text to a past label", () => {
-    // Rejected-draft replay at label 1 while an external edit (live v2) is
-    // still in the documentChanged debounce.
+    // A mismatched label must not associate live v2 text with version 1.
     const l = createEditLineage(() => {});
     l.noteHandedText(() => "A", 1, 1);
     l.noteHandedText(() => "B", 1, 2);

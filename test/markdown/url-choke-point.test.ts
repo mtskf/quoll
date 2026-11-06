@@ -29,8 +29,7 @@
 // render-gate helper — the live DOM writes are `.href`/`.src` PROPERTY
 // assignments in two widget files (cell-render.ts, image-widget.ts), the
 // `env.openExternal` binding lives in quoll-editor-panel.ts (plus the host
-// gate handle-open-external.ts), and validate-for-write.ts contains none of
-// these primitives (it gates via isAllowedUrl). One primitive remains
+// gate handle-open-external.ts). One primitive remains
 // unused anywhere in `src/**` and so carries an empty allow set:
 //   - `setAttribute("href"|"src")`: the widgets write `.href`/`.src` as
 //     properties, never via setAttribute.

@@ -29,7 +29,6 @@ const { extractCodeMessageTypes, extractDocMessageNames, findDrift } = docSync;
 // discriminant via a `type: "…"` field; a builder repeats a literal (dedup);
 // LintDiagnosticWire is a `type`-less sub-object that must be excluded.
 const PROTOCOL = `export type DocumentMessage = Envelope & { type: "document"; content: string };
-export type EditRejectedMessage = Envelope & { type: "edit-rejected"; error: unknown };
 export type OpenExternalMessage = Envelope & { type: "open-external"; href: string };
 export type OpenLinkMessage = Envelope & { type: "open-link"; href: string };
 export type ImageWriteMessage = Envelope & { type: "image-write"; data: string };
@@ -44,7 +43,7 @@ export type LintDiagnosticWire = { startLine: number; severity: "warning" | "inf
 // alongside a path and a camelCase symbol that must NOT be read as messages.
 const CLAUDE_MD = `## Architecture invariants
 
-- **Message protocol**: one versioned envelope in \`src/shared/protocol.ts\`. Non-negotiables: \`edit-rejected\` is sent instead of a reseed; \`open-external\` / \`open-link\` / \`image-write\` are re-validated host-side, with handoff deferred behind the \`editSettledBarrier\`. Mechanics: §6.
+- **Message protocol**: one versioned envelope in \`src/shared/protocol.ts\`. Non-negotiables: \`open-external\` / \`open-link\` / \`image-write\` are re-validated host-side, with handoff deferred behind the \`editSettledBarrier\`. Mechanics: §6.
 - **Security gates**: unrelated bullet.
 `;
 
@@ -53,7 +52,6 @@ describe("check-doc-sync — code-side extraction", () => {
     const types = extractCodeMessageTypes(PROTOCOL);
     expect([...types].sort()).toEqual([
       "document",
-      "edit-rejected",
       "image-write",
       "open-external",
       "open-link",
@@ -72,11 +70,19 @@ describe("check-doc-sync — code-side extraction", () => {
 describe("check-doc-sync — doc-side extraction", () => {
   it("keeps only hyphenated message names, dropping path / camelCase tokens", () => {
     expect(extractDocMessageNames(CLAUDE_MD)).toEqual([
-      "edit-rejected",
       "open-external",
       "open-link",
       "image-write",
     ]);
+  });
+
+  it.each([
+    "- **Message protocol**: ",
+    "- **Message protocol**: see `src/shared/protocol.ts` and `editSettledBarrier`.",
+  ])("returns no names for an empty or unrecognizable list: %s", (bullet) => {
+    const { docNames, bulletFound } = findDrift(PROTOCOL, bullet);
+    expect(bulletFound).toBe(true);
+    expect(docNames).toEqual([]);
   });
 
   it("returns [] when the Message protocol bullet is absent", () => {
@@ -88,18 +94,18 @@ describe("check-doc-sync — drift contract (doc ⊆ code)", () => {
   it("clean baseline: every enumerated name exists in code → no orphans", () => {
     const { orphans, docNames, bulletFound } = findDrift(PROTOCOL, CLAUDE_MD);
     expect(bulletFound).toBe(true);
-    expect(docNames).toEqual(["edit-rejected", "open-external", "open-link", "image-write"]);
+    expect(docNames).toEqual(["open-external", "open-link", "image-write"]);
     expect(orphans).toEqual([]);
   });
 
   it("planted drift: a renamed code type orphans the doc reference", () => {
-    // Simulate `edit-rejected` renamed away in protocol.ts; the bullet still
+    // Simulate `open-external` renamed away in protocol.ts; the bullet still
     // mentions it → it must be reported as stale. The new name stays all-lowercase
-    // so the orphan arises purely from `edit-rejected` disappearing, not from the
+    // so the orphan arises purely from `open-external` disappearing, not from the
     // code-side charclass rejecting an uppercase char.
-    const renamed = PROTOCOL.replace('type: "edit-rejected"', 'type: "edit-rejected-alt"');
+    const renamed = PROTOCOL.replace('type: "open-external"', 'type: "open-external-alt"');
     const { orphans } = findDrift(renamed, CLAUDE_MD);
-    expect(orphans).toEqual(["edit-rejected"]);
+    expect(orphans).toEqual(["open-external"]);
   });
 
   it("an unrelated extra code message does NOT orphan anything (bullet is not exhaustive)", () => {

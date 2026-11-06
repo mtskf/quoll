@@ -38,7 +38,7 @@
  *     rule above, since BOTH sides of the bridge consume this module.
  */
 
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 /** Hard cap on inbound webview→host content payload length, measured in UTF-16
  *  code units (i.e. `String.prototype.length`). 4 * 1024 * 1024 code units is
@@ -337,28 +337,6 @@ export type CaretApplyMessage = Envelope & {
   character: number;
 };
 
-/** Host→webview rejection of a webview-originated Edit. Sent in lieu of a
- *  reseed `DocumentMessage` when `validateMarkdownForWrite` refuses the
- *  inbound content (unsafe URL, malformed frontmatter, or an internal
- *  parser throw). Carrying the rejection as a distinct message keeps the
- *  webview's content intact: the existing `document` arm would overwrite
- *  the user's typed bytes with the disk snapshot, silently losing their
- *  edit. The webview routes this to the same reducer arm that handles
- *  webview-side postMessage failures (`serialize-error`) — both block save
- *  on the same gate and clear `editInFlight`. The reducer accepts any
- *  string `code` because the wire crosses a TypeScript boundary; the
- *  shell casts back to `MarkdownErrorCode` when dispatching. `detail` is
- *  intentionally omitted from the wire shape for now — the forward-compat
- *  "ignore unknown fields" envelope check means future extension does
- *  not require a protocol bump. */
-export type EditRejectedMessage = Envelope & {
-  type: "edit-rejected";
-  error: {
-    code: string;
-    message: string;
-  };
-};
-
 /** Host→webview result of an `image-write` request. `ok` is true only when the
  *  host validated, sniffed, and wrote the file; `relativePath` (present iff ok)
  *  is the document-relative markdown destination the webview inserts. The failure
@@ -423,7 +401,6 @@ export function buildFormatDocumentMessage(): FormatDocumentMessage {
 export type HostToWebview =
   | DocumentMessage
   | ThemeMessage
-  | EditRejectedMessage
   | ImageWriteResultMessage
   | EditorConfigMessage
   | CaretApplyMessage
@@ -622,8 +599,8 @@ export type CaretReportMessage = Envelope & {
  *  The reserved `fix` field of the webview's `LintDiagnostic` is intentionally
  *  NOT carried: autofix is applied locally in the webview (`Mod-.` via
  *  `cm/lint/apply-fix.ts`) and requires no host round-trip. `severity` is advisory only — "error"
- *  is structurally impossible here, mirroring the lint layer's policy that
- *  write-blocking failures belong to the host write-gate, not lint. */
+ *  is structurally impossible here. Lint never blocks storage; render/open
+ *  sinks validate independently. */
 export type LintDiagnosticWire = {
   startLine: number;
   startCharacter: number;
@@ -765,15 +742,6 @@ export function isHostToWebview(value: unknown): value is HostToWebview {
       );
     case "theme":
       return isThemeKind(v.themeKind);
-    case "edit-rejected": {
-      const err = v.error;
-      return (
-        typeof err === "object" &&
-        err !== null &&
-        typeof (err as Record<string, unknown>).code === "string" &&
-        typeof (err as Record<string, unknown>).message === "string"
-      );
-    }
     case "image-write-result":
       // Discriminate on `ok`: a success MUST carry a string path; a failure
       // MUST NOT carry one. Distrust the peer even though the host builder is

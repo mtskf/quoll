@@ -11,7 +11,7 @@ import { highlightMarkExtension } from "../../src/markdown/highlight-mark.js";
 
 // Minimal parser: just the highlight rule on CommonMark, for structural asserts.
 const P = baseParser.configure([highlightMarkExtension]);
-// Full parser mirroring the HOST write-gate extension set (GFM + Subscript +
+// Full parser mirroring the shared GFM extension set (GFM + Subscript +
 // Superscript + Emoji), used for the adjacency cases below.
 const FULL = baseParser.configure([GFM, Subscript, Superscript, Emoji, highlightMarkExtension]);
 // A Strikethrough-only parser, to pin that Highlight's flanking behaviour

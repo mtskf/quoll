@@ -11,3 +11,9 @@ describe("PROTOCOL_VERSION mirror", () => {
     expect(TEST_VERSION).toBe(PROD_VERSION);
   });
 });
+
+describe("retired protocol envelope", () => {
+  it("pins the incompatible removal to protocol 4", () => {
+    expect(PROD_VERSION).toBe(4);
+  });
+});

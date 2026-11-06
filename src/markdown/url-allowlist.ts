@@ -1,6 +1,5 @@
-// Single source of truth for URL scheme validation across the write-gate
-// and the render-gate. The predicate is framework-agnostic and shared by
-// both consumers.
+// Shared URL scheme policy for render and open sinks, including host-side
+// open-external re-validation. Markdown storage does not apply this policy.
 
 const ALLOWED_URL_SCHEMES = new Set(["https", "http", "mailto"]);
 

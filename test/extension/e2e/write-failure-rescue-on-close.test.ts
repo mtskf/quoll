@@ -4,6 +4,7 @@ import * as vscode from "vscode";
 import { PROTOCOL_VERSION } from "./constants";
 import {
   cleanupBetweenTests,
+  deferred,
   discardUntitledTabs,
   getHarness,
   isDocumentEvent,
@@ -15,20 +16,10 @@ import {
 } from "./harness";
 import type { PanelControlsShape, TestHarnessShape } from "./types";
 
-// A draft the write-gate refused never reaches the TextDocument, so closing the
-// Quoll tab raises no save prompt and the bytes used to vanish with the webview.
-// The panel now reopens them as an untitled Markdown document on dispose.
-//
-// This is the ONLY suite that runs the real rescue: `getHarness()` installs a
-// no-op `openRescuedDraftOverride` for everyone else (see `suppressRescuedDrafts`
-// in ./harness), so each case below sets the override AFTER its last
-// `getHarness()` call — setting it earlier would be silently overwritten and the
-// positive case would fail looking exactly like "wiring missing".
+// Real untitled delivery; other suites install a no-op rescue override.
+// Install overrides after the last getHarness() call.
 
 const ORIGINAL = "# Title\n\nbody\n";
-
-const isEditRejectedEvent = (e: { message: { type: string } }) =>
-  e.message.type === "edit-rejected";
 
 const allTabs = (): vscode.Tab[] => vscode.window.tabGroups.all.flatMap((g) => g.tabs);
 const quollTab = (uri: vscode.Uri): vscode.Tab | undefined =>
@@ -50,12 +41,11 @@ async function openQuoll(slug: string): Promise<{
   return { harness, ...opened };
 }
 
-// Post an Edit the REAL write-gate refuses (unsafe URL) and wait for the
-// rejection. Returns the exact bytes sent — the draft the rescue must reopen.
-async function rejectDraft(harness: TestHarnessShape, panel: PanelControlsShape): Promise<string> {
+async function holdDraft(harness: TestHarnessShape, panel: PanelControlsShape) {
   const seed = await harness.waitForEvent(isDocumentEvent, 8000);
-  harness.clearEvents();
-  const draft = `# Title\n\n[bad](javascript:alert(1))\n\nRESCUE-ME-${Math.random().toString(36).slice(2)}\n`;
+  const gate = deferred<boolean>();
+  harness.applyEditOverride = () => gate.promise;
+  const draft = "# Draft\n\n[bad](javascript:1)\nRESCUE-ME\n";
   panel.simulateInbound({
     protocol: PROTOCOL_VERSION,
     type: "edit",
@@ -63,8 +53,7 @@ async function rejectDraft(harness: TestHarnessShape, panel: PanelControlsShape)
     content: draft,
     baseDocVersion: seed.message.docVersion,
   });
-  await harness.waitForEvent(isEditRejectedEvent, 5000);
-  return draft;
+  return { draft, gate };
 }
 
 async function closeQuollTab(uri: vscode.Uri): Promise<void> {
@@ -73,7 +62,7 @@ async function closeQuollTab(uri: vscode.Uri): Promise<void> {
   await vscode.window.tabGroups.close(tab);
 }
 
-describe("rejected-draft-rescue-on-close", function () {
+describe("write-failure-rescue-on-close", function () {
   this.timeout(30000);
 
   before(async () => {
@@ -84,20 +73,21 @@ describe("rejected-draft-rescue-on-close", function () {
     await cleanupBetweenTests(await getHarness());
   });
 
-  it("closing a Quoll tab with a rejected draft pending reopens the draft as an untitled Markdown document", async () => {
+  it("a refused apply settling after close reopens the draft as an untitled Markdown document", async () => {
     assert.strictEqual(untitledTextTabs().length, 0, "precondition: no untitled tab open");
     // Set immediately after the close is requested: only then has a real rescue
     // been started that this case must collect, pass or fail.
     let closedWithRealRescue = false;
     try {
       const { harness, uri, file, panel } = await openQuoll("rescue-real");
-      const draft = await rejectDraft(harness, panel);
+      const { draft, gate } = await holdDraft(harness, panel);
       // Real path — after the last getHarness() call (see file header).
       harness.openRescuedDraftOverride = null;
 
       const closing = closeQuollTab(uri);
       closedWithRealRescue = true;
       await closing;
+      gate.resolve(false);
 
       const rescuedDoc = (): vscode.TextDocument | undefined => {
         // The TAB must exist, not just the document: an untitled document
@@ -109,13 +99,19 @@ describe("rejected-draft-rescue-on-close", function () {
       };
       await pollUntil(
         () => rescuedDoc() !== undefined,
-        "an untitled tab holding the rejected draft",
+        "an untitled tab holding the refused write",
         5000
       );
       const doc = rescuedDoc();
       assert.ok(doc);
       assert.strictEqual(doc.languageId, "markdown", "rescued draft must open as Markdown");
       assert.strictEqual(doc.getText(), draft, "rescued draft must be byte-identical");
+      await tick(300);
+      assert.strictEqual(
+        untitledTextTabs().length,
+        1,
+        "one failed write creates exactly one rescue"
+      );
       assert.strictEqual(
         await fs.readFile(file, "utf8"),
         ORIGINAL,
@@ -134,11 +130,22 @@ describe("rejected-draft-rescue-on-close", function () {
     }
   });
 
-  it("closing a Quoll tab with no rejection pending opens nothing", async () => {
+  it("closing a healthy Quoll tab opens nothing", async () => {
     assert.strictEqual(untitledTextTabs().length, 0, "precondition: no untitled tab open");
     try {
-      const { harness, uri } = await openQuoll("rescue-control");
-      await harness.waitForEvent(isDocumentEvent, 8000);
+      const { harness, uri, panel } = await openQuoll("rescue-control");
+      const seed = await harness.waitForEvent(isDocumentEvent, 8000);
+      const content = "[saved](javascript:1)\n";
+      panel.simulateInbound({
+        protocol: PROTOCOL_VERSION,
+        type: "edit",
+        editId: 1,
+        content,
+        baseDocVersion: seed.message.docVersion,
+      });
+      await harness.waitForEvent((e) => isDocumentEvent(e) && e.message.settledEditId === 1, 8000);
+      assert.strictEqual(panel.document.getText(), content);
+      assert.ok(await panel.document.save());
       // Real path, so "no untitled tab" is the rescue declining to run — not
       // the suppression swallowing it.
       harness.openRescuedDraftOverride = null;
@@ -156,7 +163,7 @@ describe("rejected-draft-rescue-on-close", function () {
     // Pins the routing every other suite depends on to stay free of rescued
     // untitled documents.
     const { harness, uri, panel } = await openQuoll("rescue-override");
-    const draft = await rejectDraft(harness, panel);
+    const { draft, gate } = await holdDraft(harness, panel);
     const seen: string[] = [];
     harness.openRescuedDraftOverride = (content) => {
       seen.push(content);
@@ -164,6 +171,7 @@ describe("rejected-draft-rescue-on-close", function () {
     };
 
     await closeQuollTab(uri);
+    gate.reject(new Error("write failed after dispose"));
     await pollUntil(() => seen.length > 0, "the override to receive the draft", 5000);
     await tick(500);
     assert.deepStrictEqual(seen, [draft], "override must receive the draft exactly once");

@@ -41,23 +41,12 @@
 //   keystrokes) outweighs the flash.
 //
 //   When the insert command resolved, the reference is ALSO written to the
-//   clipboard as silent insurance (non-fatal — warn only) — unless a write-gate
-//   rejection is pending, in which case that write is skipped silently (no new
-//   clipboard write while the draft is webview-only). Claude Code's routing has
+//   clipboard as silent insurance (non-fatal — warn only). Claude Code's routing has
 //   a silent-drop limitation — when NEITHER a visible Claude webview NOR a
 //   connected CLI session exists, the delegated mention is dropped with no
 //   surface at all, and the clipboard is then the only thing that saves the
 //   user. No success toast: when the mention lands it is visible in the
 //   composer / CLI prompt, so a notification would be redundant noise.
-//
-//   Pending write-gate rejection: the user's draft then lives ONLY webview-side,
-//   so a handoff would reference a document the user is not looking at. The
-//   handler refuses (one notice via deps.showRejectionBlocked, see
-//   rejection-gate.ts) at entry and after each await that precedes the first
-//   irreversible effect (save, reveal, and the fallback clipboard write's
-//   gate). Once the insert command has resolved nothing is retracted and no
-//   notice follows; once the fallback clipboard write has started nothing is
-//   re-checked.
 //
 //   Fallback tier (v1, unchanged): if the delegation command is unavailable
 //   (Claude Code missing or too old → executeCommand rejects) or the reveal
@@ -88,7 +77,6 @@
 
 import { clampInt } from "../../shared/clamping.js";
 import { makeHandoffGuards } from "./handoff-guards.js";
-import { type RejectionGateDeps, refusedForRejection } from "./rejection-gate.js";
 
 const { tryBool, tryShow } = makeHandoffGuards("context-handoff");
 
@@ -175,7 +163,7 @@ export type HandleContextHandoffDeps = {
    *  that a preserveFocus:false reveal sets activeTextEditor synchronously by
    *  reveal resolution, so a sync check here is reliable. */
   isDocumentActiveTextEditor: () => boolean;
-} & RejectionGateDeps;
+};
 
 /** Strip C0 control characters (U+0000–U+001F) and DEL (U+007F) from a path.
  *  A hostile POSIX filename can embed \n/\r; the reference reaches the
@@ -261,52 +249,36 @@ export function clampHandoffSelection(
 }
 
 /** Tier 0 — reveal the document (activeTextEditor choreography) and delegate
- *  to Claude Code's own insert command. Three outcomes:
- *    "delegated" — the insert command resolved.
- *    "fallback"  — the reveal or the command rejected (Claude Code missing /
- *                  too old), or the activeTextEditor guard failed → the
- *                  caller takes the clipboard fallback tier.
- *    "blocked"   — a write-gate rejection is pending after the reveal; no
- *                  command was sent. The caller returns (the notice is already
- *                  surfaced by refusedForRejection here). Deliberately a
- *                  return value, NOT a throw: the catch below would turn a
- *                  throw into "fallback", and the fallback tier re-checks
- *                  before its clipboard write — a second refusal notice (and,
- *                  if the rejection cleared during the cleanup await, a
- *                  clipboard write).
+ *  to Claude Code's own insert command. Returns true when the command resolved;
+ *  a failed reveal, command, or activeTextEditor guard returns false so the
+ *  caller takes the clipboard fallback tier.
  *  Between the reveal and the command, the activeTextEditor guard verifies the
  *  reveal actually took — the command silently no-ops on a wrong/absent
- *  activeTextEditor, so a failed guard resolves "fallback" rather than firing
+ *  activeTextEditor, so a failed guard returns false rather than firing
  *  a command whose failure the host could never observe. The cleanup ALWAYS
  *  runs (finally) — including when the guard fails, the command rejects or
- *  the call is blocked — and its own failure is swallowed (warn) so it can
+ *  the reveal rejects — and its own failure is swallowed (warn) so it can
  *  neither mask a delegation success nor convert one into a spurious
  *  fallback. */
 async function tryDelegateToClaudeCode(
   selection: HandoffRevealSelection,
   deps: HandleContextHandoffDeps
-): Promise<"delegated" | "fallback" | "blocked"> {
+): Promise<boolean> {
   let cleanup: (() => Thenable<void>) | undefined;
   try {
     cleanup = await deps.revealForMention(selection);
-    // Re-check after the reveal await (the reveal steals focus, so the webview
-    // may have posted a rejected Edit meanwhile). A distinct outcome, not a
-    // throw: see the doc comment. The finally still closes the temp tab.
-    if (refusedForRejection(deps)) {
-      return "blocked";
-    }
     if (!deps.isDocumentActiveTextEditor()) {
       console.warn(
         "[quoll] context-handoff: reveal did not make the document the active text editor; " +
           "skipping insertAtMentioned and falling back"
       );
-      return "fallback";
+      return false;
     }
     await deps.executeCommand(CLAUDE_INSERT_AT_MENTIONED_COMMAND);
-    return "delegated";
+    return true;
   } catch (err) {
     console.warn("[quoll] context-handoff: delegation to Claude Code failed; falling back", err);
-    return "fallback";
+    return false;
   } finally {
     if (cleanup !== undefined) {
       try {
@@ -322,11 +294,6 @@ export async function handleContextHandoff(
   payload: HandleContextHandoffPayload,
   deps: HandleContextHandoffDeps
 ): Promise<void> {
-  // Refuse while a write-gate rejection is pending (see the module header).
-  if (refusedForRejection(deps)) {
-    return;
-  }
-
   // Save first so the on-disk reference matches the lines the webview saw. The
   // @-mention is a disk reference; a dirty buffer would point Claude Code at
   // stale bytes. A FAILED save (false / throw) means the disk is still stale —
@@ -341,10 +308,6 @@ export async function handleContextHandoff(
         deps.showWarn,
         "Quoll: save this file to hand off accurate line references to Claude Code."
       );
-      return;
-    }
-    // Re-check after the save await, before the reveal flash.
-    if (refusedForRejection(deps)) {
       return;
     }
   }
@@ -380,42 +343,15 @@ export async function handleContextHandoff(
   // document path, which bypasses stripControlChars — so a hostile POSIX
   // filename (e.g. an embedded newline) would reach Claude Code un-sanitized on
   // the primary path. Dropping straight to the fallback tier surfaces ONLY the
-  // already-stripped `reference`, keeping the sanitizer invariant intact. (The
-  // ternary skips tryDelegateToClaudeCode entirely when the path is hostile.)
-  const outcome = hasControlChar(deps.relativePath)
-    ? "fallback"
-    : await tryDelegateToClaudeCode(selection, deps);
-  if (outcome === "blocked") {
-    // tryDelegateToClaudeCode already surfaced the refusal notice.
-    return;
-  }
-  if (outcome === "delegated") {
-    // The insert command resolved. That is NOT proof of delivery (see the
-    // silent-drop note in the module header), so do not reason from
-    // "delivered". When the command resolved, the delegation is never retracted
-    // and never followed by a "can't hand off" notice (the mention may have
-    // landed), but no NEW clipboard write is made while a rejection is pending
-    // — skip the insurance write silently (bare predicate, no notice). This
-    // read sits after the cleanup await, so a rejection that landed during the
-    // command OR the temp-tab cleanup is caught.
-    if (deps.isRejectionPending()) {
-      return;
-    }
+  // already-stripped `reference`, keeping the sanitizer invariant intact.
+  const delegated =
+    !hasControlChar(deps.relativePath) && (await tryDelegateToClaudeCode(selection, deps));
+  if (delegated) {
     try {
       await deps.writeClipboard(reference);
     } catch (err) {
       console.warn("[quoll] context-handoff: clipboard insurance write failed", err);
     }
-    return;
-  }
-
-  // Fallback tier. The delegation attempt awaited (reveal / command / cleanup),
-  // so re-check before the clipboard — the fallback's contract. This is the END
-  // of the abortable range: once the write below has started, the reference
-  // (built while nothing was pending) is what the user will paste, so the
-  // open/focus commands and the toast that follow are truthful and are
-  // deliberately not re-checked.
-  if (refusedForRejection(deps)) {
     return;
   }
 

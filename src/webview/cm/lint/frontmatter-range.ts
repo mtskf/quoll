@@ -7,7 +7,7 @@ import { type ScannedLine, scanLines } from "./line-scan.js";
 // front matter by default; without this a `# comment` line parses as an
 // ATXHeading, and trailing spaces / double blanks inside the block get flagged).
 //
-// Detection mirrors the host write-gate and the webview widget detector: opener
+// Detection mirrors the webview widget detector: opener
 // at doc start, close at the first subsequent bare `---` line — single-sourced on
 // the `FENCE_LINE` predicate. Line splitting is delegated to `scanLines`, so
 // LF / CRLF / lone-CR are handled uniformly and the returned offset lands on the

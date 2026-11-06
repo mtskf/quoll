@@ -988,7 +988,7 @@ describe("no file in any tsc program switches its whole file off", () => {
     // program's widened include.
     for (const anchor of [
       "src/extension/extension.ts",
-      "src/markdown/validate-for-write.ts",
+      "src/markdown/url-allowlist.ts",
       "src/shared/protocol.ts",
       "src/webview/shell.ts",
       "test/build/no-file-level-ts-nocheck.test.ts",

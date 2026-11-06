@@ -1,13 +1,11 @@
-// Pure string-level CommonMark destination normalisation. Extracted from
-// lezer-url-walker.ts so the webview's click-to-open handler
-// (cm/link-handlers.ts) can decode raw URL slices without importing the
-// host-side Lezer walker module (parser instantiation, walker dispatch).
-// The full attack-surface matrix is in test/markdown/lezer-url-walker.test.ts;
-// test/markdown/url-decode.test.ts is a smoke suite to pin direct callers.
+// Pure string-level CommonMark destination normalisation shared by render
+// and click-to-open sinks. Decoding alone does not authorize a URL: callers
+// independently apply the URL allowlist before rendering or opening it.
+// Attack coverage lives in test/markdown/url-decode.test.ts and
+// test/markdown/render-safe-markdown-destination.test.ts.
 //
-// (Comments preserved verbatim from lezer-url-walker.ts — they encode the
-// C2 security review's rationale on decoder order, NUL substitution,
-// case-insensitive named-entity lookup, and trailing-semicolon policy.)
+// The comments below explain decoder order, NUL substitution,
+// case-insensitive named-entity lookup, and trailing-semicolon policy.
 
 /**
  * CommonMark destination normalization for the URL-form attack-surface

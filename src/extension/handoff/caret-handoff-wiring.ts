@@ -236,8 +236,8 @@ export function createCaretHandoffWiring(deps: CaretHandoffWiringDeps): CaretHan
   // dispatcher drains SYNCHRONOUSLY (createDrainingDispatcher), so when
   // viewStateVisible posts a Document it reaches webview.postMessage BEFORE
   // this caret-apply → the webview applies the Document first, then the caret
-  // (FIFO). In the rare deferred-Document edge (write-lock held / rejection
-  // pending → no Document posted now), caret-apply lands first; a later
+  // (FIFO). In the rare deferred-Document edge (write-lock held
+  // → no Document posted now), caret-apply lands first; a later
   // reseed re-captures the CURRENT selection in applyDocument (prevSelection),
   // so the carried caret survives (clamped) — same mid-edit-reseed class
   // already handled there (Codex #2, verified by the side-effect review).

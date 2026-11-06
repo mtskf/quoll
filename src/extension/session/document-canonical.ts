@@ -18,7 +18,7 @@ import type { DocumentEol, DocumentMessage } from "../../shared/protocol.js";
 import { type BuildDocumentMessageInput, buildDocumentMessage } from "./document-message.js";
 
 /** Everything a Document message carries besides its bytes and separator —
- *  derived from the builder input so both adapters below stay in lockstep
+ *  derived from the builder input so the document adapter stays in lockstep
  *  with it. */
 type DocumentMessageMetadata = Omit<BuildDocumentMessageInput, "content" | "eol">;
 
@@ -48,23 +48,6 @@ export function buildDocumentMessageFromDocument(
 ): DocumentMessage {
   return buildDocumentMessage({
     content: canonicalDocumentText(document),
-    eol: documentEolOf(document.eol),
-    ...metadata,
-  });
-}
-
-/** The rejected-draft reseed: the webview's own draft bytes, passed through
- *  as-is (NOT canonicalised — the draft is what the user typed and must survive
- *  the rejection byte-for-byte), stamped with the document's `eol`. Taking the
- *  document, not a pre-read separator, is what lets a unit test pin the wire
- *  eol with a CRLF fake document. */
-export function buildRejectedDraftFromDocument(
-  document: Pick<TextDocument, "eol">,
-  content: string,
-  metadata: DocumentMessageMetadata
-): DocumentMessage {
-  return buildDocumentMessage({
-    content,
     eol: documentEolOf(document.eol),
     ...metadata,
   });

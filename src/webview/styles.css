@@ -306,10 +306,7 @@ html body {
     height: 100%;
   }
 
-  /* Save-policy banner. Surfaced when a serializeError blocks save (the
-   * host's `edit-rejected` → serializeError error arm — C8 retired the
-   * parse-warning banners). Kept minimal — a later PR can replace with a
-   * VS Code Webview UI Toolkit notification if one is ever needed. */
+  /* Local send-failure banner. */
   .quoll-banner {
     padding: 0.5em 1em;
     margin: 0 0 0.5em;
@@ -370,10 +367,7 @@ html body {
     cursor: pointer;
   }
 
-  /* The discard notice's one action (shell.ts offerDraftCopy), present only
-   * when the lost draft can still be copied. It sits immediately before the
-   * dismiss control and takes over the auto margin, so the pair stays at the
-   * far right with dismiss last. */
+  /* Copy the lost draft before dismissing the notice. */
   .quoll-resync-notice-copy {
     flex: 0 0 auto;
     margin-left: auto;
@@ -387,6 +381,7 @@ html body {
   .quoll-resync-notice-copy + .quoll-resync-notice-dismiss {
     margin-left: 0;
   }
+
 
   /* Decoration syntax reveal (C4a). Caret-on-token rendering — the syntax
    * marks (#, >, **, *, `, ~~) remain in the document but render dim so the

@@ -70,7 +70,6 @@ import { type HostToWebview, PROTOCOL_VERSION } from "../../../src/shared/protoc
 import { createEditSync } from "../../../src/webview/cm/edit-sync.js";
 
 const ctx = { uriString: "file:///x.md", fsPath: "/x.md" };
-const okValidate = () => ({ ok: true }) as const;
 
 // Flush the executor's async settlement (executeDocumentWrite awaits the apply,
 // then runApplyEdit's `.then` dispatches) — a handful of microtask turns.
@@ -116,7 +115,7 @@ interface HarnessOptions {
 type SettleFailureMode = boolean | "read-only";
 
 function harness(options: HarnessOptions = {}) {
-  const core = createHostSessionCore(ctx, { validateForWrite: okValidate });
+  const core = createHostSessionCore(ctx);
   const doc = { version: 1, text: "" };
   const attempts: string[] = [];
   const errors: string[] = [];
@@ -151,8 +150,6 @@ function harness(options: HarnessOptions = {}) {
 
   const executor: EffectExecutor = createEffectExecutor({
     isDisposed: () => false,
-    getState: () => live,
-    uriString: () => ctx.uriString,
     dispatch: dispatchEvent,
     send: async () => true,
     recordEvent: () => {},
@@ -165,7 +162,6 @@ function harness(options: HarnessOptions = {}) {
     },
     rescueUnsavedDraft: () => undefined,
     canWrite: () => true,
-    readLineageSince: () => null,
     // Gated on the SAME `settleFailure` flag as `readCanonical` on purpose: in
     // production both bottom out in `canonicalDocumentText(document)` (the panel
     // wires `buildSeedDocument` → `canonicalDocumentText` and
@@ -200,23 +196,8 @@ function harness(options: HarnessOptions = {}) {
         settledEditId,
       } as HostToWebview;
     },
-    buildRejectedDraft: (content, docVersion, externalEpoch, epochGeneration, settledEditId) =>
-      ({
-        protocol: PROTOCOL_VERSION,
-        type: "document",
-        eol: "\n",
-        content,
-        docVersion,
-        canWrite: true,
-        themeKind: "light",
-        externalEpoch,
-        epochGeneration,
-        settledEditId,
-      }) as HostToWebview,
     buildTheme: (themeKind) =>
       ({ protocol: PROTOCOL_VERSION, type: "theme", themeKind }) as HostToWebview,
-    buildEditRejected: (error) =>
-      ({ protocol: PROTOCOL_VERSION, type: "edit-rejected", error }) as HostToWebview,
     applyEditSeam: {
       readText: () => {
         if (readTextFailure) {

@@ -57,15 +57,38 @@ describe("renderSafeMarkdownDestination (shared render-side decode→gate choke 
     });
   });
 
-  // OVER-BLOCK POLICY (Codex Conf 95): a safe-scheme URL carrying a
-  // semicolon-terminated named entity OUTSIDE the curated URL-impactful set
-  // (`&copy;`) is undecodable → NUL → blocked. This is intended: it aligns
-  // table-cell render with the write-gate (which makes such a URL
-  // non-persistable) and the block-image render-gate. Pinned so it is visibly
-  // deliberate, not an accident.
+  // Non-curated named entities decode to NUL, so this destination is blocked at render.
   it("blocks a safe-scheme URL containing a non-curated named entity (&copy;) — over-block policy", () => {
     expect(renderSafeMarkdownDestination("https://x.test/?q=a&copy;b")).toEqual({
       kind: "blocked",
     });
+  });
+});
+
+describe("destination attack slices", () => {
+  it.each([
+    ["<javascript:alert(1)>", "javascript:alert(1)"],
+    ["javascript\\:alert(1)", "javascript:alert(1)"],
+    ["javascript\\&colon;alert(1)", "javascript:alert(1)"],
+    ["javascript&#58;alert(1)", "javascript:alert(1)"],
+    ["javascript&#58alert(1)", "javascript:alert(1)"],
+    ["javascript&#x3A;alert(1)", "javascript:alert(1)"],
+    ["javascript&#X3A;alert(1)", "javascript:alert(1)"],
+    ["javascript&#x3A:alert(1)", "javascript::alert(1)"],
+    ["jav&#x61;script:alert(1)", "javascript:alert(1)"],
+    ["javascript&COLON;alert(1)", "javascript:alert(1)"],
+    ["foo&plus;bar&colon;x", "foo+bar:x"],
+    ["foo&period;bar&colon;x", "foo.bar:x"],
+    ["java&tab;script:1", "java\tscript:1"],
+    ["java&NewLine;script:1", "java\nscript:1"],
+    ["java&newline;script:1", "java\nscript:1"],
+    ["javascript&unknownentity;:1", "javascript\u0000:1"],
+    ["https://x/&#x110000;", "https://x/\u0000"],
+    ["javascript&#xD800;:1", "javascript\u0000:1"],
+    ["java&#0;script:1", "java\u0000script:1"],
+    ["java\u0000script:1", "java\u0000script:1"],
+    ["//evil.test/x", "//evil.test/x"],
+  ])("handles %j", (raw, _decoded) => {
+    expect(renderSafeMarkdownDestination(raw)).toEqual({ kind: "blocked" });
   });
 });

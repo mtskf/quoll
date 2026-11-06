@@ -18,7 +18,7 @@ describe("classifyDocument", () => {
     expect(prot.some((r) => slice(src, r).includes("b"))).toBe(true);
   });
 
-  it("protects frontmatter at document start (no validateFrontmatter misuse)", () => {
+  it("protects frontmatter at document start using fence detection", () => {
     const src = "---\ntitle:  x  \n---\n\nbody\n";
     expect(
       classifyDocument(src).protectedRanges.some((r) => slice(src, r).startsWith("---\ntitle:"))

@@ -162,3 +162,12 @@ describe("round-trip parity gate: CM surface is text-identity", () => {
     }
   });
 });
+
+describe("former invalid_frontmatter inputs through the CM line model", () => {
+  it.each([
+    ["---\ntitle: x\u2028---\n---\nbody\n", "---\ntitle: x\u2028---\n---\nbody\n"],
+    ["---\ntitle: x\r---\n---\nbody\n", "---\ntitle: x\n---\n---\nbody\n"],
+  ])("normalizes only supported line separators in %j", (source, expected) => {
+    expect(cmRoundTrip(source)).toBe(expected);
+  });
+});

@@ -24,7 +24,6 @@ import type { LintDiagnostic, LintSeverity } from "./types.js";
 
 // Fail-open wrapper: lint is advisory, so a parser/rule throw must degrade to
 // "no diagnostics" + a logged error rather than break the editor transaction.
-// (The host write-gate has the same defense; here a throw merely drops a squiggle.)
 // Generic over the linter fn so both the one-shot full parse (`lintMarkdown`)
 // and the per-view incremental linter share one guard.
 function safeLint(
@@ -434,8 +433,7 @@ const quollLintTheme = EditorView.theme({
 
 // The advisory Markdown lint layer: recompute findings on change (debounced),
 // underline them, and show the message on hover. Display-only (byte-identical
-// round-trip) and fully independent of the host write-gate (validate-for-write.ts)
-// — it never imports it and never blocks a write.
+// round-trip) and independent of the host — it never blocks a write.
 // Optional `sink`: when provided, a ViewPlugin publishes the current diagnostic
 // set (as wire objects) on every debounced fresh compute, so the host can mirror
 // them into VS Code's Problems panel. Omitting `sink` is

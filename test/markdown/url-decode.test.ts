@@ -40,7 +40,7 @@ function mulberry32(seed: number): () => number {
   };
 }
 
-describe("decodeMarkdownDestination (smoke — full attack matrix lives in lezer-url-walker.test.ts)", () => {
+describe("decodeMarkdownDestination", () => {
   it("strips surrounding angle brackets", () => {
     expect(decodeMarkdownDestination("<https://example.com>")).toBe("https://example.com");
   });
@@ -241,5 +241,33 @@ describe("encodeMarkdownDestination", () => {
     // atoms this seed escapes a reference in 48 samples, with them in 10595. An
     // atom or seed change that starves the reference axis must go red here.
     expect(withReference).toBeGreaterThan(5000);
+  });
+});
+
+describe("destination attack slices", () => {
+  it.each([
+    ["<javascript:alert(1)>", "javascript:alert(1)"],
+    ["javascript\\:alert(1)", "javascript:alert(1)"],
+    ["javascript\\&colon;alert(1)", "javascript:alert(1)"],
+    ["javascript&#58;alert(1)", "javascript:alert(1)"],
+    ["javascript&#58alert(1)", "javascript:alert(1)"],
+    ["javascript&#x3A;alert(1)", "javascript:alert(1)"],
+    ["javascript&#X3A;alert(1)", "javascript:alert(1)"],
+    ["javascript&#x3A:alert(1)", "javascript::alert(1)"],
+    ["jav&#x61;script:alert(1)", "javascript:alert(1)"],
+    ["javascript&COLON;alert(1)", "javascript:alert(1)"],
+    ["foo&plus;bar&colon;x", "foo+bar:x"],
+    ["foo&period;bar&colon;x", "foo.bar:x"],
+    ["java&tab;script:1", "java\tscript:1"],
+    ["java&NewLine;script:1", "java\nscript:1"],
+    ["java&newline;script:1", "java\nscript:1"],
+    ["javascript&unknownentity;:1", "javascript\u0000:1"],
+    ["https://x/&#x110000;", "https://x/\u0000"],
+    ["javascript&#xD800;:1", "javascript\u0000:1"],
+    ["java&#0;script:1", "java\u0000script:1"],
+    ["java\u0000script:1", "java\u0000script:1"],
+    ["//evil.test/x", "//evil.test/x"],
+  ])("handles %j", (raw, decoded) => {
+    expect(decodeMarkdownDestination(raw)).toEqual(decoded);
   });
 });

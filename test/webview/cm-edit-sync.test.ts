@@ -84,7 +84,7 @@ function setup(opts?: {
   failPost?: boolean;
   now?: () => number;
   onResyncStorm?: () => void;
-  onLocalEditDiscarded?: () => void;
+  onLocalEditDiscarded?: (draft: string) => void;
   onReadonlyHold?: () => boolean;
   onEditRefused?: () => void;
   showHeld?: (content: string) => void;
@@ -147,7 +147,7 @@ describe("cm edit-sync", () => {
     s.sync.onHostSnapshot(v, canWrite, 0, 1, s.posted.at(-1)?.content ?? s.getDoc());
     s.sync.onReducerCommit(false); // reducer's document arm cleared editInFlight
   };
-  // A consent flip / serialize-error clear: reducer state changed, NOT
+  // A consent flip / send-failure clear: reducer state changed, NOT
   // in-flight, no docVersion move. Production fires onReducerCommit(false).
   const consentFlip = (s: ReturnType<typeof setup>) => s.sync.onReducerCommit(false);
 
@@ -638,16 +638,15 @@ describe("cm edit-sync — discardBuffer", () => {
     s.sync.onReducerCommit(false);
   };
 
-  it("clears a buffered pre-reject payload so the next drain does not replay it", () => {
+  it("clears a buffered failed-send payload so the next drain does not replay it", () => {
     const s = setup();
     s.sync.onHostSnapshot(1, true, 0, 1, s.getDoc()); // seeded + writable
     s.type("a"); // posts at v1, editInFlight = true, buffered = null
     s.type("ab"); // in-flight → buffered = "ab"
     expect(s.posted.length).toBe(1);
     s.sync.discardBuffer(); // drop the buffered "ab"
-    // A subsequent drain (production: edit-rejected → serialize-error →
-    // onReducerCommit) must NOT replay. We model the drain by simulating
-    // the production order: the reject puts the gate down first so the
+    // A subsequent drain after send-failure must NOT replay. We model
+    // the production order: the failure puts the gate down first so the
     // first drain is gated, then local-edit-attempt opens it.
     s.sync.onReducerCommit(false); // gate is open in this fake (no canPost block)
     expect(s.posted.length).toBe(1); // no replay — buffer was discarded
@@ -760,28 +759,6 @@ describe("cm edit-sync — un-acked bytes keep a carrier (demotion + refusal hol
     } finally {
       warn.mockRestore();
     }
-  });
-
-  it("does NOT re-buffer bytes the host answered with edit-rejected", () => {
-    // The `edit-rejected` shape: the reducer clears editInFlight and closes the
-    // serialize-error gate with NO Document, so onHostSnapshot — the only place
-    // a demotion happens — never runs. The rejected bytes stay on screen behind
-    // the banner without a carrier, and nothing re-sends them: not the gate
-    // clearing, and not a later Document that moves the version.
-    // [revert-equivalent: demote in onReducerCommit instead (`if (buffered ===
-    // null && settledInFlight !== null) buffered = settledInFlight`) → the
-    // version-advancing Document below re-posts ("sx", 2)]
-    let blocked = false;
-    const s = postedSx({ blockPost: () => blocked });
-    blocked = true;
-    s.sync.onReducerCommit(false); // edit-rejected: no snapshot, gate closed
-    expect(s.posted.length).toBe(1);
-    blocked = false;
-    s.sync.onReducerCommit(false); // gate cleared
-    expect(s.posted.length).toBe(1);
-    s.sync.onHostSnapshot(2, true, 0, 1, "sx");
-    s.sync.onReducerCommit(false);
-    expect(s.posted.length).toBe(1);
   });
 
   it("a REFUSED replay is not re-posted at the unchanged base", () => {
@@ -904,18 +881,15 @@ describe("cm edit-sync — Edit id", () => {
     s.sync.onReducerCommit(false);
     return s;
   };
-  // Post "a" (id 1), force-post "a!" behind it (id 2, retained), then the
-  // Document behind a rejected draft — it shows the draft "a!" while the host
-  // holds "a" — and the `edit-rejected` handling that follows it.
-  const rejectedDraft = (opts?: Parameters<typeof setup>[0]) => {
+  // Settle two successive Edits with authoritative Documents.
+  const settledEdits = (opts?: Parameters<typeof setup>[0]) => {
     const s = setup(opts);
     seed(s);
     s.type("a");
-    s.type("a!");
-    s.sync.flush();
-    s.sync.onHostSnapshot(2, true, 0, 1, "a!", 2);
+    s.sync.onHostSnapshot(2, true, 0, 1, "a", 1);
     s.sync.onReducerCommit(false);
-    s.sync.discardBuffer();
+    s.type("a!");
+    s.sync.onHostSnapshot(3, true, 0, 1, "a!", 2);
     s.sync.onReducerCommit(false);
     return s;
   };
@@ -1124,14 +1098,13 @@ describe("cm edit-sync — Edit id", () => {
     expect(s.sync.real.viewHoldsUnackedEdit("hello!", hostDoc(2, "a", id, 0, 2))).toBe(false);
   });
 
-  it("an Edit applied BEHIND a rejected draft is still ours one Document later", () => {
+  it("an EOL switch after settlement and a refused correction keeps our lineage", () => {
     const onLocalEditDiscarded = vi.fn();
-    const s = rejectedDraft({ onLocalEditDiscarded });
+    const s = settledEdits({ onLocalEditDiscarded });
     s.type("ac");
     const id = s.postedIds.at(-1) as number;
-    // The version moved (an EOL switch) and the Document shows "a" — the Edit
-    // the host applied before it rejected the draft.
-    s.sync.onHostSnapshot(3, true, 0, 1, "a", id);
+    // The version moved for an EOL switch; the correction was refused.
+    s.sync.onHostSnapshot(4, true, 0, 1, "a!", id);
     s.sync.onReducerCommit(false);
     expect(onLocalEditDiscarded).not.toHaveBeenCalled();
     expect(s.sync.recordedIdentity().epoch).toBe(0);
@@ -1149,13 +1122,13 @@ describe("cm edit-sync — Edit id", () => {
     expect(s.sync.real.viewHoldsUnackedEdit("Xc", hostDoc(3, "a", id, 1, 1))).toBe(false);
   });
 
-  it("the Document behind a rejected draft is not foreign; an Edit refused after it is announced", () => {
+  it("a settled Document is authoritative; a later refused Edit is announced", () => {
     const onLocalEditDiscarded = vi.fn();
     const onEditRefused = vi.fn();
-    const s = rejectedDraft({ onLocalEditDiscarded, onEditRefused });
+    const s = settledEdits({ onLocalEditDiscarded, onEditRefused });
     s.type("ac");
     const id = s.postedIds.at(-1) as number;
-    s.sync.onHostSnapshot(2, true, 0, 1, "a", id);
+    s.sync.onHostSnapshot(3, true, 0, 1, "a!", id);
     s.sync.onReducerCommit(false);
     expect(onLocalEditDiscarded).not.toHaveBeenCalled();
     expect(onEditRefused).toHaveBeenCalledTimes(1);
@@ -1435,7 +1408,7 @@ describe("cm edit-sync — showHeld brings the view forward before a replay", ()
 
   describe("is NOT called by the drain a failing post re-enters", () => {
     // The real wiring: editor.ts's postEditMessage answers a post it cannot
-    // send by dispatching `serialize-error`, whose commit closes the gate and
+    // send by dispatching `send-failure`, whose commit closes the gate and
     // drives onReducerCommit(false) — a drain — from INSIDE `post`, before
     // trySend / flush have stamped the bytes being posted. The buffer is then
     // one keystroke BEHIND the view, so showing it would rewind the view and
@@ -1462,7 +1435,7 @@ describe("cm edit-sync — showHeld brings the view forward before a replay", ()
         post: (content, baseDocVersion) => {
           if (h.failNextPost) {
             h.failNextPost = false;
-            h.gateOpen = false; // reducer: serializeError set, editInFlight false
+            h.gateOpen = false; // reducer: sendFailure set, editInFlight false
             h.sync.onReducerCommit(false);
             return false;
           }
@@ -2206,29 +2179,6 @@ describe("cm edit-sync — awaitSettled", () => {
     }
   });
 
-  it("reads the host's rejected-draft Document as settled — the HOST refuses that handoff", async () => {
-    // The host shows a write-gate-rejected draft by sending it back as a
-    // Document (effect-executor `postRejectedDraft`), then `edit-rejected`. The
-    // webview cannot tell that Document from an ack, so it is NOT the authority
-    // here: context-handoff-wiring's pending-rejection gate is. Do not "fix"
-    // this by reading canPost() — the waiter resolves on this commit, before
-    // `edit-rejected` closes the gate.
-    vi.useFakeTimers();
-    try {
-      const { s, sync } = make();
-      s.doc = "bad";
-      sync.onLocalChange();
-      sync.flushIfIdle();
-      const box = track(sync.awaitSettled(1000));
-      sync.onHostSnapshot(1, true, 0, 1, "bad"); // the draft, version unchanged, Edit judged
-      sync.onReducerCommit(false);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(box.outcome).toBe("settled");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("does not serialise the document on a commit when nobody is waiting", () => {
     let reads = 0;
     const sync = createEditSync({
@@ -2516,6 +2466,7 @@ describe("cm edit-sync — epoch-bounded buffers (S3b)", () => {
     s.setDoc("external");
     ackPair(s, 2, 1, 42); // same generation, epoch 0→1 → foreign bytes won
     expect(onLocalEditDiscarded).toHaveBeenCalledTimes(1);
+    expect(onLocalEditDiscarded).toHaveBeenCalledWith("ab");
     expect(s.posted.length).toBe(1); // dropped, not replayed
   });
 
@@ -2608,6 +2559,7 @@ describe("cm edit-sync — epoch-bounded buffers (S3b)", () => {
     s.setDoc("foreign"); // reseeded: the host's bytes are not ours
     ackPair(s, 2, 1, 42);
     expect(onLocalEditDiscarded).toHaveBeenCalledTimes(1);
+    expect(onLocalEditDiscarded).toHaveBeenCalledWith("a");
     expect(s.posted.length).toBe(1); // nothing left to replay
   });
 
@@ -3214,7 +3166,7 @@ describe("cm edit-sync — a writable-era buffer survives readonly", () => {
   });
 
   it("discardBuffer under readonly leaves nothing to hold or announce", () => {
-    // NEGATIVE PIN: the reject-retry discard is unchanged by the hold.
+    // NEGATIVE PIN: the send-failure retry discard is unchanged by the hold.
     const onReadonlyHold = vi.fn();
     const s = setup({ onReadonlyHold });
     holdAb(s);
@@ -3513,5 +3465,79 @@ describe("cm edit-sync — in-flight discards are traced", () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+describe("cm edit-sync — failed-send carrier", () => {
+  it("captures after the synchronous failure drain and announces supersession once", () => {
+    let doc = "seed";
+    let blocked = false;
+    const discard = vi.fn();
+    const foreign = hostDoc(2, "theirs", 0, 1);
+    const posted = vi.fn(() => {
+      blocked = true;
+      expect(sync.viewHoldsUnackedEdit(doc, hostDoc(1, "seed", 0))).toBe(false);
+      sync.onReducerCommit(false);
+      expect(doc).toBe("seedx");
+      return false;
+    });
+    const sync = createRealEditSync({
+      getDoc: () => doc,
+      canPost: () => !blocked,
+      post: posted,
+      scheduleFlush: (run) => run(),
+      onLocalEditDiscarded: discard,
+    });
+    sync.onHostSnapshot(hostDoc(1, "seed", 0));
+    doc = "seedx";
+    sync.onLocalChange();
+    expect(sync.viewHoldsUnackedEdit(doc, hostDoc(1, "seed", 0))).toBe(true);
+    expect(posted).toHaveBeenCalledTimes(1);
+    doc = "theirs";
+    sync.onHostSnapshot(foreign);
+    blocked = false;
+    sync.onReducerCommit(false);
+    sync.onReducerCommit(false);
+    expect(discard).toHaveBeenCalledTimes(1);
+    expect(posted).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("cm edit-sync — stored Markdown acknowledgements", () => {
+  it("posts each next formerly rejected Edit after its normal Document ack", () => {
+    const discarded = vi.fn();
+    const s = setup({ onLocalEditDiscarded: discarded });
+    s.sync.onHostSnapshot(1, true, 0, 1, "hello");
+    for (const [index, content] of [
+      "[x](javascript:1)",
+      "![x](data:image/png,x)",
+      "---\ntitle: unfinished",
+    ].entries()) {
+      s.type(content);
+      expect(s.posted.at(-1)).toEqual({ content, baseDocVersion: index + 1 });
+      expect(s.sync.onHostSnapshot(index + 2, true, 0, 1, content)).toBe(false);
+      s.sync.onReducerCommit(false);
+      expect(s.sync.viewHoldsUnackedEdit(content, 0, 1)).toBe(false);
+    }
+    s.setDoc("external X");
+    s.sync.onHostSnapshot(5, true, 1, 1, "external X");
+    s.sync.onReducerCommit(false);
+    expect(discarded).not.toHaveBeenCalled();
+  });
+
+  it("announces genuinely unsent bytes superseded by an external Document exactly once", () => {
+    const discarded = vi.fn();
+    const s = setup({ onLocalEditDiscarded: discarded });
+    s.sync.onHostSnapshot(1, true, 0, 1, "hello");
+    s.setPostOk(false);
+    s.type("unsent bytes");
+    expect(s.posted).toEqual([]);
+    s.setDoc("external X");
+    s.sync.onHostSnapshot(2, true, 1, 1, "external X");
+    s.sync.onReducerCommit(false);
+    s.sync.onReducerCommit(false);
+    expect(discarded).toHaveBeenCalledTimes(1);
+    expect(discarded).toHaveBeenCalledWith("unsent bytes");
+    expect(s.posted).toEqual([]);
   });
 });

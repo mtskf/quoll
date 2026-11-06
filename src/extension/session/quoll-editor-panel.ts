@@ -1,18 +1,18 @@
 // Custom editor provider for *.md files.
 //
-// The host-session STATE MACHINE — write-lock ordering, the rejected-draft
-// barrier, the resync rules, and the applyEdit settlement — lives in the
+// The host-session STATE MACHINE — write-lock ordering, resync rules,
+// and applyEdit settlement — lives in the
 // pure reducer `src/extension/session/host-session-core.ts`. This file is the VS
 // Code wiring around it: it snapshots live VS Code inputs
 // (`document.version`, `canWriteNow()`, canonical text, theme) into core
 // EVENTS, runs the returned EFFECTS as real side effects, and feeds async
-// outcomes (applyEdit settlement, edit-rejected delivery failure) back into
+// outcomes (applyEdit settlement and write recovery) back into
 // the core via a queued, non-recursive `dispatch`. See host-session-core.ts
 // for the transition table; the rationale below covers only why each piece
 // of VS Code wiring is shaped the way it is.
 //
 //   - `disposed` (local) — set on webviewPanel.onDidDispose. Every async
-//     continuation (the applyEdit / edit-rejected `.then` arms, listener
+//     continuation (the applyEdit `.then` arms, listener
 //     callbacks) checks it synchronously before touching the webview, so a
 //     dispose that races with an in-flight Promise does not postMessage on a
 //     disposed webview and unhandled-reject. The core also tracks a
@@ -49,7 +49,6 @@ import {
   workspace,
 } from "vscode";
 
-import { createIncrementalWriteValidator } from "../../markdown/validate-for-write.js";
 import { perfReport } from "../../shared/perf.js";
 import {
   buildFormatCommandMessage,
@@ -81,10 +80,6 @@ import { toLintDiagnostics } from "../lint/lint-diagnostics.js";
 import { LintMirror } from "../lint/lint-mirror.js";
 import type { StatusBarSlots } from "../status-bar.js";
 import { openInQuollEditor } from "../surface/open-in-quoll.js";
-import {
-  REJECTION_BLOCKS_SWITCH_MESSAGE,
-  registerPendingRejection,
-} from "../surface/rejection-registry.js";
 import { openInTextEditor } from "../surface/reopen-text-editor.js";
 import {
   codeReferenceFileExistsWithinRoot,
@@ -92,7 +87,6 @@ import {
 } from "../surface/reveal-code-reference.js";
 import { createRevertRescueWiring } from "../surface/revert-rescue-wiring.js";
 import { showSafely } from "../surface/show-safely.js";
-import { noteSurface } from "../surface/surface-memory.js";
 import { finalizeForwardSwap, findSourceTab } from "../surface/surface-swap.js";
 import { rescueUnsavedDraft, type UnsavedDraft } from "../surface/unsaved-draft-rescue.js";
 import type { PanelControls, TestHarness } from "../test-harness.js";
@@ -105,14 +99,12 @@ import { buildWebviewHtml } from "../webview-html.js";
 import { canHostWrite } from "./can-host-write.js";
 import {
   buildDocumentMessageFromDocument,
-  buildRejectedDraftFromDocument,
   canonicalDocumentText,
   canonicalizeText,
 } from "./document-canonical.js";
 import {
   buildCaretApplyMessage,
   buildEditorConfigMessage,
-  buildEditRejectedMessage,
   buildThemeMessage,
 } from "./document-message.js";
 import { createEditLineage } from "./edit-lineage.js";
@@ -181,8 +173,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
   public static readonly viewType = "quoll.editMarkdown";
 
   // ONE provider-owned mirror for the whole custom editor, keyed per
-  // document.uri. Advisory lint mirror only — write-gate failures never enter
-  // it (they ride the edit-rejected/toast path). The underlying
+  // document.uri. Advisory lint mirror only. The underlying
   // DiagnosticCollection is registered for disposal on extension deactivate;
   // each panel clears only ITS uri on dispose (below), so multiple open
   // documents never interfere.
@@ -325,37 +316,14 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         };
 
     // The pure host-session reducer owns every state mutation (write-lock
-    // ordering, rejected-draft barrier, resync rules, settlement). This
+    // ordering, resync rules, settlement). This
     // file snapshots live VS Code inputs into EVENTS and runs the returned
     // EFFECTS; see host-session-core.ts for the transition table.
-    const core = createHostSessionCore(
-      {
-        uriString: document.uri.toString(),
-        fsPath: document.uri.fsPath,
-      },
-      // Per-panel incremental write validator: reuses the previous parse via
-      // Lezer TreeFragment so a debounced flush re-parses only the changed
-      // span. Verdict-identical to the stateless default (pinned by a fuzz
-      // battery); the cache lives in this closure, reclaimed once the panel
-      // closure is no longer held (past dispose by at most one async settlement).
-      { validateForWrite: createIncrementalWriteValidator() }
-    );
+    const core = createHostSessionCore({
+      uriString: document.uri.toString(),
+      fsPath: document.uri.fsPath,
+    });
     let state = core.initialState(document.version);
-
-    // The session's pending-rejection predicate — one definition, two readers:
-    // the cross-surface registry below (tab-only command path to the forward
-    // swap) and the context-handoff wiring (both AI handoffs refuse while set).
-    const isRejectionPending = (): boolean => state.rejection.kind === "pending";
-
-    // Publish THIS session's pending-rejection state to the cross-surface
-    // registry keyed by document.uri, so the TAB-ONLY command path to the forward
-    // swap (quoll.reopenInTextEditor title-bar button / quoll.toggleEditor
-    // to-text → reopenActiveQuollTabAsText) can refuse the swap while a write-gate
-    // rejection is pending — the same data-loss guard the in-webview
-    // switch-to-text arm applies below, which that command path cannot reach
-    // because it has no panel closure. Identity-safe deregistration on dispose
-    // (pushed onto `disposables`). See surface/rejection-registry.ts.
-    disposables.push(registerPendingRejection(document.uri.toString(), isRejectionPending));
 
     // Edit-applied barrier for the document side channels (context-handoff /
     // codex-context-handoff / switch-to-text). It DEFERS a side-channel thunk
@@ -375,7 +343,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // transition, COMMITS the resulting state, then runs its effects and settles
     // the barrier; the unit-tested createDrainingDispatcher owns the queue +
     // draining guard, so a re-entrant feedback dispatch (an effect that re-enters
-    // the core — applyEdit settlement, edit-rejected delivery failure,
+    // the core — applyEdit settlement,
     // construct/apply sync-throw) is flat / FIFO rather than a recursive stack.
     // `dispatch` is declared with definite-assignment so the effect executors
     // below can close over it — they are only invoked once a dispatch is in
@@ -446,8 +414,8 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     const liveLineageSince = (readLiveText: () => string): number | null =>
       isWriteLockHeld(state) ? null : lineage.lineageSince(readLiveText);
 
-    // Untitled delivery for both pending Markdown rejection at close and
-    // reducer-owned post-dispose stash rescue. Recovery ownership and limits:
+    // Untitled delivery for reducer-owned post-dispose write-failure rescue.
+    // Recovery ownership and limits:
     // ARCHITECTURE.md's surface/unsaved-draft-rescue.ts entry.
     const rescueDraft = (draft: UnsavedDraft): void =>
       rescueUnsavedDraft(draft, document.uri.fsPath, {
@@ -470,7 +438,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         showError: (message) => window.showErrorMessage(message),
       });
 
-    // Effect executor — owns `post`, `sendEditRejected`, `runApplyEdit`, and
+    // Effect executor — owns `post`, `runApplyEdit`, and
     // `runEffects` (extracted to src/extension/session/effect-executor.ts so the
     // dispose / lifecycle branches get direct unit tests). It stays vscode-free:
     // every VS Code touch (postMessage surface, WorkspaceEdit build/apply,
@@ -479,8 +447,6 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // live theme/canWrite at CALL time, preserving the freshness contract.
     const { post, runEffects } = createEffectExecutor({
       isDisposed: () => disposed,
-      getState: () => state,
-      uriString: () => document.uri.toString(),
       dispatch: (event) => dispatch(event),
       // Route postMessage through the harness override when present so tests can
       // exercise the non-acceptance arms (ok=false / reject). Production builds
@@ -489,7 +455,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       // is re-read on every send — the E2E harness swaps the override PER TEST
       // (after this panel is constructed), so an eagerly-captured surface would
       // pin the construction-time binding and ignore the swap (pinned by the
-      // edit-rejected / resync-fallback e2e).
+      // send-sync-throw-guarded e2e).
       send: (m) =>
         (
           this.harness?.webviewPostMessageOverride ?? ((mm) => webviewPanel.webview.postMessage(mm))
@@ -501,7 +467,6 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       showError,
       rescueUnsavedDraft: rescueDraft,
       canWrite: canWriteNow,
-      readLineageSince: () => liveLineageSince(() => canonicalDocumentText(document)),
       buildSeedDocument: (docVersion, externalEpoch, epochGeneration, settledEditId) => {
         const message = buildDocumentMessageFromDocument(document, {
           docVersion,
@@ -514,22 +479,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         lineage.noteHandedText(() => message.content, docVersion, document.version);
         return message;
       },
-      buildRejectedDraft: (content, docVersion, externalEpoch, epochGeneration, settledEditId) => {
-        const message = buildRejectedDraftFromDocument(document, content, {
-          docVersion,
-          themeKind: themeKindFromColorTheme(window.activeColorTheme.kind),
-          canWrite: canWriteNow(),
-          externalEpoch,
-          epochGeneration,
-          settledEditId,
-        });
-        // The HOST text under this label, not the draft: the draft is the
-        // webview's own bytes, and its next Edit is built on this label.
-        lineage.noteHandedText(() => canonicalDocumentText(document), docVersion, document.version);
-        return message;
-      },
       buildTheme: (themeKind) => buildThemeMessage(themeKind),
-      buildEditRejected: (error) => buildEditRejectedMessage(error),
       applyEditSeam: {
         // OLD text = the live buffer (applyEdit has not run yet, and the write
         // lock — set by the accept transition — blocks any other inbound edit on
@@ -838,20 +788,13 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // both arms behind the editSettledBarrier so a handoff reads the APPLIED
     // document after an in-flight edit settles. The tier-0 reveal choreography,
     // the activeTextEditor guard, and the Codex single-flight guard all live in
-    // createContextHandoffWiring. No shared mutable state with the reducer: the
-    // wiring only READS state.rejection, through the injected predicate.
+    // createContextHandoffWiring. Both handoffs wait for edit settlement.
     const contextHandoffWiring = createContextHandoffWiring({
       document,
       viewType: QuollEditorPanel.viewType,
       editSettledBarrier,
       isDisposed: () => disposed,
       armRevealCaretSuppression: () => revealCaretSuppression.arm(),
-      // Same predicate the switch-to-text arm reads directly and the registry
-      // publishes: while a write-gate rejection is pending the draft is
-      // webview-only, so a handoff would reference a document the user is not
-      // looking at and report success.
-      isRejectionPending,
-      showError,
     });
 
     const handleInbound = (raw: unknown): void => {
@@ -980,8 +923,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           // mutation), mirroring image-write / context-handoff. The wire
           // carries line/character ranges, so the conversion is
           // host-document-independent (no positionAt) — EOL-correct and
-          // stale-safe. Severities are Warning/Information only; write-gate
-          // errors stay on the separate edit-rejected/toast path. The outer
+          // stale-safe. Severities are Warning/Information only. The outer
           // `if (disposed) return` at the top of handleInbound already guards
           // a dispose race. Gated by quoll.lint.problems.enabled via
           // LintMirror; in-editor underlines stay unconditional (webview side).
@@ -1018,75 +960,19 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           // last action; caret apply + document.uri are closure locals, safe
           // across the dispose. finalizeForwardSwap never throws and refuses to
           // close a doc it could not make clean (no revert / no data loss).
-          //
-          // Data-loss guard (rejection pending): a write-gate rejection leaves
-          // the user's draft ONLY webview-side — the on-disk document is
-          // unchanged (clean); the rejection banner is up (showing the error)
-          // and the editor beneath it still shows the un-saved bytes, because
-          // CodeMirror was never reseeded. finalizeForwardSwap below would close
-          // THIS Quoll tab and the text editor would open on the CLEAN disk
-          // snapshot, silently orphaning the typed draft (finalizeForwardSwap
-          // sees a clean doc, so its save-then-close is a no-op close — no
-          // data-loss tripwire fires). Refuse the swap while a rejection is
-          // pending: switch-to-text is a pure side channel that never reloaded
-          // the webview, so the banner + draft stay mounted intact — the user
-          // resolves the highlighted problem first, then switches. NEVER
-          // finalize a surface swap that orphans typed bytes.
-          //
-          // This receipt-time check is a cheap fast path only; the check that
-          // actually closes the hole is the DRAIN-time re-check inside
-          // editSettledBarrier.run below — see the comment there.
-          if (state.rejection.kind === "pending") {
-            showError(REJECTION_BLOCKS_SWITCH_MESSAGE);
-            return;
-          }
           const sourceTab = findSourceTab(
             document.uri.toString(),
             "quoll",
             QuollEditorPanel.viewType
           );
           editSettledBarrier.run(() => {
-            // Re-check at DRAIN time, not just at receipt time: when the switch
-            // arrives while the write lock is held it is DEFERRED here, and the
-            // very settlement that releases this barrier can flip
-            // state.rejection to "pending" in the same transition — a stash
-            // drained on an accepted apply's settlement that fails the
-            // write-gate (host-session-core.ts applyEditSettled's parse-failed
-            // drain arm) sets the rejection AFTER the receipt-time check above
-            // already passed, then settle(true) drains this callback in the
-            // same step(). Without this re-check the deferred swap would close
-            // the Quoll tab and orphan the just-rejected draft.
-            if (state.rejection.kind === "pending") {
-              showError(REJECTION_BLOCKS_SWITCH_MESSAGE);
-              return;
-            }
             const caret = caretWiring.getCaret();
             void openInTextEditor(document.uri).then(
               () => {
-                // Async-window guard: openInTextEditor is async, and the webview
-                // stays live (still focused, still able to emit edits) until
-                // finalizeForwardSwap closes the Quoll tab below. A NEW edit that
-                // arrives and fails the write-gate DURING this open sets
-                // state.rejection to "pending" AFTER both earlier checks passed.
-                // Re-check here, immediately before the surface is finalized: if
-                // a rejection landed, retain the Quoll tab (record "quoll",
-                // overriding the restore watcher's sibling-adopt "text" written
-                // when the text tab opened, and do NOT close the source) so the
-                // just-rejected draft is not orphaned. The text editor that just
-                // opened is a harmless second view of the clean on-disk bytes; the user
-                // resolves the highlighted problem in the Quoll tab, then
-                // switches. Same data-loss invariant as the two checks above —
-                // never finalize a swap that orphans typed bytes.
-                if (state.rejection.kind === "pending") {
-                  noteSurface(document.uri.toString(), "quoll");
-                  showError(REJECTION_BLOCKS_SWITCH_MESSAGE);
-                  return;
-                }
                 // finalizeForwardSwap records the swap OUTCOME in surface memory
                 // LAST, after finalization settles ("text" only if the source
                 // closed), because the restore watcher already sibling-adopted
-                // "text" when the text tab opened; the rejection arm above
-                // overrides that adopt itself (a failed open records nothing).
+                // "text" when the text tab opened (a failed open records nothing).
                 // applyCaretToTextEditor never throws, so a failed caret restore
                 // cannot skip that finalize.
                 if (caret !== null) {
@@ -1097,21 +983,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
                     caretWiring.applyCaretToTextEditor(editor, caret);
                   }
                 }
-                // Point-of-no-return guard: finalizeForwardSwap still awaits
-                // openDoc (and maybe save) before the irreversible tab close, so
-                // a rejection landing in THAT window would slip past the check
-                // above. Pass the same rejection predicate so the close is
-                // aborted synchronously right before it happens — closing every
-                // async window from open-resolve through the actual close. It
-                // returns the shared refusal message as the abort REASON so
-                // finalizeForwardSwap surfaces it (the SAME message the
-                // drain-time / async-window checks above show; this fourth,
-                // point-of-no-return check renders it as a warning — nothing
-                // failed, the swap was refused to protect the draft — while the
-                // earlier checks use an error toast).
-                void finalizeForwardSwap(document.uri, sourceTab, undefined, () =>
-                  state.rejection.kind === "pending" ? REJECTION_BLOCKS_SWITCH_MESSAGE : null
-                );
+                void finalizeForwardSwap(document.uri, sourceTab);
               },
               (err: unknown) => {
                 // Symmetric with quoll.toggleEditor's forward error toast (a
@@ -1224,17 +1096,6 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       // BEFORE the disposed transition clears the lock (prepareDispose reads
       // isWriteLockHeld(state) NOW). MUST run before dispatch({ type: "disposed" }).
       revertRescueWiring.prepareDispose();
-      // A draft the write-gate refused never reached the TextDocument, so VS
-      // Code raised no save prompt and revert-rescue cannot see it: once the
-      // webview is gone the reducer state holds the only copy. Reopen it as an
-      // untitled document (see surface/unsaved-draft-rescue.ts). Runs BEFORE
-      // the teardown below, so a step that throws there cannot take the draft
-      // with it; the rescue reads `state.rejection` and touches nothing else.
-      // A pending rejection at close is projected here. Later settlement and
-      // drain rescues reach the same helper through the reducer effect.
-      if (state.rejection.kind === "pending") {
-        rescueDraft({ content: state.rejection.content, reason: state.rejection.error.message });
-      }
       // Set the local guard FIRST (arms the executor / listener guards), then drive
       // the core's `disposed` transition (releases the lock while retaining the
       // stash for reducer disposition), then tear down. The edit-settled barrier does

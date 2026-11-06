@@ -3,25 +3,14 @@ import { describe, expect, it } from "vitest";
 import { decideEdit } from "../../../src/extension/session/edit-decision.js";
 
 describe("decideEdit", () => {
-  // The adapter never holds a Schema — the validator is injected. The
-  // default in production is validateMarkdownForWrite; tests inject fakes
-  // so a parse-failed arm can be exercised deterministically.
-  const okValidator = () => ({ ok: true }) as const;
-  const failValidator = () =>
-    ({
-      ok: false,
-      error: { code: "unsafe_url", message: "javascript: URL rejected" },
-    }) as const;
-
   const baseInput = {
     baseIsCurrent: true,
     canWrite: true,
     content: "# hello\n",
     currentContent: "different\n",
-    markdownValidator: okValidator,
   };
 
-  it("accepts a valid edit when base matches, canWrite=true, and content parses", () => {
+  it("accepts changed content when the base is current and writable", () => {
     expect(decideEdit(baseInput).kind).toBe("accept");
   });
 
@@ -71,28 +60,41 @@ describe("decideEdit", () => {
     expect(verdict.kind).toBe("no-op");
   });
 
-  it("treats an EOL-only difference as no-op, never validating or writing it", () => {
+  it("treats an EOL-only difference as no-op, without writing it", () => {
     // An Edit built before an EOL-mode switch carries the old line endings;
     // `currentContent` is canonicalised to the new ones. Same text → no-op, so
-    // the validator (here: one that would fail) is never consulted.
+    // no write is needed.
     const verdict = decideEdit({
       ...baseInput,
       content: "a\nb",
       currentContent: "a\r\nb",
-      markdownValidator: failValidator,
     });
     expect(verdict.kind).toBe("no-op");
   });
+});
 
-  it("rejects with kind=parse-failed and surfaces the error when the validator fails", () => {
-    // Defense in depth (plan §456-458): if the inbound content does not
-    // parse, the host must NOT applyEdit. The webview gate should have
-    // caught this; reaching the host is a sign the gate was bypassed or
-    // a malformed payload slipped through.
-    const verdict = decideEdit({ ...baseInput, markdownValidator: failValidator });
-    expect(verdict.kind).toBe("parse-failed");
-    if (verdict.kind === "parse-failed") {
-      expect(verdict.error.code).toBe("unsafe_url");
-    }
+describe("decideEdit — Markdown is stored as text", () => {
+  it.each([
+    "[x](javascript:alert(1))",
+    "![x](data:image/svg+xml,test)",
+    "[x](file:///tmp/example.md)",
+    "[x](//example.com/path)",
+    "[x](javascript&#58;alert(1))",
+    "[x][id]\n\n[id]: javascript:alert(1)",
+    "![x][id]\n\n[id]: data:image/png,x",
+    "[id][]\n\n[id]: file:///tmp/x",
+    "[id]\n\n[id]: //example.com/x",
+    "| h |\n| --- |\n| [x](javascript:1) |",
+    "<javascript:alert(1)>",
+    "<xmpp:user@example.com>",
+    "---\ntitle: unfinished",
+    "---\ntitle: x\u2028---\n---\nbody\n",
+    "---\ntitle: x\r---\n---\nbody\n",
+    "[unused]: javascript:1\n",
+    "[x][id]\n\n[id]: https://example.com\n[id]: javascript:1\n",
+  ])("accepts %j", (content) => {
+    expect(
+      decideEdit({ baseIsCurrent: true, canWrite: true, content, currentContent: "seed" })
+    ).toEqual({ kind: "accept" });
   });
 });

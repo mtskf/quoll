@@ -260,7 +260,7 @@ const headerIndent = foldService.of((state, start, end) => {
  *      to parseCode, so raw HTML in the Markdown body stays opaque; a fenced ```html
  *      block is still highlighted via the code path (codeParser ≠ htmlParser).
  *      Also + highlightMarkExtension: the Obsidian-style ==highlight== inline mark.
- *      The SAME rule is registered host-side in src/markdown/lezer-url-walker.ts
+ *      The SAME rule is registered in the shared src/markdown/gfm-parser.ts
  *      (shared from src/markdown/highlight-mark.ts) so both parsers produce the
  *      same Highlight span — pinned by test/webview/highlight-parity.test.ts.
  *    - data: markdownLanguage.data REUSED — markdownKeymap's commands call

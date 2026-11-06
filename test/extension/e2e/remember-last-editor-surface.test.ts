@@ -39,9 +39,6 @@ const textTab =
   (t: vscode.Tab): boolean =>
     t.input instanceof vscode.TabInputText && t.input.uri.toString() === uri.toString();
 const allTabs = (): vscode.Tab[] => vscode.window.tabGroups.all.flatMap((g) => g.tabs);
-const isEditRejectedEvent = (e: { message: { type: string } }): boolean =>
-  e.message.type === "edit-rejected";
-type QuollPanel = NonNullable<Awaited<ReturnType<typeof getHarness>>["activePanel"]>;
 
 async function openInQuoll(uri: vscode.Uri): Promise<void> {
   await vscode.commands.executeCommand("vscode.openWith", uri, VIEW_TYPE);
@@ -136,76 +133,38 @@ describe("remember last editor surface (session-only)", function () {
     assert.ok(allTabs().some(customTab(uri)), "Quoll surface adopted (not bounced away)");
   });
 
-  // A forward swap refused by a write-gate rejection that lands DURING the async
-  // text open must leave Quoll remembered. The watcher records "text" the moment
-  // the text tab opens beside the still-open Quoll tab (sibling-adopt), so the
-  // swap site must correct it to "quoll" once it refuses (ARCH-06a-3).
-  //
-  // Arm-reached: BOTH tabs open proves the target text tab was created, which
-  // excludes a pre-open (receipt / drain / fast-path) refusal — that would pass
-  // vacuously, since the initial Quoll open already left memory "quoll". It
-  // does not distinguish the post-open rejection check from the finalize abort
-  // backstop (both end "quoll"); timing decides which one runs.
-  async function rejectDuringOpen(
-    uri: vscode.Uri,
-    startSwap: (panel: QuollPanel) => Thenable<unknown> | undefined
-  ): Promise<void> {
-    const harness = await getHarness();
-    await vscode.commands.executeCommand("vscode.openWith", uri, VIEW_TYPE);
-    const seed = await harness.waitForEvent(isDocumentEvent, 8000);
-    const panel = harness.activePanel;
-    assert.ok(panel, "no active panel");
-    harness.clearEvents();
-    const seedV = seed.message.docVersion;
-    const seededContent = (seed.message as { content: string }).content;
-    const swap = startSwap(panel);
-    // Same synchronous block as the swap start: the invalid edit is processed
-    // before the text open resolves.
-    panel.simulateInbound({
-      protocol: PROTOCOL_VERSION,
-      type: "edit",
-      editId: 21,
-      content: `${seededContent}\n[bad](javascript:alert(1))\n`,
-      baseDocVersion: seedV,
+  for (const command of [false, true]) {
+    it(`unsafe Markdown switches to text and remembers text (${command})`, async () => {
+      const uri = tempMd(`unsafe-swap-${command}.md`);
+      const harness = await getHarness();
+      await vscode.commands.executeCommand("vscode.openWith", uri, VIEW_TYPE);
+      const seed = await harness.waitForEvent(isDocumentEvent, 8000);
+      const panel = harness.activePanel;
+      assert.ok(panel);
+      const content = "[x](javascript:1)\n";
+      panel.simulateInbound({
+        protocol: PROTOCOL_VERSION,
+        type: "edit",
+        editId: 21,
+        baseDocVersion: seed.message.docVersion,
+        content,
+      });
+      await harness.waitForEvent((e) => isDocumentEvent(e) && e.message.settledEditId === 21, 8000);
+      if (command) {
+        await vscode.commands.executeCommand("quoll.reopenInTextEditor");
+      } else {
+        panel.simulateInbound({ protocol: PROTOCOL_VERSION, type: "switch-to-text" });
+      }
+      await waitFor(() => allTabs().some(textTab(uri)) && !allTabs().some(customTab(uri)));
+      assert.strictEqual((await vscode.workspace.openTextDocument(uri)).getText(), content);
+      assert.strictEqual((await vscode.workspace.openTextDocument(uri)).isDirty, false);
+      await closeDocTabs(uri);
+      await openInText(uri);
+      await tick(600);
+      assert.ok(allTabs().some(textTab(uri)));
+      assert.ok(!allTabs().some(customTab(uri)));
     });
-    await harness.waitForEvent(isEditRejectedEvent, 5000);
-    await swap;
-    await tick(800);
-    const tabs = allTabs();
-    const labels = JSON.stringify(tabs.map((t) => t.label));
-    assert.ok(tabs.some(customTab(uri)), `arm reached: Quoll tab retained — ${labels}`);
-    assert.ok(tabs.some(textTab(uri)), `arm reached: target text tab was opened — ${labels}`);
-    // Safe to close with the rejection still pending: the E2E harness
-    // suppresses the rejected-draft rescue (suppressRescuedDrafts), so no
-    // rescue tab opens and the close is a plain discard.
-    await closeDocTabs(uri);
-    // FRESH text open: a remembered "quoll" upgrades it back to Quoll.
-    await openInText(uri);
-    await waitFor(() => allTabs().some(customTab(uri)) && !allTabs().some(textTab(uri)));
-    const reopened = allTabs();
-    assert.ok(reopened.some(customTab(uri)), "Quoll still remembered: reopened in Quoll");
-    assert.ok(
-      !reopened.some(textTab(uri)),
-      `text tab consolidated — ${JSON.stringify(reopened.map((t) => t.label))}`
-    );
   }
-
-  it("rejected switch-to-text (webview arm): Quoll stays remembered", async () => {
-    const uri = tempMd("reject-webview-swap.md");
-    await rejectDuringOpen(uri, (panel) => {
-      panel.simulateInbound({ protocol: PROTOCOL_VERSION, type: "switch-to-text" });
-      return undefined;
-    });
-  });
-
-  it("rejected reopenInTextEditor (command arm): Quoll stays remembered", async () => {
-    const uri = tempMd("reject-command-swap.md");
-    // NOT awaited before the invalid edit: the command's fast-path check runs
-    // synchronously, then it suspends on the text open. Timing is not enforced —
-    // this pins the combined rejection/abort outcome, not exclusive execution of
-    // the post-open rejection arm (toggle-editor.test.ts pins that arm's write).
-    await rejectDuringOpen(uri, () => vscode.commands.executeCommand("quoll.reopenInTextEditor"));
-  });
 
   it("no memory: a first fresh open is left in text (default), not disturbed", async () => {
     const uri = tempMd("first-open.md");

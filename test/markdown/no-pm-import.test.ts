@@ -1,13 +1,4 @@
-// C2 acceptance: the write-gate (validate-for-write.ts +
-// lezer-url-walker.ts + url-allowlist.ts) has ZERO prosemirror-*
-// runtime imports and only imports from a declared allow-list.
-// Type-only imports of MarkdownError from errors.ts are fine —
-// runtime is what the gate's framework-independence promises.
-//
-// Inspection scope: import-from statements + side-effect imports +
-// re-exports. Dynamic `import("x")` is NOT scanned by this file; a
-// regression introducing one would need code review to land, and the
-// human reviewer is the backstop for that vector.
+// Shared Markdown modules have no ProseMirror runtime imports.
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -66,9 +57,12 @@ function listImports(source: string): { module: string; isType: boolean }[] {
   return out;
 }
 
-const GATE_FILES = [
-  "src/markdown/validate-for-write.ts",
-  "src/markdown/lezer-url-walker.ts",
+const MARKDOWN_FILES = [
+  "src/markdown/gfm-parser.ts",
+  "src/markdown/highlight-mark.ts",
+  "src/markdown/frontmatter.ts",
+  "src/markdown/url-decode.ts",
+  "src/markdown/render-safe-markdown-destination.ts",
   "src/markdown/url-allowlist.ts",
 ];
 
@@ -83,78 +77,23 @@ const GATE_FILES = [
 //     flagged by code review, not by this test.
 //   - Transitive runtime deps through an allow-listed module (e.g. if
 //     `./url-allowlist.js` someday imported a PM module, this test
-//     would still pass because we only inspect the gate files' own
+//     would still pass because we only inspect the Markdown files' own
 //     imports). The per-file allow-lists narrow blast radius but do
 //     not prove reachability.
 //   - Source-level "no `prosemirror` substring in the file" is
 //     deliberately NOT enforced — the impl files mention "ProseMirror"
 //     in migration-context comments. We pin imports, not free text.
-describe("C2 write-gate has no ProseMirror runtime imports declared in its own files", () => {
-  it.each(GATE_FILES)("%s has no prosemirror-* import statement", (rel) => {
+describe("shared Markdown has no ProseMirror runtime imports declared in its own files", () => {
+  it.each(MARKDOWN_FILES)("%s has no prosemirror-* import statement", (rel) => {
     const src = readSource(rel);
     for (const { module } of listImports(src)) {
       expect(module.startsWith("prosemirror-")).toBe(false);
     }
   });
 
-  it.each(GATE_FILES)("%s does not import from the doomed schema.ts", (rel) => {
+  it.each(MARKDOWN_FILES)("%s does not import from the doomed schema.ts", (rel) => {
     const src = readSource(rel);
     expect(src).not.toMatch(/from\s+["'][^"']*editor\/schema(?:\.js)?["']/);
-  });
-
-  it("validate-for-write.ts runtime imports are inside the framework-agnostic allow-list", () => {
-    // Allow-listed runtime deps. errors.ts is currently type-only; if
-    // a future change adds a runtime errors.js import, extend this
-    // list deliberately.
-    // ../shared/perf.js: the dev-only perf aggregator (zero-dep,
-    // framework-agnostic, dead-code-eliminated in production via the
-    // QUOLL_PERF build flag). It imports nothing, so allow-listing it
-    // drags in no framework transitively — the gate stays PM-free.
-    const ALLOW = new Set(["./frontmatter.js", "./lezer-url-walker.js", "../shared/perf.js"]);
-    const imports = listImports(readSource("src/markdown/validate-for-write.ts"));
-    for (const { module, isType } of imports) {
-      if (isType) {
-        continue; // type-only imports are ignored — they emit no runtime code
-      }
-      expect(ALLOW.has(module)).toBe(true);
-    }
-  });
-
-  it("lezer-url-walker.ts runtime imports stay inside the lezer + allowlist allow-list", () => {
-    // ./url-decode.js was added by Slice C4b Task 3: the pure decoder
-    // helpers were extracted to that module so the webview's
-    // click-to-open handler can decode without dragging the host-side
-    // Lezer parser into the webview bundle. lezer-url-walker.ts
-    // re-imports + re-exports decodeMarkdownDestination to keep the
-    // historic import path green.
-    // @lezer/common was added when the write-gate gained incremental
-    // re-parse: `TreeFragment` (value) + `ChangedRange` (type) drive the
-    // per-panel incremental unsafe-URL finder. It is a direct dependency
-    // (added for the lint incremental parser in #66) and drags in no
-    // framework — the gate stays PM-free.
-    // ./highlight-mark.js is the shared Obsidian-style ==highlight== rule,
-    // registered in this parser AND the webview. It imports only @lezer/highlight
-    // (Tag) + @lezer/markdown (types) — both framework-agnostic and PM-free — so
-    // allow-listing it drags in no framework transitively.
-    // ./gfm-parser.js is the single configured GFM parser export (Format
-    // Document slice): the walker now imports it instead of duplicating
-    // parser.configure(...). It imports only @lezer/markdown + ./highlight-mark.js
-    // — both PM-free — so the gate stays framework-free.
-    const ALLOW = new Set([
-      "@lezer/markdown",
-      "@lezer/common",
-      "./highlight-mark.js",
-      "./gfm-parser.js",
-      "./url-allowlist.js",
-      "./url-decode.js",
-    ]);
-    const imports = listImports(readSource("src/markdown/lezer-url-walker.ts"));
-    for (const { module, isType } of imports) {
-      if (isType) {
-        continue;
-      }
-      expect(ALLOW.has(module)).toBe(true);
-    }
   });
 
   it("url-allowlist.ts has no runtime imports (framework-agnostic primitive)", () => {
@@ -171,7 +110,7 @@ describe("C2 write-gate has no ProseMirror runtime imports declared in its own f
   // classified it as RUNTIME — a stylistic refactor (Biome's
   // `useImportType` autofix or a contributor's autoformat) toward the
   // inline form would have caused a false-positive failure on legitimate
-  // type-only imports of a PM module from outside the gate.
+  // type-only imports of a PM module from outside these modules.
   it('treats inline `import { type X } from "y"` as type-only', () => {
     const fake = `import { type Foo } from "prosemirror-model";\n`;
     const imports = listImports(fake);

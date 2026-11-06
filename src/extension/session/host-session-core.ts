@@ -1,6 +1,6 @@
 // Pure host-session reducer for QuollEditorPanel.
 //
-// Why a reducer: the host's write-lock ordering, rejection barrier,
+// Why a reducer: the host's write-lock ordering,
 // resync rules, and applyEdit settlement all read/advance the SAME lock
 // state. Keeping them in one typed transition table (rather than scattered
 // across closure variables and async `.then` arms) is what makes the
@@ -14,15 +14,10 @@
 // SELF-CONTAINED data (HostSessionEffect[]) for the wiring to execute. The
 // version a Document is stamped with is a core decision, so it travels on
 // the effect (`docVersion`) — the executor never re-reads mutable state for
-// it. Async outcomes (applyEdit settlement, edit-rejected delivery failure)
+// it. Async outcomes (applyEdit settlement)
 // and synchronous feedback (construct/apply throw) re-enter as feedback
 // events, so no mutation escapes the table.
 
-import type { MarkdownError } from "../../markdown/errors.js";
-import {
-  type ValidateForWriteResult,
-  validateMarkdownForWrite,
-} from "../../markdown/validate-for-write.js";
 import type { ThemeKind } from "../../shared/protocol.js";
 import { sameTextIgnoringEol } from "../../shared/text-equality.js";
 import { decideEdit } from "./edit-decision.js";
@@ -31,15 +26,6 @@ export interface HostSessionContext {
   readonly uriString: string;
   readonly fsPath: string;
 }
-
-export type RejectionState =
-  | { readonly kind: "none" }
-  | {
-      readonly kind: "pending";
-      readonly id: number;
-      readonly content: string;
-      readonly error: MarkdownError;
-    };
 
 export interface PendingEdit {
   readonly content: string;
@@ -51,16 +37,6 @@ export interface HostSessionState {
   readonly lastAppliedDocVersion: number;
   readonly pendingApplyBaseVersion: number | null;
   readonly disposed: boolean;
-  readonly rejection: RejectionState;
-  // Monotonic id stamped on each rejection DELIVERY so a delayed
-  // `postEditRejected` delivery-failure (which re-enters async) can only clear
-  // the delivery it was issued for. It is re-stamped on every (re-)delivery —
-  // the initial `parse-failed` post AND each `ready`/`seed` replay — so a
-  // stale failure can neither clobber a NEWER rejection B created after an
-  // intervening resync (Codex N2) NOR re-clear the SAME rejection A after a
-  // `ready` replay has freshly re-delivered its banner (Codex N6). Survives
-  // the `none` state so ids are never reused.
-  readonly nextRejectionId: number;
   // The latest inbound Edit that arrived while the write lock was held.
   // Stashed instead of dropped so it can drain on the in-flight apply's
   // settlement — the sub-ms "type one-more-char then close" data-loss race.
@@ -76,7 +52,7 @@ export interface HostSessionState {
   readonly inFlightContent: string | null;
   // Document identity pair carried on every Document post (S3a). The reducer
   // OWNS both (like `lastAppliedDocVersion`) so they travel on the
-  // postDocument/postRejectedDraft effects as core decisions, never re-read by
+  // postDocument effects as core decisions, never re-read by
   // the executor. `externalEpoch` advances (via `resyncLiveVersion` and the
   // settlement foreign-bytes check) whenever content changed by anything other
   // than the webview's own acked edit lineage; it starts at 0. `epochGeneration`
@@ -241,17 +217,6 @@ export type HostSessionEvent =
       readonly divergedAfterApply?: boolean;
     }
   | {
-      readonly type: "editRejectedDeliveryFailed";
-      readonly id: number;
-      // `null` ⇔ the recovery read was unobserved (the executor's guarded
-      // readVersionGuarded failed) — the arm clears the rejection (a stuck
-      // pending rejection is the deadlock this event exists to break) but
-      // WITHHOLDS the recovery reseed rather than fabricating a label.
-      readonly documentVersion: number | null;
-      // See the `documentChanged` variant.
-      readonly lineageSince: number | null;
-    }
-  | {
       // A throwing `applyEditSettled` TRANSITION unwinds before the panel
       // commits the state that would have released the write lock (the panel's
       // `commitTransition` assigns `state` only on a normal return), so the lock
@@ -308,29 +273,13 @@ export type HostSessionEffect =
       readonly epochGeneration: number;
       readonly settledEditId: number;
     }
-  | {
-      readonly type: "postRejectedDraft";
-      readonly content: string;
-      readonly error: MarkdownError;
-      readonly docVersion: number;
-      readonly externalEpoch: number;
-      readonly epochGeneration: number;
-      readonly settledEditId: number;
-      // The freshly re-stamped delivery id (Codex N6). The executor delivers
-      // the replayed banner failure-aware via `sendEditRejected(error, id)`, so
-      // a failed replay delivery re-enters as `editRejectedDeliveryFailed(id)`
-      // and recovers — it never reads mutable state for the id.
-      readonly id: number;
-    }
-  | { readonly type: "postEditRejected"; readonly error: MarkdownError; readonly id: number }
   | { readonly type: "postTheme"; readonly themeKind: ThemeKind }
   | { readonly type: "applyEdit"; readonly content: string; readonly baseDocVersion: number }
   | { readonly type: "showError"; readonly message: string }
   // Post-dispose rescue of a stash or of the final in-flight target after an
   // undrainable settlement, drain refusal, or transition failure. Delivery is
   // owned by surface/unsaved-draft-rescue.ts.
-  // The `disposed` arm itself emits no rescue; the panel projects a pending
-  // Markdown rejection at close through the same helper.
+  // The `disposed` arm itself emits no rescue; settlement handles failed writes.
   | {
       readonly type: "rescueUnsavedDraft";
       readonly content: string;
@@ -348,7 +297,6 @@ export interface HostSessionResult {
 }
 
 export interface HostSessionDeps {
-  readonly validateForWrite?: (content: string) => ValidateForWriteResult;
   // Mint the per-host-session `epochGeneration` nonce. Injected so tests get a
   // deterministic identity; the production default is a counter-salted
   // timestamp (unique across sessions even within one millisecond). Called
@@ -426,8 +374,6 @@ const undrainableReason = (
 
 const drainRefusalReason = (verdict: ReturnType<typeof decideEdit>): string | null => {
   switch (verdict.kind) {
-    case "parse-failed":
-      return verdict.error.message;
     case "readonly":
       return "the file could not be confirmed writable";
     case "stale":
@@ -477,8 +423,6 @@ function resyncLiveVersion(
     externalEpoch: foreignAdvance ? state.externalEpoch + 1 : state.externalEpoch,
   };
 }
-
-const NONE: RejectionState = { kind: "none" };
 
 // Build a postDocument effect stamping the identity pair from the POST-transition
 // state `s` (so any epoch++ made in the same transition rides the Document out).
@@ -596,9 +540,7 @@ function failureToasts(
 // ORDER IS LOAD-BEARING on every non-ok arm: the failure `showError` comes
 // BEFORE the ack `postDocument`. The two are independent surfaces — `showError`
 // is a VS Code window toast, `postDocument` a webview-bound message — so there
-// is no coupling to respect (the "Document before edit-rejected" constraint on
-// `postRejectedDraft` is a different pair, both webview-bound and read by the
-// same webview reducer). Toast-first is DEFENCE IN DEPTH, not the only guard:
+// is no coupling to respect. Toast-first is DEFENCE IN DEPTH, not the only guard:
 // the reseed is the effect most likely to throw (`buildSeedDocument` bottoms out
 // in `canonicalDocumentText(document)`), but the executor catches a builder
 // throw and continues the effect loop, and its `showError` call is guarded too,
@@ -646,7 +588,6 @@ function settlementEffects(
 }
 
 export function createHostSessionCore(context: HostSessionContext, deps: HostSessionDeps = {}) {
-  const validateForWrite = deps.validateForWrite ?? validateMarkdownForWrite;
   const mintEpochGeneration = deps.mintEpochGeneration ?? defaultMintEpochGeneration;
 
   function initialState(docVersion: number): HostSessionState {
@@ -655,8 +596,6 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
       lastAppliedDocVersion: docVersion,
       pendingApplyBaseVersion: null,
       disposed: false,
-      rejection: NONE,
-      nextRejectionId: 1,
       pendingEdit: null,
       inFlightContent: null,
       externalEpoch: 0,
@@ -704,44 +643,6 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
             ],
           };
         }
-        if (state.rejection.kind === "pending") {
-          // Re-stamp a FRESH delivery id on the replayed rejection (Codex N6).
-          // This replay is a NEW re-delivery ATTEMPT of A's banner carrying a
-          // fresh delivery id, so the per-delivery identity holds at both ends:
-          //   (a) an earlier `postEditRejected` attempt still in flight is now
-          //       stale — its delayed delivery-failure (carrying the pre-replay
-          //       id) no longer matches, so it is a no-op and cannot re-clear
-          //       the banner this replay restored.
-          //   (b) THIS attempt's own delivery is NOT assumed to succeed: the
-          //       executor delivers `postRejectedDraft`'s banner failure-aware
-          //       via `sendEditRejected(error, id)`, so if the replay banner
-          //       delivery itself fails (webview detaches mid-reload) it
-          //       re-enters as `editRejectedDeliveryFailed(id)` — matching THIS
-          //       id — and clears the rejection + reseeds, recovering rather
-          //       than leaving it stuck pending.
-          // Without the re-stamp the replayed A reuses A's identity and (a)'s
-          // stale failure would match in the `editRejectedDeliveryFailed` arm.
-          const id = state.nextRejectionId;
-          return {
-            state: {
-              ...state,
-              rejection: { ...state.rejection, id },
-              nextRejectionId: id + 1,
-            },
-            effects: [
-              {
-                type: "postRejectedDraft",
-                content: state.rejection.content,
-                error: state.rejection.error,
-                docVersion: state.lastAppliedDocVersion,
-                externalEpoch: state.externalEpoch,
-                epochGeneration: state.epochGeneration,
-                settledEditId: state.lastEditId,
-                id,
-              },
-            ],
-          };
-        }
         // Resync to the LIVE snapshot before posting. The Document carries live
         // bytes (buildSeedDocument reads document.getText()); trusting the
         // possibly-stale stored version would pair new bytes with an old
@@ -757,7 +658,7 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
           event.type === "ready" && event.lineageSince !== null
         );
         return {
-          state: { ...resynced, rejection: NONE },
+          state: resynced,
           effects: [postDoc(resynced, resynced.lastAppliedDocVersion)],
         };
       }
@@ -817,40 +718,16 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
           canWrite: event.canWrite,
           content: event.content,
           currentContent: event.currentContent,
-          markdownValidator: validateForWrite,
         });
         switch (verdict.kind) {
           case "readonly":
           case "stale":
           case "no-op":
             return {
-              state: { ...resynced, rejection: NONE },
+              state: resynced,
               effects: [postDoc(resynced, resynced.lastAppliedDocVersion)],
             };
-          case "parse-failed": {
-            const id = resynced.nextRejectionId;
-            return {
-              state: {
-                ...resynced,
-                rejection: { kind: "pending", id, content: event.content, error: verdict.error },
-                nextRejectionId: id + 1,
-              },
-              effects: [
-                { type: "postEditRejected", error: verdict.error, id },
-                { type: "showError", message: `Cannot save: ${verdict.error.message}` },
-              ],
-            };
-          }
           case "accept":
-            // A newer edit supersedes a pending rejected draft, so clear the
-            // rejection like every other inbound-edit arm and settlement path.
-            // This also upholds the lock-held invariant structurally: the
-            // `editRejectedDeliveryFailed` arm has no lock deferral (unlike
-            // documentChanged / viewStateVisible), so a rejection surviving
-            // into the lock would let a delayed delivery-failure post a
-            // pre-apply-version Document mid-lock — an unsolicited reseed
-            // that clears the webview's editInFlight and can transiently
-            // wipe the accepted edit's content.
             return {
               // The lock records the version the apply STARTS from, not the
               // Edit's stated base: the settlement's `ackLabelObserved` and
@@ -861,7 +738,6 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
                 ...resynced,
                 pendingApplyBaseVersion: liveVersion,
                 inFlightContent: event.content,
-                rejection: NONE,
               },
               effects: [{ type: "applyEdit", content: event.content, baseDocVersion: liveVersion }],
             };
@@ -896,7 +772,6 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         const released: HostSessionState = {
           ...state,
           pendingApplyBaseVersion: null,
-          rejection: NONE,
           pendingEdit: null,
           inFlightContent: null,
         };
@@ -1193,7 +1068,6 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
           // `canDrain` already narrowed `observed` to `string` — the drain is
           // unreachable without an OBSERVED settled snapshot.
           currentContent: observed,
-          markdownValidator: validateForWrite,
         });
         // The drain's own triage record for the STALE RE-BASE residual the
         // `canDrain` comment accepts. Every other degraded path in this file
@@ -1203,8 +1077,7 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // readonly/stale/no-op arm below — that arm already logs the same
         // incident through `withholdAckEffects`. NOT emitted post-dispose
         // either: there the `accept` arm deliberately does not re-acquire the
-        // lock, so neither consequence named below can occur (no later
-        // settlement reads this base, and no draft goes out).
+        // lock, so no later settlement reads this base.
         // Both exclusions live HERE, in the one place the record is built, so no
         // call site can carry half the gate: an arm that spreads it emits it
         // exactly when it is warranted.
@@ -1214,14 +1087,11 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
             : [
                 {
                   type: "logWarn",
-                  // Shared incident sentence, then the arm's own consequence —
-                  // written as ONE owner for the shared half so the two arms
-                  // cannot drift apart on what the incident WAS.
+                  // Record both the unobserved base and its consequence for a
+                  // later settlement that also misses its content read.
                   message:
                     "[quoll] unlabelled drain: the pending stash was re-based onto an UNOBSERVED settlement label (a known-stale lower bound). " +
-                    (verdict.kind === "accept"
-                      ? "The bytes land; the residual is that a later settlement which also misses its CONTENT read can score our own increment as foreign (one spurious epoch bump → replay-buffer drop)"
-                      : "The stash did not validate, so no bytes land; the residual is that its rejected draft goes out stamped with this stale label"),
+                    "The bytes land; the residual is that a later settlement which also misses its CONTENT read can score our own increment as foreign (one spurious epoch bump → replay-buffer drop)",
                   detail: {
                     uri: state.context.uriString,
                     heldBase,
@@ -1256,32 +1126,6 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
                 },
               ],
             };
-          case "parse-failed": {
-            const id = settled.nextRejectionId;
-            return {
-              state: {
-                ...settled,
-                rejection: { kind: "pending", id, content: stash.content, error: verdict.error },
-                nextRejectionId: id + 1,
-              },
-              // The disposed refusal was handled before this switch. Alive,
-              // redeliver the rejected draft at the settled version.
-              effects: [
-                ...staleReBaseWarn,
-                {
-                  type: "postRejectedDraft",
-                  content: stash.content,
-                  error: verdict.error,
-                  docVersion: settled.lastAppliedDocVersion,
-                  externalEpoch: settled.externalEpoch,
-                  epochGeneration: settled.epochGeneration,
-                  settledEditId: settled.lastEditId,
-                  id,
-                },
-                { type: "showError", message: `Cannot save: ${verdict.error.message}` },
-              ],
-            };
-          }
           case "readonly":
           case "stale":
           case "no-op":
@@ -1339,7 +1183,6 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
           pendingApplyBaseVersion: null,
           inFlightContent: null,
           pendingEdit: null,
-          rejection: NONE,
         };
         // The settlement's own gate, computed the same way: our carried version
         // is an observation, OR a lock-held resync already raised the label
@@ -1435,72 +1278,9 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
           effects: rescued.length ? [...rescued, triage] : [toast, ...ack, triage],
         };
       }
-      case "editRejectedDeliveryFailed": {
-        // Per-delivery identity (Codex N2/N6): only the delivery this failure
-        // was issued for may be cleared. A stale failure whose id no longer
-        // matches is a no-op. The id no longer matches when a newer rejection
-        // B is pending or the rejection was cleared to `none` by a
-        // resync/settlement (N2), OR when a `ready`/`seed` replay re-delivered
-        // the SAME rejection A and re-stamped its delivery id (N6). In neither
-        // case may the stale failure clobber the live banner nor force an
-        // unsolicited reseed.
-        if (state.rejection.kind !== "pending" || state.rejection.id !== event.id) {
-          return { state, effects: [] };
-        }
-        if (event.documentVersion === null) {
-          // UNOBSERVED recovery read (the executor's guarded readVersionGuarded
-          // failed): same answer as the settlement ack gate — the recovery
-          // reseed pairs LIVE bytes with the version label, so no observation ⇒
-          // no Document. The rejection is still CLEARED (a stuck pending
-          // rejection suppresses visible-edge resync — the deadlock this arm
-          // exists to break); the user is signalled through the shared latch,
-          // and the next OBSERVED Document (documentChanged / ready / edit
-          // resync) converges.
-          return {
-            state: { ...state, rejection: NONE },
-            // Same ordering rule as `withholdAckEffects` (this is an inline
-            // copy of that pair): the user-visible signal precedes the triage
-            // log, as defence in depth behind the executor's own per-effect
-            // containment — see that helper for why the containment does not
-            // make the order redundant.
-            effects: [
-              { type: "showResyncFailure" },
-              {
-                type: "logWarn",
-                message:
-                  "[quoll] edit-rejected recovery reseed withheld: the live document version could not be read; rejection cleared, awaiting an observed Document",
-                detail: { uri: state.context.uriString, id: event.id },
-              },
-            ],
-          };
-        }
-        // Resync to the live snapshot before the recovery reseed (see the
-        // `ready` arm) — the reseed posts live bytes, so it must carry the
-        // matching live version (and a bumped epoch if the live version moved
-        // and the panel could not prove the text unchanged: this arm clears a
-        // rejection, which the `accept` arm proved cannot survive into the write
-        // lock, so the resync is lock-free here).
-        const resynced = resyncLiveVersion(
-          state,
-          event.documentVersion,
-          event.lineageSince !== null
-        );
-        return {
-          state: { ...resynced, rejection: NONE },
-          effects: [postDoc(resynced, resynced.lastAppliedDocVersion)],
-        };
-      }
 
       case "documentChanged": {
-        // `workspace.onDidChangeTextDocument` also fires with empty
-        // contentChanges and an UNCHANGED version on dirty-state transitions
-        // (every save; near-continuous under autosave `afterDelay`). Such a
-        // version-identical event carries no new bytes, so re-posting the
-        // Document would destroy a pending rejected draft (the webview clears
-        // the reject banner on a non-stale Document) and needlessly re-seed —
-        // breaking the "preserves the user's typed bytes" invariant. No-op it:
-        // the rejection is preserved and nothing is posted. Version-advancing
-        // external edits fall through to the resync below.
+        // Save-only dirty-state events carry no new bytes. Avoid an unnecessary reseed.
         if (event.documentVersion === state.lastAppliedDocVersion) {
           return { state, effects: [] };
         }
@@ -1514,19 +1294,14 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         //
         // Lineage-preserving advance (an EOL-mode switch): lock-free and the
         // panel proved the live text is still the text the webview's lineage is
-        // built on. Nothing new for the webview — no Document, no epoch bump, and
-        // the rejection is KEPT (no Document goes out to clear the webview's
-        // banner, so clearing it here would desync the two). Checked before the
-        // `rejection: NONE` below for exactly that reason. The webview's Edits
-        // stay acceptable: the `edit` arm accepts an older base the lineage
-        // covers. `lineageSince` is always null under the lock (the panel does
-        // not compute it there), so the lock-held path below is unchanged.
+        // built on. No Document or epoch bump is needed; an older base remains
+        // acceptable while the lineage covers it. The panel does not compute
+        // lineage under the write lock, so the lock-held path is unchanged.
         if (event.lineageSince !== null && state.pendingApplyBaseVersion === null) {
           return { state: resyncLiveVersion(state, event.documentVersion, true), effects: [] };
         }
         const resynced: HostSessionState = {
           ...resyncLiveVersion(state, event.documentVersion, false),
-          rejection: NONE,
         };
         // While the host write lock is held, an accepted apply's own
         // `workspace.onDidChangeTextDocument` fires BEFORE the applyEdit
@@ -1555,18 +1330,6 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         if (state.pendingApplyBaseVersion !== null) {
           return { state, effects: [] };
         }
-        if (state.rejection.kind === "pending") {
-          return {
-            state,
-            effects: [
-              {
-                type: "logWarn",
-                message: "[quoll] visible-edge resync suppressed: rejected draft pending",
-                detail: { docVersion: state.lastAppliedDocVersion },
-              },
-            ],
-          };
-        }
         // Resync to the live snapshot before posting (see the `ready` arm) — the
         // reported bug's repro: focus the Quoll tab (viewStateVisible) while a
         // split-editor edit is still in the documentChanged debounce. Reached
@@ -1579,7 +1342,7 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
           event.lineageSince !== null
         );
         return {
-          state: { ...resynced, rejection: NONE },
+          state: resynced,
           effects: [postDoc(resynced, resynced.lastAppliedDocVersion)],
         };
       }

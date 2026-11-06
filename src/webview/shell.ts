@@ -1,21 +1,5 @@
-// Top-level vanilla shell.
-//
-// Owns the reducer state, the single host-message subscription, and the
-// editor mount. Theme is applied via class toggle on <html> so VS Code
-// CSS variables reach every descendant.
-//
-// The shell does NOT parse content (C8): only the rawText
-// (DocumentMessage.content) is seeded into the editor — the editor seam is
-// text-canonical. The PM-bridge parse here used to drive parse-warning and
-// parse-error banners, but under text-canonical no parse warning survives:
-// raw HTML is preserved as inert source (proven by the C8 URL / raw-HTML /
-// choke-point suites), and CodeMirror always seeds the raw bytes, so there is
-// no "cannot display" state. The host write-gate (validateMarkdownForWrite) is
-// the authoritative validation surface, and the host's `edit-rejected` →
-// serializeError banner is the only surviving, HOST-sourced error surface —
-// both untouched by this module.
+// Top-level shell: reducer state, host subscription and one CodeMirror editor.
 
-import type { MarkdownErrorCode } from "../markdown/errors.js";
 import { perfNow, perfRecord, perfReport } from "../shared/perf.js";
 import { PROTOCOL_VERSION, type WebviewToHost } from "../shared/protocol.js";
 import { renderBanners } from "./banners.js";
@@ -24,48 +8,6 @@ import { getHost, subscribeToHost } from "./host.js";
 import { type Action, initialState, reducer, type WebviewState } from "./state.js";
 
 import "./styles.css";
-
-// Tuple of every MarkdownErrorCode literal, used for two purposes:
-//   1. `satisfies readonly MarkdownErrorCode[]` — compile-time guard that
-//      each element is a valid member of the union.
-//   2. `_AllLiteralsCovered` below — compile-time guard that no union member
-//      is missing from this tuple.
-// The tuple (not Set) is declared here so `satisfies` can see the element
-// types; KNOWN_MARKDOWN_ERROR_CODES derives the runtime Set for O(1) lookup.
-export const MARKDOWN_ERROR_CODE_LITERALS = [
-  "unsafe_url",
-  "invalid_frontmatter",
-  "internal_error",
-] as const satisfies readonly MarkdownErrorCode[];
-
-type _AllLiteralsCovered =
-  Exclude<MarkdownErrorCode, (typeof MARKDOWN_ERROR_CODE_LITERALS)[number]> extends never
-    ? true
-    : false;
-const _allLiteralsCovered: _AllLiteralsCovered = true;
-void _allLiteralsCovered; // suppress unused-variable lint
-
-/** Closed-union mirror of `MarkdownErrorCode` (src/markdown/errors.ts) used
- *  at the host→webview wire boundary. The wire delivers `error.code` typed
- *  as plain `string` (the protocol layer cannot import bridge-internal
- *  types); this Set lets the shell narrow back to the closed union without
- *  trusting the wire to send a known literal. Derived from
- *  `MARKDOWN_ERROR_CODE_LITERALS` (see above for the exhaustiveness pin). */
-export const KNOWN_MARKDOWN_ERROR_CODES: ReadonlySet<MarkdownErrorCode> = new Set(
-  MARKDOWN_ERROR_CODE_LITERALS
-);
-
-/** Narrow a wire-delivered string to `MarkdownErrorCode`. Unknown codes
- *  (a future host shipping a literal this build does not know about, or
- *  a malformed message that slipped past the boundary validator's
- *  `typeof === "string"` check) fall back to `"internal_error"` so the
- *  banner still renders the host's `message` verbatim without violating
- *  the closed-union invariant the reducer relies on. */
-export function narrowMarkdownErrorCode(code: string): MarkdownErrorCode {
-  return (KNOWN_MARKDOWN_ERROR_CODES as ReadonlySet<string>).has(code)
-    ? (code as MarkdownErrorCode)
-    : "internal_error";
-}
 
 export type ShellHandle = {
   /** Test-only teardown: unsubscribe from the host, destroy the editor,
@@ -226,11 +168,6 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   // No auto-fade: a real byte loss that disappears on a timer is back to being
   // no signal at all.
   //
-  // The discard notice carries ONE action, and only when the caller still had
-  // the lost text (a rejected draft an external write replaced): a Copy draft
-  // button that puts it on the clipboard. That text is held in one slot until
-  // the next such replacement overwrites it, the notice is dismissed, or the
-  // editor closes — it is a second chance, not a recovery store.
   const NOTICE_TEXT = {
     discard:
       "Quoll discarded pending edits while syncing this document. Review your recent changes and reapply anything missing; Undo cannot restore discarded edits.",
@@ -274,6 +211,10 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   };
   let noticeKind: NoticeKind | null = null;
   let stormNoticeShown = false;
+  // The latest lost text stays available until the notice is dismissed.
+  let discardedDraft: string | null = null;
+  // A late clipboard result cannot relabel a newer draft or copy attempt.
+  let copyAttempt = 0;
   // Returns whether the slot now carries `kind`: false only for the priority
   // decline. showHoldNotice forwards it; the other writers ignore it.
   function showNotice(kind: NoticeKind): boolean {
@@ -312,28 +253,13 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
       noticeHost.replaceChildren();
       noticeKind = null;
       discardedDraft = null;
+      copyAttempt++;
     });
     notice.append(text, dismiss);
     noticeHost.replaceChildren(notice);
     noticeKind = kind;
     return true;
   }
-  // The bytes of the most recent discarded draft whose caller still had them
-  // (editor.ts applyDocument: a rejected draft an external write replaced).
-  // ONE slot, latest wins; emptied by dismiss. A discard that carries no bytes
-  // (edit-sync) leaves it alone — that loss is a different, unrecoverable one,
-  // and it must not take a still-copyable draft away.
-  let discardedDraft: string | null = null;
-  // Last-attempt-wins guard for the Copy draft button's label. Bumped by every
-  // click AND by every relabel for a new draft, so a clipboard promise that
-  // settles late — after the slot moved to a newer draft, or after a later
-  // click on the same draft already settled — changes nothing. Same guard as
-  // the fenced-code copy button's `attempt`.
-  let copyAttempt = 0;
-  // Add the Copy draft button to the discard notice on screen, or relabel the
-  // one already there. The notice element itself is never re-created for a
-  // repeat discard (showNotice's aggregation), so this is the only thing that
-  // changes when a second draft replaces the first.
   function offerDraftCopy(): void {
     const dismiss = noticeHost.querySelector(".quoll-resync-notice-dismiss");
     if (dismiss === null) {
@@ -345,8 +271,6 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
       button.type = "button";
       button.className = "quoll-resync-notice-copy";
       button.addEventListener("click", () => {
-        // Read at click time: the slot may hold a newer draft than the one this
-        // button was built for.
         const draft = discardedDraft;
         if (draft === null) {
           return;
@@ -366,24 +290,19 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
             }
           }, failed);
         } catch (err) {
-          // No clipboard API, or a synchronous refusal: the same outcome.
           failed(err);
         }
       });
       dismiss.before(button);
       copy = button;
     }
-    // Also on a relabel: "Copied" said of an older draft must not claim the
-    // new one, and a copy of the older draft still in flight must not either.
     copyAttempt++;
     copy.textContent = "Copy draft";
   }
-  function showDiscardNotice(draft?: string): void {
+  function showDiscardNotice(draft: string): void {
     showNotice("discard");
-    if (draft !== undefined) {
-      discardedDraft = draft;
-      offerDraftCopy();
-    }
+    discardedDraft = draft;
+    offerDraftCopy();
   }
   // A Format Document that formatted: whatever an earlier run reported no
   // longer describes the last one. Empties the slot only when it holds one of
@@ -523,7 +442,7 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
     //
     // SYNCHRONOUS RE-ENTRY: onReducerCommit may synchronously trigger
     // edit-sync's drain, which calls postEditMessage → dispatch("post-edit")
-    // (or "serialize-error" on a host throw). The re-entry does NOT loop:
+    // (or "send-failure" on a host throw). The re-entry does NOT loop:
     // the reducer's post-edit action sets editInFlight=true, and the nested
     // onReducerCommit reads canPost()'s freshly-committed gate — its
     // replayIfNeeded early-returns on the in-flight flag. Upper bound: one
@@ -567,26 +486,6 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
     switch (message.type) {
       case "theme":
         dispatch({ type: "theme", themeKind: message.themeKind });
-        return;
-      case "edit-rejected":
-        // Host validated the inbound Edit and refused it. Mirror the
-        // existing webview-side postMessage-failure path: set
-        // serializeError, clear editInFlight via the reducer's
-        // serialize-error arm. The editor's content is NOT touched — the
-        // user's typed bytes survive the reject. The wire `error.code` is
-        // plain `string` (the protocol layer cannot import
-        // `MarkdownErrorCode`); narrow it back to the closed union here so
-        // a future host shipping an unknown literal does not pollute the
-        // reducer's invariant. Banners render `error.message` verbatim, so
-        // the human-readable surface still carries the host's wording even
-        // when `code` falls back to `internal_error`.
-        dispatch({
-          type: "serialize-error",
-          error: {
-            code: narrowMarkdownErrorCode(message.error.code),
-            message: message.error.message,
-          },
-        });
         return;
       case "image-write-result":
         editor?.resolveImageWrite(message.requestId, message.ok ? message.relativePath : null);
