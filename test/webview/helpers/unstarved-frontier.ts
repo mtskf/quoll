@@ -592,8 +592,10 @@ export function withUnstarvedFrontier<R extends void | undefined>(options: {
       }
     },
     admitGate: (ctx) => {
-      // CONSUMES before it judges, so a gate called after a swallowed refusal runs clean
-      // and the conservation law — not a second copy of this refusal — convicts the
+      // The in-update refusal below runs first and consumes nothing: the change that
+      // triggered the call is not yet counted, so there is no state to reset. Past it, the
+      // gate CONSUMES before it judges, so a gate called after a swallowed refusal runs
+      // clean and the conservation law — not a second copy of this refusal — convicts the
       // swallow. Judged here rather than inside the update wrapper: a throw there surfaces
       // inside `view.dispatch(...)`, where an observe-side try/catch can swallow it with no
       // gate entry for the conservation law to convict; the gate is the one place a refusal

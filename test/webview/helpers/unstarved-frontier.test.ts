@@ -1311,13 +1311,17 @@ describe("more than one unverified doc-changing transaction per gate is refused"
   it("refuses a swallowed bypass refusal followed by a clean gate as a swallow", () => {
     // The bypass arm consumes its latch and re-seeds the continuity record before judging,
     // so the second gate runs clean and the conservation law convicts the swallow. Without
-    // the reset the second gate would itself be refused as a bypass.
+    // the latch reset the second gate would itself be refused as a bypass. The dispatch
+    // after setState() is what arms the latch (the wrapper sees a state it did not produce
+    // at entry) while leaving view.state equal to the expected record at the gate, so the
+    // latch alone — not the identity comparison — carries the first refusal and the reset.
     expect(() =>
       withUnstarvedFrontier({
         what: "the bounded output",
         mount: settledMarkdown,
         observe: (view, requireUnstarvedFrontier) => {
           view.setState(settledMarkdownState());
+          view.dispatch({ selection: { anchor: 0 } });
           try {
             requireUnstarvedFrontier();
           } catch {
