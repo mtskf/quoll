@@ -438,11 +438,11 @@ export function withUnstarvedFrontier<R extends void | undefined>(options: {
    * ⚠️ Call the gate after each doc-changing transaction: `dispatch A; dispatch B; gate()`
    * leaves A's bounded run unwitnessed, and a starved A self-heals with a full walk, so an
    * oracle comparison goes green having exercised nothing. The view form REFUSES more than
-   * one doc-changing transaction between two gates (or between mount and the first gate) —
-   * judged in its `admitGate`; selection- and effect-only transactions do not count — the
-   * shape cm-block-widget-bounded.test.ts's `cursorAtEnd` rows rely on — so an effect-only
-   * reconfiguration between a change and its gate still passes uncounted; gate before
-   * reconfiguring. See the update-wrapper comment in `begin` for the scope of
+   * one doc-changing transaction between two gates (or between mount and the first gate),
+   * judged in its `admitGate`. Selection- and effect-only transactions do not count, which
+   * is the shape cm-block-widget-bounded.test.ts's `cursorAtEnd` rows rely on; it also
+   * means an effect-only reconfiguration between a change and its gate passes uncounted, so
+   * gate before reconfiguring. See the update-wrapper comment in `begin` for the scope of
    * state-continuity checks. A successful gate speaks only for the frontier at that
    * instant.
    */
@@ -486,14 +486,13 @@ export function withUnstarvedFrontier<R extends void | undefined>(options: {
           parent.remove();
         }
       };
-      let ctx: ViewAttempt;
+      const ctx: ViewAttempt = {
+        view,
+        docChanges: 0,
+        expectedUpdate: { state: view.state },
+        bypassObserved: false,
+      };
       try {
-        ctx = {
-          view,
-          docChanges: 0,
-          expectedUpdate: { state: view.state },
-          bypassObserved: false,
-        };
         // The counting seam: an instance override of `view.update`. Per @codemirror/view's
         // own contract `update` is the primitive every dispatch reaches — "You should
         // usually call dispatch instead, which uses this as a primitive" — and a custom
@@ -578,9 +577,9 @@ export function withUnstarvedFrontier<R extends void | undefined>(options: {
       // consumed at a GATE, and nothing that moves the view after the LAST gate ever
       // reaches one, so this comparison is the only check that sees that window. Reads
       // (view.state.field(...), a separate settledState(...) oracle) leave the identity
-      // alone and pass. The message says "replaced
-      // its state" rather than "dispatched" because that is what this observes:
-      // `EditorView.setState()` replaces the state without dispatching.
+      // alone and pass. The message says "replaced its state" rather than "dispatched"
+      // because that is what this observes: `EditorView.setState()` replaces the state
+      // without dispatching.
       if (view.state !== stateAtLastGate) {
         throw new HelperRefusal(
           `withUnstarvedFrontier: observe() replaced its state after the last requireUnstarvedFrontier() call, so ${what} was measured on an ungated frontier`
@@ -595,7 +594,7 @@ export function withUnstarvedFrontier<R extends void | undefined>(options: {
       // gate entry for the conservation law to convict; the gate is the one place a refusal
       // is both decidable and swallow-proof. When the core calls this and what it may throw:
       // the core's `admitGate` member docblock.
-      const n = ctx.docChanges;
+      const docChanges = ctx.docChanges;
       const bypassed = ctx.bypassObserved || ctx.view.state !== ctx.expectedUpdate.state;
       ctx.docChanges = 0;
       ctx.bypassObserved = false;
@@ -605,9 +604,9 @@ export function withUnstarvedFrontier<R extends void | undefined>(options: {
           "withUnstarvedFrontier: the view's state changed since mount or the previous requireUnstarvedFrontier() call without passing through (or completing) view.update(), so the transactions that moved it were not all counted — apply transactions through view.update(), including from custom dispatch handlers; do not call setState() during observe(); if every call site fails this way after a @codemirror/view upgrade, dispatch no longer routes through update — see the wrapper comment in begin"
         );
       }
-      if (n > 1) {
+      if (docChanges > 1) {
         throw new Error(
-          `withUnstarvedFrontier: ${n} doc-changing transactions reached the view since mount or the previous requireUnstarvedFrontier() call, so all but the last ran unwitnessed — apply one doc-changing transaction per gate: gate between dispatches, split a multi-transaction dispatch, and keep listener-driven follow-ups out of the fixture`
+          `withUnstarvedFrontier: ${docChanges} doc-changing transactions reached the view since mount or the previous requireUnstarvedFrontier() call, so all but the last ran unwitnessed — apply one doc-changing transaction per gate: gate between dispatches, split a multi-transaction dispatch, and keep listener-driven follow-ups out of the fixture`
         );
       }
     },
