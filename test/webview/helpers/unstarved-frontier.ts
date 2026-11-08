@@ -304,6 +304,19 @@ function runUnstarvedAttempts<C, R>(spec: {
 }
 
 /**
+ * The view form's per-attempt context: the mounted view, plus the doc-change count and
+ * state-continuity record its update wrapper keeps between gates (see the wrapper comment in
+ * `begin`).
+ */
+type ViewAttempt = {
+  view: EditorView;
+  docChanges: number;
+  expectedUpdate: { readonly state: EditorState };
+  bypassObserved: boolean;
+  activeUpdates: number;
+};
+
+/**
  * Run a single bounded-path observation against a freshly mounted view, retrying from a
  * FRESH view whenever the parse frontier came back starved, and THROWING if every attempt
  * was starved.
@@ -392,18 +405,6 @@ function runUnstarvedAttempts<C, R>(spec: {
  * `mount` failing is NOT a starved frontier and is NOT retried — a view that will not
  * settle is a real failure, and retrying it four more times would only bury the message.
  */
-/**
- * The view form's per-attempt context: the mounted view, plus the doc-change count and
- * state-continuity record its update wrapper keeps between gates (see the wrapper comment in
- * `begin`).
- */
-type ViewAttempt = {
-  view: EditorView;
-  docChanges: number;
-  expectedUpdate: { readonly state: EditorState };
-  bypassObserved: boolean;
-};
-
 // `R` is a constrained TYPE PARAMETER rather than a literal `void`: TypeScript ignores a
 // callback's return type only when the target return type is EXACTLY `void`, so an async
 // `observe` is assignable to a `=> void` parameter with no cast at all. The union is what
@@ -491,6 +492,7 @@ export function withUnstarvedFrontier<R extends void | undefined>(options: {
         docChanges: 0,
         expectedUpdate: { state: view.state },
         bypassObserved: false,
+        activeUpdates: 0,
       };
       try {
         // The counting seam: an instance override of `view.update`. Per @codemirror/view's
@@ -536,11 +538,14 @@ export function withUnstarvedFrontier<R extends void | undefined>(options: {
           const docChanges = trs.reduce((count, tr) => count + Number(tr.docChanged), 0);
           const previous = ctx.expectedUpdate;
           ctx.expectedUpdate = trs.length ? trs[trs.length - 1] : { state: view.state };
+          ctx.activeUpdates++;
           try {
             original.call(view, trs);
           } catch (error) {
             ctx.expectedUpdate = previous;
             throw error;
+          } finally {
+            ctx.activeUpdates--;
           }
           ctx.docChanges += docChanges;
         };
@@ -594,6 +599,11 @@ export function withUnstarvedFrontier<R extends void | undefined>(options: {
       // gate entry for the conservation law to convict; the gate is the one place a refusal
       // is both decidable and swallow-proof. When the core calls this and what it may throw:
       // the core's `admitGate` member docblock.
+      if (ctx.activeUpdates > 0) {
+        throw new Error(
+          "withUnstarvedFrontier: requireUnstarvedFrontier() was called from inside view.update() (an updateListener or plugin), before the doc changes that triggered it were counted — gate from observe() after dispatch returns"
+        );
+      }
       const docChanges = ctx.docChanges;
       const bypassed = ctx.bypassObserved || ctx.view.state !== ctx.expectedUpdate.state;
       ctx.docChanges = 0;

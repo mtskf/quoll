@@ -1308,6 +1308,71 @@ describe("more than one unverified doc-changing transaction per gate is refused"
     );
   });
 
+  it("refuses a swallowed bypass refusal followed by a clean gate as a swallow", () => {
+    // The bypass arm consumes its latch and re-seeds the continuity record before judging,
+    // so the second gate runs clean and the conservation law convicts the swallow. Without
+    // the reset the second gate would itself be refused as a bypass.
+    expect(() =>
+      withUnstarvedFrontier({
+        what: "the bounded output",
+        mount: settledMarkdown,
+        observe: (view, requireUnstarvedFrontier) => {
+          view.setState(settledMarkdownState());
+          try {
+            requireUnstarvedFrontier();
+          } catch {
+            /* exactly the mistake this test pins */
+          }
+          requireUnstarvedFrontier();
+        },
+      })
+    ).toThrow(
+      /^withUnstarvedFrontier: requireUnstarvedFrontier\(\) was called but its refusal was swallowed/
+    );
+  });
+
+  it("refuses a gate called from inside view.update() before its triggering change is counted", () => {
+    // An updateListener runs while the wrapper is still inside `original`, before the doc
+    // change that triggered it is committed to the count, so a gate called from there would
+    // judge a count that omits it. CM routes listener exceptions to the exception sink, so
+    // the refusal is recorded there and the swallow is convicted by the conservation law.
+    let probe = { errors: [] as unknown[] };
+    let gate: (() => void) | undefined;
+    expect(() =>
+      withUnstarvedFrontier({
+        what: "the bounded output",
+        mount: (parent) => {
+          probe = { errors: [] as unknown[] };
+          return settledMount({
+            state: EditorState.create({
+              doc: DOC,
+              extensions: [
+                markdown(),
+                EditorView.updateListener.of((u) => {
+                  if (u.docChanged) {
+                    gate?.();
+                  }
+                }),
+                EditorView.exceptionSink.of((error) => {
+                  probe.errors.push(error);
+                }),
+              ],
+            }),
+            parent,
+          });
+        },
+        observe: (view, requireUnstarvedFrontier) => {
+          gate = requireUnstarvedFrontier;
+          view.dispatch({ changes: { from: 0, insert: "x" } });
+          requireUnstarvedFrontier();
+        },
+      })
+    ).toThrow(
+      /^withUnstarvedFrontier: requireUnstarvedFrontier\(\) was called but its refusal was swallowed/
+    );
+    expect(String(probe.errors[0])).toMatch(/from inside view\.update\(\)/);
+  });
+
   it("preserves the swallowed-sentinel diagnosis when a count refusal escapes", () => {
     // A plain Error escaping after a swallowed sentinel must be wrapped by the catch arm's
     // swallowed-sentinel check. Raised as a HelperRefusal it would skip that wrap and hide
