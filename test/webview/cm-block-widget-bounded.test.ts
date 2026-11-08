@@ -149,10 +149,12 @@ function checkEquivalence(initial: string, edits: Edit[], oracleSlots: number): 
         // this loop performs — within a `cursorAtEnd` pair AND across iterations, since the
         // gate call right below is itself inside that window — that advances the parse or
         // publishes a tree: no settle, no parse-advancing read (ensureSyntaxTree, a
-        // `fullTree` probe, forceParsing, …), no second doc-changing dispatch, and no
-        // `await` or timer flush that yields to the event loop. The gate's no-op guarantee
-        // depends on this loop staying straight-line synchronous code end to end; break
-        // that shape and the guarantee breaks with it.
+        // `fullTree` probe, forceParsing, …), no second doc-changing dispatch (the one item
+        // here the helper now refuses itself — see observe in ../helpers/unstarved-frontier.ts;
+        // the others still rest on this rule), and no `await` or timer flush that yields to
+        // the event loop. The gate's no-op guarantee depends on this loop staying
+        // straight-line synchronous code end to end; break that shape and the guarantee
+        // breaks with it.
         //
         // ⚠️ What passing the gate rules out is the STARVED-frontier full walk, and nothing
         // more. imageBlockField.update takes its G3 arm — computeFreshFull — whenever

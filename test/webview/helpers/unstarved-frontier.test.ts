@@ -5,7 +5,13 @@
 // any of those refusals — the all-starved throw above all, which is the one thing keeping an
 // attempt loop from degrading into a silent skip — stays silently green.
 import { markdown } from "@codemirror/lang-markdown";
-import { Compartment, EditorState } from "@codemirror/state";
+import {
+  Compartment,
+  EditorSelection,
+  EditorState,
+  StateField,
+  type Transaction,
+} from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { describe, expect, it, vi } from "vitest";
 import { timeoutMessage, truncatedSnapshotMessage } from "./parse-to-end.js";
@@ -995,6 +1001,624 @@ describe("every attempt cleans up after itself", () => {
     } finally {
       errSpy.mockRestore();
     }
+  });
+});
+
+/** The count refusal for two doc-changing transactions, anchored at the message start. */
+const COUNT_REFUSAL_2 =
+  /^withUnstarvedFrontier: 2 doc-changing transactions reached the view since mount or the previous requireUnstarvedFrontier\(\) call, so all but the last ran unwitnessed/;
+
+/** The bypass refusal, matched wherever it appears (alone, or as a wrapped cause). */
+const BYPASS_REFUSAL = /without passing through \(or completing\) view\.update\(\)/;
+
+describe("more than one unverified doc-changing transaction per gate is refused", () => {
+  describe("the update wrapper's own setup", () => {
+    it("releases the view when the update wrapper cannot be installed", () => {
+      // Per attempt, reset inside mount: the helper owns this view the moment mount returns,
+      // so a failure installing its wrapper must still discharge the destroy it owes.
+      let probe = { destroyCalls: 0, parent: undefined as HTMLElement | undefined };
+      expect(() =>
+        withUnstarvedFrontier({
+          what: "the bounded output",
+          mount: (parent) => {
+            probe = { destroyCalls: 0, parent };
+            const view = settledMarkdown(parent);
+            const real = view.destroy.bind(view);
+            view.destroy = () => {
+              probe.destroyCalls++;
+              real();
+            };
+            Object.defineProperty(view, "update", { value: view.update, writable: false });
+            return view;
+          },
+          observe: (_view, requireUnstarvedFrontier) => requireUnstarvedFrontier(),
+        })
+      ).toThrow(TypeError);
+      expect(probe.destroyCalls).toBe(1);
+      expect(probe.parent?.isConnected).toBe(false);
+    });
+  });
+
+  // The accepting shapes. Each asserts that execution got PAST the last gate: a refusal
+  // that fired here would otherwise be indistinguishable from an observation that never
+  // reached its assertions.
+  it("accepts one doc change followed by a selection-only dispatch", () => {
+    // The cursorAtEnd shape in cm-block-widget-bounded.test.ts: a selection-only second
+    // dispatch advances no parse, so it is not counted.
+    let past = false;
+    withUnstarvedFrontier({
+      what: "the bounded output",
+      mount: settledMarkdown,
+      observe: (view, requireUnstarvedFrontier) => {
+        view.dispatch({ changes: { from: 0, insert: "x" } });
+        view.dispatch({ selection: EditorSelection.cursor(view.state.doc.length) });
+        requireUnstarvedFrontier();
+        past = true;
+      },
+    });
+    expect(past).toBe(true);
+  });
+
+  it("accepts the gate-per-dispatch shape", () => {
+    let past = false;
+    withUnstarvedFrontier({
+      what: "the bounded output",
+      mount: settledMarkdown,
+      observe: (view, requireUnstarvedFrontier) => {
+        view.dispatch({ changes: { from: 0, insert: "x" } });
+        requireUnstarvedFrontier();
+        view.dispatch({ changes: { from: 0, insert: "y" } });
+        requireUnstarvedFrontier();
+        past = true;
+      },
+    });
+    expect(past).toBe(true);
+  });
+
+  it("accepts one doc-changing transaction applied directly with view.update([tr])", () => {
+    let past = false;
+    withUnstarvedFrontier({
+      what: "the bounded output",
+      mount: settledMarkdown,
+      observe: (view, requireUnstarvedFrontier) => {
+        view.update([view.state.update({ changes: { from: 0, insert: "x" } })]);
+        requireUnstarvedFrontier();
+        past = true;
+      },
+    });
+    expect(past).toBe(true);
+  });
+
+  it("accepts view.update([]) after one doc-changing transaction", () => {
+    let past = false;
+    withUnstarvedFrontier({
+      what: "the bounded output",
+      mount: settledMarkdown,
+      observe: (view, requireUnstarvedFrontier) => {
+        view.dispatch({ changes: { from: 0, insert: "x" } });
+        view.update([]);
+        requireUnstarvedFrontier();
+        past = true;
+      },
+    });
+    expect(past).toBe(true);
+  });
+
+  it("accepts an effect-only phrases reconfiguration after one doc change", () => {
+    // The documented residue: an effect-only reconfiguration is not counted even though a
+    // Compartment reconfiguration can move the frontier. Phrases are the probe because the
+    // reconfiguration is observable through the public API without touching the language.
+    let phrases = new Compartment();
+    let past = false;
+    withUnstarvedFrontier({
+      what: "the bounded output",
+      mount: (parent) => {
+        phrases = new Compartment();
+        return settledMount({
+          state: EditorState.create({
+            doc: DOC,
+            extensions: [markdown(), phrases.of(EditorState.phrases.of({}))],
+          }),
+          parent,
+        });
+      },
+      observe: (view, requireUnstarvedFrontier) => {
+        view.dispatch({ changes: { from: 0, insert: "x" } });
+        view.dispatch({
+          effects: phrases.reconfigure(EditorState.phrases.of({ Find: "Search" })),
+        });
+        requireUnstarvedFrontier();
+        expect(view.state.phrase("Find")).toBe("Search");
+        past = true;
+      },
+    });
+    expect(past).toBe(true);
+  });
+
+  it("accepts a custom dispatchTransactions that delegates to view.update", () => {
+    let past = false;
+    withUnstarvedFrontier({
+      what: "the bounded output",
+      mount: (parent) =>
+        settledMount({
+          state: EditorState.create({ doc: DOC, extensions: [markdown()] }),
+          parent,
+          dispatchTransactions: (trs, v) => v.update(trs),
+        }),
+      observe: (view, requireUnstarvedFrontier) => {
+        view.dispatch({ changes: { from: 0, insert: "x" } });
+        requireUnstarvedFrontier();
+        past = true;
+      },
+    });
+    expect(past).toBe(true);
+  });
+
+  it("counts two TransactionSpecs in one dispatch as one transaction", () => {
+    // The unit is transactions, not specs: `dispatch(spec1, spec2)` builds ONE transaction.
+    let past = false;
+    withUnstarvedFrontier({
+      what: "the bounded output",
+      mount: settledMarkdown,
+      observe: (view, requireUnstarvedFrontier) => {
+        view.dispatch({ changes: { from: 0, insert: "a" } }, { changes: { from: 0, insert: "b" } });
+        requireUnstarvedFrontier();
+        past = true;
+      },
+    });
+    expect(past).toBe(true);
+  });
+
+  it("accepts a selection-only dispatch made from an updateListener", () => {
+    // A listener's dispatch re-enters the update wrapper while the outer update is still on
+    // the stack, so it must find the expectation the outer call recorded — never read as a
+    // bypass. The probe is reset per attempt (mount re-runs on a starved attempt) and
+    // proves the follow-up actually RAN: CM catches listener exceptions, so a throw inside
+    // the listener would otherwise vanish.
+    let probe = { entries: 0, completions: 0, errors: [] as unknown[] };
+    let past = false;
+    withUnstarvedFrontier({
+      what: "the bounded output",
+      mount: (parent) => {
+        probe = { entries: 0, completions: 0, errors: [] as unknown[] };
+        return settledMount({
+          state: EditorState.create({
+            doc: DOC,
+            extensions: [
+              markdown(),
+              EditorView.updateListener.of((u) => {
+                if (!u.docChanged) {
+                  return;
+                }
+                probe.entries++;
+                u.view.dispatch({ selection: EditorSelection.cursor(0) });
+                probe.completions++;
+              }),
+              EditorView.exceptionSink.of((error) => {
+                probe.errors.push(error);
+              }),
+            ],
+          }),
+          parent,
+        });
+      },
+      observe: (view, requireUnstarvedFrontier) => {
+        view.dispatch({ changes: { from: 0, insert: "x" } });
+        requireUnstarvedFrontier();
+        past = true;
+      },
+    });
+    expect(probe.entries).toBe(1);
+    expect(probe.completions).toBe(1);
+    expect(probe.errors).toEqual([]);
+    expect(past).toBe(true);
+  });
+
+  // The count refusal: `dispatch A; dispatch B; gate()` leaves A's bounded run unwitnessed.
+  it("refuses two doc-changing dispatches before one gate", () => {
+    let past = false;
+    expect(() =>
+      withUnstarvedFrontier({
+        what: "the bounded output",
+        mount: settledMarkdown,
+        observe: (view, requireUnstarvedFrontier) => {
+          view.dispatch({ changes: { from: 0, insert: "x" } });
+          view.dispatch({ changes: { from: 0, insert: "y" } });
+          requireUnstarvedFrontier();
+          past = true;
+        },
+      })
+    ).toThrow(COUNT_REFUSAL_2);
+    expect(past).toBe(false);
+  });
+
+  it("counts each transaction of a single multi-transaction dispatch", () => {
+    expect(() =>
+      withUnstarvedFrontier({
+        what: "the bounded output",
+        mount: settledMarkdown,
+        observe: (view, requireUnstarvedFrontier) => {
+          const t1 = view.state.update({ changes: { from: 0, insert: "x" } });
+          const t2 = t1.state.update({ changes: { from: 0, insert: "y" } });
+          view.dispatch([t1, t2]);
+          requireUnstarvedFrontier();
+        },
+      })
+    ).toThrow(COUNT_REFUSAL_2);
+  });
+
+  it("refuses a double dispatch between two gates, not only before the first", () => {
+    expect(() =>
+      withUnstarvedFrontier({
+        what: "the bounded output",
+        mount: settledMarkdown,
+        observe: (view, requireUnstarvedFrontier) => {
+          requireUnstarvedFrontier();
+          view.dispatch({ changes: { from: 0, insert: "x" } });
+          view.dispatch({ changes: { from: 0, insert: "y" } });
+          requireUnstarvedFrontier();
+        },
+      })
+    ).toThrow(
+      /^withUnstarvedFrontier: 2 doc-changing transactions reached the view since mount or the previous requireUnstarvedFrontier\(\) call/
+    );
+  });
+
+  it("refuses a double dispatch even when the frontier is also starved", () => {
+    // The refusal is judged BEFORE the starvation check, so it is deterministic: a starved
+    // frontier must not turn it into a retry that a later, luckier attempt passes.
+    let mounts = 0;
+    expect(() =>
+      withUnstarvedFrontier({
+        what: "the bounded output",
+        mount: (parent) => {
+          mounts++;
+          return starvedMount(parent);
+        },
+        observe: (view, requireUnstarvedFrontier) => {
+          view.dispatch({ changes: { from: 0, insert: "x" } });
+          view.dispatch({ changes: { from: 0, insert: "y" } });
+          requireUnstarvedFrontier();
+        },
+      })
+    ).toThrow(COUNT_REFUSAL_2);
+    expect(mounts).toBe(1);
+  });
+
+  it("refuses a swallowed double-dispatch refusal", () => {
+    // The gate consumes the count before it judges, so the second gate runs clean — and the
+    // conservation law, not a second copy of this refusal, convicts the swallow.
+    expect(() =>
+      withUnstarvedFrontier({
+        what: "the bounded output",
+        mount: settledMarkdown,
+        observe: (view, requireUnstarvedFrontier) => {
+          view.dispatch({ changes: { from: 0, insert: "x" } });
+          view.dispatch({ changes: { from: 0, insert: "y" } });
+          try {
+            requireUnstarvedFrontier();
+          } catch {
+            /* exactly the mistake this test pins */
+          }
+          requireUnstarvedFrontier();
+        },
+      })
+    ).toThrow(
+      /^withUnstarvedFrontier: requireUnstarvedFrontier\(\) was called but its refusal was swallowed/
+    );
+  });
+
+  it("preserves the swallowed-sentinel diagnosis when a count refusal escapes", () => {
+    // A plain Error escaping after a swallowed sentinel must be wrapped by the catch arm's
+    // swallowed-sentinel check. Raised as a HelperRefusal it would skip that wrap and hide
+    // the earlier swallow behind itself.
+    let mounts = 0;
+    const error = catchError(() =>
+      withUnstarvedFrontier({
+        what: "the bounded output",
+        mount: (parent) => {
+          mounts++;
+          return starvedMount(parent);
+        },
+        observe: (view, requireUnstarvedFrontier) => {
+          try {
+            requireUnstarvedFrontier();
+          } catch {
+            /* exactly the mistake this test pins */
+          }
+          view.dispatch({ changes: { from: 0, insert: "x" } });
+          view.dispatch({ changes: { from: 0, insert: "y" } });
+          requireUnstarvedFrontier();
+        },
+      })
+    );
+    expect((error as Error).message).toMatch(
+      /^withUnstarvedFrontier: observe\(\) swallowed the starved-frontier signal/
+    );
+    expect(((error as Error).cause as Error).message).toMatch(COUNT_REFUSAL_2);
+    expect(mounts).toBe(1);
+  });
+
+  it("counts a doc-changing follow-up dispatched from an updateListener", () => {
+    const error = catchError(() =>
+      withUnstarvedFrontier({
+        what: "the bounded output",
+        mount: (parent) => {
+          // Once-flag per attempt, so a retried mount starts from the same state.
+          let fired = false;
+          return settledMount({
+            state: EditorState.create({
+              doc: DOC,
+              extensions: [
+                markdown(),
+                EditorView.updateListener.of((u) => {
+                  if (!u.docChanged || fired) {
+                    return;
+                  }
+                  fired = true;
+                  u.view.dispatch({ changes: { from: 0, insert: "y" } });
+                }),
+              ],
+            }),
+            parent,
+          });
+        },
+        observe: (view, requireUnstarvedFrontier) => {
+          view.dispatch({ changes: { from: 0, insert: "x" } });
+          requireUnstarvedFrontier();
+        },
+      })
+    );
+    expect((error as Error).message).toMatch(COUNT_REFUSAL_2);
+    expect((error as Error).message).not.toMatch(BYPASS_REFUSAL);
+  });
+
+  it("counts transactions from the array as passed, even if a callback empties it", () => {
+    let held = { trs: [] as Transaction[] };
+    expect(() =>
+      withUnstarvedFrontier({
+        what: "the bounded output",
+        mount: (parent) => {
+          held = { trs: [] as Transaction[] };
+          let emptied = false;
+          return settledMount({
+            state: EditorState.create({
+              doc: DOC,
+              extensions: [
+                markdown(),
+                EditorView.updateListener.of((u) => {
+                  if (!u.docChanged || emptied) {
+                    return;
+                  }
+                  emptied = true;
+                  held.trs.length = 0;
+                }),
+              ],
+            }),
+            parent,
+          });
+        },
+        observe: (view, requireUnstarvedFrontier) => {
+          const t1 = view.state.update({ changes: { from: 0, insert: "x" } });
+          const t2 = t1.state.update({ changes: { from: 0, insert: "y" } });
+          held.trs = [t1, t2];
+          view.update(held.trs);
+          requireUnstarvedFrontier();
+        },
+      })
+    ).toThrow(COUNT_REFUSAL_2);
+  });
+
+  it("does not count a transaction the view rejected", () => {
+    // CM validates the start-state chain before applying anything, so a rejected update
+    // moves nothing and must count nothing — and the wrapper must not have computed the
+    // rejected transaction's state on the way (its StateField updater never runs).
+    let probe = { updaterCalls: 0 };
+    let past = false;
+    withUnstarvedFrontier({
+      what: "the bounded output",
+      mount: (parent) => {
+        probe = { updaterCalls: 0 };
+        const counter = StateField.define<number>({
+          create: () => 0,
+          update: (value) => {
+            probe.updaterCalls++;
+            return value;
+          },
+        });
+        return settledMount({
+          state: EditorState.create({ doc: DOC, extensions: [markdown(), counter] }),
+          parent,
+        });
+      },
+      observe: (view, requireUnstarvedFrontier) => {
+        const stale = view.state;
+        view.dispatch({ changes: { from: 0, insert: "x" } });
+        const before = probe.updaterCalls;
+        expect(() =>
+          view.dispatch(stale.update({ changes: { from: 0, insert: "y" }, filter: false }))
+        ).toThrow();
+        expect(probe.updaterCalls).toBe(before);
+        requireUnstarvedFrontier();
+        past = true;
+      },
+    });
+    expect(past).toBe(true);
+  });
+
+  // The bypass refusal: a state that reached the view without passing through (or
+  // completing) the update wrapper, so the transactions that moved it were not all counted.
+  it("refuses a setState() between two gates", () => {
+    expect(() =>
+      withUnstarvedFrontier({
+        what: "the bounded output",
+        mount: settledMarkdown,
+        observe: (view, requireUnstarvedFrontier) => {
+          requireUnstarvedFrontier();
+          view.setState(EditorState.create({ doc: `${DOC}x`, extensions: [markdown()] }));
+          requireUnstarvedFrontier();
+        },
+      })
+    ).toThrow(BYPASS_REFUSAL);
+  });
+
+  it("refuses a mount whose dispatch bypasses view.update", () => {
+    expect(() =>
+      withUnstarvedFrontier({
+        what: "the bounded output",
+        mount: (parent) =>
+          settledMount({
+            state: EditorState.create({ doc: DOC, extensions: [markdown()] }),
+            parent,
+            dispatchTransactions: (trs, v) => v.setState(trs[trs.length - 1].state),
+          }),
+        observe: (view, requireUnstarvedFrontier) => {
+          view.dispatch({ changes: { from: 0, insert: "x" } });
+          requireUnstarvedFrontier();
+        },
+      })
+    ).toThrow(BYPASS_REFUSAL);
+  });
+
+  it.each<[string, (view: EditorView) => void]>([
+    ["view.update([])", (view) => view.update([])],
+    [
+      "a selection-only dispatch",
+      (view) => view.dispatch({ selection: EditorSelection.cursor(0) }),
+    ],
+    ["one doc-changing dispatch", (view) => view.dispatch({ changes: { from: 0, insert: "y" } })],
+  ])("refuses a bypass even when followed by a counted update: %s", (_name, follow) => {
+    // A counted update after the replacement leaves `view.state` equal to what that update
+    // was asked to produce, so the gate's own identity check passes — only the latch taken
+    // at the wrapper's entry still remembers the discontinuity.
+    expect(() =>
+      withUnstarvedFrontier({
+        what: "the bounded output",
+        mount: settledMarkdown,
+        observe: (view, requireUnstarvedFrontier) => {
+          view.setState(EditorState.create({ doc: `${DOC}x`, extensions: [markdown()] }));
+          follow(view);
+          requireUnstarvedFrontier();
+        },
+      })
+    ).toThrow(BYPASS_REFUSAL);
+  });
+
+  it("refuses a setState performed by an updateListener before update returns", () => {
+    expect(() =>
+      withUnstarvedFrontier({
+        what: "the bounded output",
+        mount: (parent) => {
+          // Once-flag per attempt, so a retried mount starts from the same state.
+          let fired = false;
+          return settledMount({
+            state: EditorState.create({
+              doc: DOC,
+              extensions: [
+                markdown(),
+                EditorView.updateListener.of((u) => {
+                  if (!u.docChanged || fired) {
+                    return;
+                  }
+                  fired = true;
+                  u.view.setState(EditorState.create({ doc: `${DOC}z`, extensions: [markdown()] }));
+                }),
+              ],
+            }),
+            parent,
+          });
+        },
+        observe: (view, requireUnstarvedFrontier) => {
+          view.dispatch({ changes: { from: 0, insert: "x" } });
+          requireUnstarvedFrontier();
+        },
+      })
+    ).toThrow(BYPASS_REFUSAL);
+  });
+
+  it("refuses an update that throws after advancing the view state", () => {
+    // Installed inside mount, before it returns, so the helper's wrapper captures this as
+    // `original`: the state advances, then the update throws past the wrapper's commit.
+    let mounts = 0;
+    let past = false;
+    expect(() =>
+      withUnstarvedFrontier({
+        what: "the bounded output",
+        mount: (parent) => {
+          mounts++;
+          const view = settledMarkdown(parent);
+          view.update = (trs) => {
+            EditorView.prototype.update.call(view, trs);
+            throw new Error("boom-after-advance");
+          };
+          return view;
+        },
+        observe: (view, requireUnstarvedFrontier) => {
+          expect(() => view.dispatch({ changes: { from: 0, insert: "x" } })).toThrow(
+            /boom-after-advance/
+          );
+          requireUnstarvedFrontier();
+          past = true;
+        },
+      })
+    ).toThrow(BYPASS_REFUSAL);
+    expect(past).toBe(false);
+    expect(mounts).toBe(1);
+  });
+
+  it("preserves a failed-update discontinuity across a later successful update", () => {
+    expect(() =>
+      withUnstarvedFrontier({
+        what: "the bounded output",
+        mount: (parent) => {
+          // First-call flag per attempt, so a retried mount starts from the same state.
+          let first = true;
+          const view = settledMarkdown(parent);
+          view.update = (trs) => {
+            EditorView.prototype.update.call(view, trs);
+            if (first) {
+              first = false;
+              throw new Error("boom-after-advance");
+            }
+          };
+          return view;
+        },
+        observe: (view, requireUnstarvedFrontier) => {
+          expect(() => view.dispatch({ changes: { from: 0, insert: "x" } })).toThrow(
+            /boom-after-advance/
+          );
+          view.dispatch({ selection: EditorSelection.cursor(0) });
+          requireUnstarvedFrontier();
+        },
+      })
+    ).toThrow(BYPASS_REFUSAL);
+  });
+
+  it("preserves the swallowed-sentinel diagnosis when a bypass refusal escapes", () => {
+    let mounts = 0;
+    const error = catchError(() =>
+      withUnstarvedFrontier({
+        what: "the bounded output",
+        mount: (parent) => {
+          mounts++;
+          return starvedMount(parent);
+        },
+        observe: (view, requireUnstarvedFrontier) => {
+          try {
+            requireUnstarvedFrontier();
+          } catch {
+            /* exactly the mistake this test pins */
+          }
+          view.setState(EditorState.create({ doc: DOC, extensions: [neverFinishingLanguage()] }));
+          requireUnstarvedFrontier();
+        },
+      })
+    );
+    expect((error as Error).message).toMatch(
+      /^withUnstarvedFrontier: observe\(\) swallowed the starved-frontier signal/
+    );
+    expect(((error as Error).cause as Error).message).toMatch(BYPASS_REFUSAL);
+    expect(mounts).toBe(1);
   });
 });
 
