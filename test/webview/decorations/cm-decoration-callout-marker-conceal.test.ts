@@ -408,6 +408,20 @@ describe("calloutMarkerConcealField — bounded recompute ≡ full recompute", (
     checkEquivalence(`intro\n\n${CALLOUT}`, [{ changes: { from: 0, insert: "```\n" } }]);
   });
 
+  // A definition above a lazy continuation controls the distant callout's list context.
+  // This checks consumer equivalence; the shared oracle pins the ancestry change itself.
+  it("link-reference formation and dissolution above a distant callout stay equivalent", () => {
+    const doc = `- item\n\n  [a]: /url\nlazy\n\n  > [!NOTE]\n${"  > q\n".repeat(12)}`;
+    for (const [before, after] of [
+      [":", ";"],
+      [";", ":"],
+    ]) {
+      checkEquivalence(doc.replace("[a]:", `[a]${before}`), [
+        { changes: { from: 13, to: 14, insert: after } },
+      ]);
+    }
+  });
+
   it("multi-range (multi-cursor) transaction touching two callouts", () => {
     const doc = `${CALLOUT}\n\nmid\n\n> [!TIP]\n> t`;
     const tipMarker = doc.indexOf("[!TIP]");

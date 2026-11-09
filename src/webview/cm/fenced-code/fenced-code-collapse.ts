@@ -28,6 +28,7 @@ import {
   type LineCollapseSpec,
 } from "../collapse/line-collapse-field.js";
 import { leadingFrontmatterEnd } from "../frontmatter/detect.js";
+import { linkReferenceRisk } from "../link-reference-risk.js";
 import { fencedCollapseTarget } from "./fenced-code-collapse-state.js";
 import { FencedCollapseToggleWidget } from "./fenced-code-collapse-widget.js";
 
@@ -63,9 +64,11 @@ export function buildFencedCollapse(
  *  under-triggering is unsound). The hot path stays bounded only for edits whose
  *  changed lines carry none of those shapes (plain code body or plain prose — which the
  *  fenced-heavy perf case is).
- *  BLANK-LINE boundaries are the one non-locality STRUCTURAL cannot see (a blank line
- *  carries no shape): a type-6/7 HTML block (and a paragraph / loose list) is TERMINATED
- *  by a blank line, so MOVING the blank line that ends an HTML block extends/contracts it
+ *  Boundary changes also escape STRUCTURAL: indentation and link-reference formation
+ *  can flip a far indented fence between ListItem and Document without re-pairing it
+ *  (covered by topLevelBoundaryRisk). Blank-line boundaries carry no shape: a blank line
+ *  ends a type-6/7 HTML block (and a paragraph / loose list), so MOVING that blank
+ *  extends/contracts it
  *  over a following top-level fence WITHOUT touching any tag/marker line (Codex cycle-2/3,
  *  both parser-verified). `topLevelBoundaryRisk` covers this: any TOP-LEVEL edit that moves a
  *  blank-line boundary — a newline inserted/deleted, OR a changed line's blankness flipped
@@ -76,8 +79,8 @@ export function buildFencedCollapse(
  *  "Top-level" (not inside a reused block's [blockFrom, blockTo]) keeps IN-BODY newlines
  *  bounded — an in-body edit is contained (its own block rebuilds via touchesRange, and
  *  un-closing its fence is caught by STRUCTURAL's fence alt), so writing code stays fast;
- *  and a pure non-newline insertion never moves a blank boundary, so plain typing stays
- *  bounded. G2 + the background-parse self-heal remain as defense-in-depth. */
+ *  ordinary typing with no boundary risk stays bounded. G2 + the background-parse
+ *  self-heal remain as defense-in-depth. */
 const STRUCTURAL =
   /(?:^|\n)[ \t]{0,3}(?:`{3,}|~{3,})|(?:^|\n)[ \t]*(?:[-*+]|\d{1,9}[.)]|>)|(?:^|\n)[ \t]{0,3}<[/!?A-Za-z]|<\/(?:script|pre|style|textarea)>|-->|\?>|\]\]>/i;
 function touchesStructural(tr: Transaction): boolean {
@@ -104,7 +107,7 @@ function touchesStructural(tr: Transaction): boolean {
 const BLANK_LINE = /^[ \t]*$/;
 
 /** A block boundary MOVED by a TOP-LEVEL edit in a way STRUCTURAL's per-line-SHAPE check
- *  cannot see. Two shapeless HTML-block terminators drive this:
+ *  cannot see. Two shapeless HTML-block terminators are part of this:
  *   - a BLANK line ends a type-6/7 block (and a paragraph / loose list): moving the blank
  *     that ends an HTML block extends/contracts it over a following top-level fence WITHOUT
  *     touching a tag/marker line (Codex cycle-2 + cycle-3, parser-verified).
@@ -115,10 +118,13 @@ const BLANK_LINE = /^[ \t]*$/;
  *     — is narrow: it fires only when the user actually types or deletes a `>`.
  *  Fires when the edit changes the LINE COUNT (a newline inserted/deleted), OR flips a
  *  changed line's blankness in EITHER direction (delete-to-blank, or type-into-the-blank),
- *  OR adds/removes a `>`. All three are conservative supersets (e.g. a newline splitting
- *  non-blank prose, or a `>` typed in plain prose, reshapes nothing — a safe over-trigger).
- *  Any within-line edit that keeps the line's blankness, adds/removes no newline, and
- *  touches no `>` cannot move a boundary, so plain typing stays on the bounded hot path.
+ *  OR adds/removes a `>`, changes leading `[ \t]*`, or touches a possible link-reference
+ *  run. Indent changes and reference formation/dissolution can change whether a far
+ *  indented fence continues a loose list. All are conservative supersets (e.g. a newline
+ *  splitting non-blank prose, or a `>` typed in plain prose, reshapes nothing — a safe
+ *  over-trigger).
+ *  Link-reference presence also over-triggers on line-start links/code and malformed
+ *  container prefixes in the same nonblank run (link-reference-risk.ts explains multi-line coverage).
  *  Fires ONLY when the edit is NOT fully inside a reused block's [blockFrom, blockTo] — an
  *  in-body edit is contained (its own block rebuilds via touchesRange, and un-closing its
  *  fence is caught by STRUCTURAL's fence alt), so in-body edits stay bounded.
@@ -138,19 +144,30 @@ function topLevelBoundaryRisk(
     if (risk) {
       return;
     }
+    const insideBlock = prevBlocks.some((b) => fromA >= b.blockFrom && toA <= b.blockTo);
+    if (insideBlock) {
+      return;
+    }
     const insertedText = tr.state.doc.sliceString(fromB, toB);
     const deletedText = tr.startState.doc.sliceString(fromA, toA);
     const newlineDelta = insertedText.includes("\n") || deletedText.includes("\n");
     const gtDelta = insertedText.includes(">") || deletedText.includes(">");
-    const oldBlank = BLANK_LINE.test(tr.startState.doc.lineAt(fromA).text);
-    const newBlank = BLANK_LINE.test(tr.state.doc.lineAt(fromB).text);
-    if (!newlineDelta && !gtDelta && oldBlank === newBlank) {
-      return; // boundary-inert: no line count change, no blankness flip, no `>` delta
+    const oldText = tr.startState.doc.lineAt(fromA).text;
+    const newText = tr.state.doc.lineAt(fromB).text;
+    const oldBlank = BLANK_LINE.test(oldText);
+    const newBlank = BLANK_LINE.test(newText);
+    const indentDelta = /^[ \t]*/.exec(oldText)?.[0] !== /^[ \t]*/.exec(newText)?.[0];
+    if (
+      !newlineDelta &&
+      !gtDelta &&
+      oldBlank === newBlank &&
+      !indentDelta &&
+      !linkReferenceRisk(tr.startState, fromA) &&
+      !linkReferenceRisk(tr.state, fromB)
+    ) {
+      return; // boundary-inert: no line/blank/indent/terminator/reference change
     }
-    const insideBlock = prevBlocks.some((b) => fromA >= b.blockFrom && toA <= b.blockTo);
-    if (!insideBlock) {
-      risk = true;
-    }
+    risk = true;
   });
   return risk;
 }
