@@ -113,7 +113,9 @@ describe("touchesStructuralReparse — bounded-exhaustive differential oracle", 
         }
       });
     }
-    console.log(`exhaustive oracle: checked=${checked} arms-silent=${silent}`);
+    console.log(
+      `exhaustive oracle: checked=${checked} arms-silent=${silent} residuals=${residual.length}`
+    );
     expect(residual.slice(0, 5)).toEqual([]);
     // Non-vacuity: if the guard fired on EVERYTHING the comparison would be empty and a
     // broken bounded path would still be green.

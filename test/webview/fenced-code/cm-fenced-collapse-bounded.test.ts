@@ -14,6 +14,7 @@ import {
   fencedCodeCollapseFieldFullRecompute,
 } from "../../../src/webview/cm/fenced-code/fenced-code-collapse.js";
 import { setFencedCollapseEffect } from "../../../src/webview/cm/fenced-code/fenced-code-collapse-state.js";
+import { settledState } from "../helpers/settled-state.js";
 import { settledMount, settledView } from "../helpers/settled-view.js";
 import { withUnstarvedFrontier } from "../helpers/unstarved-frontier.js";
 
@@ -121,6 +122,11 @@ function run(initial: string, edits: Edit[]): void {
 describe("fencedCodeCollapseField bounded ≡ full", () => {
   const F = fence(15); // closed, 15 body lines → collapsible
   const masked = `---\ndescription: |\n  \`\`\`\n${Array.from({ length: 14 }, (_, i) => `  metadata ${i}`).join("\n")}\n  \`\`\`\n---\n`;
+  it("never collapses the fence-shaped run inside leading frontmatter", () => {
+    const state = settledState(EditorState.create({ doc: masked, extensions: exts() }));
+    expect(state.field(fencedCodeCollapseField).blocks).toEqual([]);
+    expect(state.field(fencedCodeCollapseFieldFullRecompute).blocks).toEqual([]);
+  });
   it("tracks frontmatter boundary removal, restoration, and movement", () => {
     const closing = masked.lastIndexOf("---\n");
     run(masked, [
@@ -193,6 +199,23 @@ describe("fencedCodeCollapseField bounded ≡ full", () => {
       name: "GF: delete a list marker promotes a nested fence to top-level",
       initial: `- item\n\n  ${fence(12).split("\n").join("\n  ")}\n\ntail`,
       edits: [{ changes: { from: 0, to: 2 } }], // delete "- "
+    },
+    // Pins topLevelBoundaryRisk's indent arm: a far paragraph's indent controls whether
+    // the indented fence continues the list, without changing a marker or blank boundary.
+    {
+      name: "GF indent: dedenting and reindenting a paragraph promotes and nests a far fence",
+      initial: `- item\n\n  para\n\n  ${F.split("\n").join("\n  ")}`,
+      edits: [{ changes: { from: 8, to: 10 } }, { changes: { from: 8, insert: "  " } }],
+    },
+    // Link-reference formation ends the leaf before `lazy`, closing the list and
+    // promoting the distant indented fence without an indent/newline/blank delta.
+    {
+      name: "GF link reference: dissolving and forming a definition changes fence eligibility",
+      initial: `- item\n\n  [a]: /url\nlazy\n\n  ${F.split("\n").join("\n  ")}`,
+      edits: [
+        { changes: { from: 13, to: 14, insert: ";" } },
+        { changes: { from: 13, to: 14, insert: ":" } },
+      ],
     },
     // Pins that the fence arm of STRUCTURAL is load-bearing: deleting block A's closing
     // ``` leaves it unclosed, so the parser re-pairs with block B's opener — block B (a
@@ -381,6 +404,11 @@ describe("fencedCodeCollapseField bounded ≡ full", () => {
         },
       ],
     },
+    {
+      name: "fenced hot path: indenting a body line stays equivalent",
+      initial: F,
+      edits: [{ changes: { from: F.indexOf("code line 12"), insert: "  " } }],
+    },
     // The SHARED structural guard (../structural-guard.ts) gained an ATX, an underscore and a
     // Setext alternation and relaxed its indent bound, and now fires on all of these. THIS
     // field deliberately keeps its own narrower STRUCTURAL so that editing inside a fence —
@@ -396,6 +424,8 @@ describe("fencedCodeCollapseField bounded ≡ full", () => {
     ...(
       [
         ["a hash comment", "# comment"],
+        ["an indented body line", "  code"],
+        ["a link-reference-shaped body line", "[a]: /url"],
         ["an equals line", "==="],
         ["an underscore rule", "___"],
         ["a four-space-indented hash", "    # deep"],
