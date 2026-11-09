@@ -1,10 +1,12 @@
 // @vitest-environment happy-dom
+
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
+import { createClipboardPaste } from "../../../src/webview/cm/paste/clipboard-paste.js";
 
 import { decideTablePaste } from "../../../src/webview/cm/paste/html-table-paste.js";
-import { htmlTablePaste, htmlTableToGfm } from "../../../src/webview/cm/paste/index.js";
+import { htmlTableToGfm } from "../../../src/webview/cm/paste/index.js";
 
 describe("htmlTableToGfm — structure", () => {
   it("converts a thead + tbody table to GFM", () => {
@@ -362,7 +364,8 @@ function mount(doc: string, canWrite = true) {
       doc,
       extensions: [
         EditorState.readOnly.of(!canWrite),
-        htmlTablePaste({ canWrite: () => canWrite }),
+        createClipboardPaste({ canWrite: () => canWrite, post: () => {}, onFailure: () => {} })
+          .extension,
       ],
     }),
   });
@@ -424,14 +427,13 @@ describe("htmlTablePaste — handler", () => {
     view.destroy();
   });
 
-  it("defers a fragment with prose alongside a table (preserves the prose)", () => {
+  it("preserves prose alongside a converted table", () => {
     const view = mount("");
     firePaste(view, {
       html: "<p>intro</p><table><tr><td>A</td><td>B</td></tr></table>",
       text: "intro\nA\tB",
     });
-    // Not converted: no delimiter row is inserted; the plain-text path keeps prose.
-    expect(view.state.doc.toString()).not.toContain("| --- |");
+    expect(view.state.doc.toString()).toBe("intro\n\n| A | B |\n| --- | --- |\n");
     view.destroy();
   });
 

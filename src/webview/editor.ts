@@ -53,7 +53,7 @@ import {
 } from "./cm/format/format-document-command.js";
 import { frontmatterBlockField, frontmatterRevealKeymap } from "./cm/frontmatter/index.js";
 import { hostDocumentReseed } from "./cm/host-reseed.js";
-import { createImagePasteDrop, imageBlockField, quollResourceBaseUri } from "./cm/image/index.js";
+import { imageBlockField, quollResourceBaseUri } from "./cm/image/index.js";
 import { runFormatCommand as runInlineFormat } from "./cm/inline/inline-formatting-commands.js";
 import { quollLinkClickHandler } from "./cm/link-handlers.js";
 import { quollLintFixKeymap } from "./cm/lint/apply-fix.js";
@@ -66,12 +66,7 @@ import { quollMarkdownLanguage } from "./cm/markdown.js";
 import { openExternalSinkFor, quollOpenExternalSink } from "./cm/open-external.js";
 import { quollOutline } from "./cm/outline/index.js";
 import { quollUpdateConfigSink, updateConfigSinkFor } from "./cm/outline/update-config-sink.js";
-import {
-  htmlTablePaste,
-  listReindentPaste,
-  pasteUrlOverSelection,
-  richHtmlPaste,
-} from "./cm/paste/index.js";
+import { createClipboardPaste } from "./cm/paste/index.js";
 import {
   computeReseedChange,
   quollDocumentEol,
@@ -148,6 +143,8 @@ export type EditorOptions = {
    *  The shell wires it to a low-alarm user-visible notice. Passed straight
    *  through to edit-sync's `onResyncStorm`. */
   onResyncStorm?: () => void;
+  /** Offers a failure or partial-result notice through the shell's shared slot. */
+  onPasteFailure?: () => void;
   /** Fired from edit-sync's drain when un-acked local bytes were actually LOST —
    *  from EITHER holder it carries them in (a held pre-ack replay buffer, or an
    *  Edit posted and not yet acked). NOT once per discard: a superseded holder
@@ -403,9 +400,10 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     showHeld: (content) => replaceViewText(splitToCmText(content), []),
   });
 
-  const imagePaste = createImagePasteDrop({
+  const clipboardPaste = createClipboardPaste({
     canWrite: () => opts.getState().canWrite,
     post: (message) => getHost().postMessage(message),
+    onFailure: () => opts.onPasteFailure?.(),
   });
 
   // Mirror the editor's advisory lint set to the host so it appears in the
@@ -882,47 +880,8 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // write-lock). Companion PAINT-side fix: the !important flex-basis in
         // cm/theme.ts (PR #199).
         quollVisibleEdgeRecovery(),
-        // Smart paste: a clipboard `text/html` fragment containing a <table> is
-        // converted to a GFM Markdown table and inserted through the normal edit
-        // pipeline. Prec.high so it arbitrates before imagePaste / default paste;
-        // on a non-table paste it returns false and defers. Grouped with the
-        // other paste handlers below.
-        htmlTablePaste({ canWrite: () => opts.getState().canWrite }),
-        // Paste-URL-over-selection: a clipboard text that is exactly one http(s)
-        // URL, pasted while a non-empty single-line selection exists, wraps the
-        // selection as `[selection](url)`. Prec.high, deferring on every other
-        // paste. Supersedes @codemirror/lang-markdown's built-in pasteURLAsLink
-        // (dropped from quollMarkdownLanguage) with allowlist-aligned detection.
-        pasteUrlOverSelection({ canWrite: () => opts.getState().canWrite }),
-        // Paste re-indent: a multi-line plain-text Markdown LIST fragment pasted
-        // at the start of a line inside an existing list context is re-based so
-        // its top level aligns with the caret's column (Obsidian analogue), inner
-        // structure preserved. Prec.high, deferring on every non-qualifying paste
-        // (single-line, non-list fragment, fence-bearing, mid-line caret, caret
-        // outside a list, tab-ambiguous) so htmlTablePaste / pasteUrlOverSelection
-        // / imagePaste / CM's default plain-text paste still run.
-        listReindentPaste({ canWrite: () => opts.getState().canWrite }),
-        // Rich paste: any clipboard `text/html` fragment that converts to Markdown
-        // (bold/italic, headings, nested lists, links, code, blockquotes, tables via
-        // the shared table core) is inserted through the normal edit pipeline.
-        // Prec.high, registered AFTER the table / URL / list handlers (they keep
-        // their fast paths) and BEFORE imagePaste. That ordering is safe for the two
-        // paths where this handler SWALLOWS a paste (in-code, null conversion): both
-        // exempt a clipboard carrying an image file item (hasImageFileItem) — NOT
-        // because an image copy lacks a text/html flavour; copying an image out of a
-        // web page carries both. The insert path hands the event on instead: with an
-        // image item riding along it inserts the conversion and returns false
-        // un-prevented, so imagePaste runs next and anchors after the inserted text.
-        // (A "Copy image" clipboard's HTML is a bare <img> → null → the exempted path.)
-        // Non-convertible → normally return false so imagePaste / plain paste run;
-        // swallowed only when nothing downstream could insert and a selection is at
-        // stake (canDeferWithoutDataLoss in rich-html-paste.ts).
-        richHtmlPaste({ canWrite: () => opts.getState().canWrite }),
-        // Paste/drop image ingestion: capture image files, post image-write, and
-        // insert the relative link at a position-mapped anchor on the host's
-        // reply. canWrite mirrors edit-sync's readonly drop; the host is the
-        // authoritative gate (sniff + size cap + read-only).
-        imagePaste.extension,
+        // One owner arbitrates clipboard text, HTML and Files through settlement.
+        clipboardPaste.extension,
         EditorView.lineWrapping,
         // The document's EOL — NOT EditorState.lineSeparator. Providing that facet
         // replaces CodeMirror's default insert splitter (/\r\n?|\n/) with a literal
@@ -1252,7 +1211,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       return sync.isIdentityTransition(externalEpoch, epochGeneration);
     },
     resolveImageWrite(requestId, relativePath) {
-      imagePaste.resolve(view, requestId, relativePath);
+      clipboardPaste.resolve(requestId, relativePath);
     },
     setLintGutter(enabled) {
       // Same-value no-op guard. The host posts editor-config at BOTH eager-seed

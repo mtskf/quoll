@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { EditorState } from "@codemirror/state";
+import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, expect, it, vi } from "vitest";
 
@@ -319,4 +319,39 @@ it.each([
   expect(edits()).toBe(0);
   expect(transactions()).toBe(0);
   expect(onFailure).toHaveBeenCalledOnce();
+});
+
+it.each([
+  "capability",
+  "state",
+])("pending clipboard settlement preserves document after read-only flip (%s)", async (source) => {
+  let canWrite = true;
+  const readOnly = new Compartment();
+  const post = vi.fn();
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const paste = createClipboardPaste({ canWrite: () => canWrite, post, onFailure: vi.fn() });
+  const view = new EditorView({
+    state: EditorState.create({
+      doc: "keep",
+      selection: { anchor: 0, head: 4 },
+      extensions: [paste.extension, readOnly.of(EditorState.readOnly.of(false))],
+    }),
+  });
+  views.push(view);
+  firePasteAt(view.contentDOM, { text: "caption", files: [{ type: "image/png" }] });
+  await vi.waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+  if (source === "capability") {
+    canWrite = false;
+  } else {
+    view.dispatch({ effects: readOnly.reconfigure(EditorState.readOnly.of(true)) });
+  }
+  const selection = view.state.selection;
+  paste.resolve(post.mock.calls[0][0].requestId, "assets/unlinked.png");
+  expect(view.state.doc.toString()).toBe("keep");
+  expect(view.state.selection.eq(selection)).toBe(true);
+  expect(view.state.field(pendingPasteOperations)).toEqual([]);
+  expect(warn).toHaveBeenCalledWith(
+    "[quoll] pasted image written but not linked: document went read-only mid round-trip",
+    { requestId: expect.any(String), relativePath: "assets/unlinked.png" }
+  );
 });

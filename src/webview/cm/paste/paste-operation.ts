@@ -95,6 +95,7 @@ export interface PasteDecision {
 
 export function createPasteOperationCoordinator(options: {
   onFailure: () => void;
+  canWrite?: () => boolean;
   startResources?: (id: string) => (() => void) | undefined;
   onReady?: (id: string) => void;
   onUnlinkedPath?: (path: string) => void;
@@ -205,7 +206,7 @@ export function createPasteOperationCoordinator(options: {
     ],
     dispose: () => dispose(),
     capture(view: EditorView, decision: PasteDecision, slotCount = 0): string | null {
-      if (disposed) {
+      if (disposed || options.canWrite?.() === false || view.state.readOnly) {
         return null;
       }
       const id = `paste-${++nextId}`;
@@ -264,6 +265,19 @@ export function createPasteOperationCoordinator(options: {
         return;
       }
       const state = view.state;
+      if (options.canWrite?.() === false || state.readOnly) {
+        for (const path of slots) {
+          if (typeof path === "string") {
+            console.warn(
+              "[quoll] pasted image written but not linked: document went read-only mid round-trip",
+              { requestId: id, relativePath: path }
+            );
+          }
+        }
+        release(id);
+        clearMetadata(view, id);
+        return;
+      }
       try {
         const insert = composePasteReplacement(state, decision, target, slots);
         if (!insert.length) {
@@ -287,6 +301,9 @@ export function createPasteOperationCoordinator(options: {
         view.dispatch(tr);
         release(id);
         clearMetadata(view, id);
+        if (slots.some((path) => path === null)) {
+          options.onFailure();
+        }
       } catch {
         if (view.state !== state) {
           // Adoption is terminal even when dispatch did not finish successfully.

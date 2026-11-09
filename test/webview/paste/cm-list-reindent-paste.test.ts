@@ -1,9 +1,11 @@
 // @vitest-environment happy-dom
+
 import { markdown } from "@codemirror/lang-markdown";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
-import { listReindentPaste, reindentPastedList } from "../../../src/webview/cm/paste/index.js";
+import { createClipboardPaste } from "../../../src/webview/cm/paste/clipboard-paste.js";
+import { reindentPastedList } from "../../../src/webview/cm/paste/index.js";
 import { decideListPaste } from "../../../src/webview/cm/paste/list-reindent.js";
 
 describe("reindentPastedList — pure transform", () => {
@@ -110,7 +112,8 @@ function mount(doc: string, canWrite = true) {
       extensions: [
         markdown(),
         EditorState.readOnly.of(!canWrite),
-        listReindentPaste({ canWrite: () => canWrite }),
+        createClipboardPaste({ canWrite: () => canWrite, post: () => {}, onFailure: () => {} })
+          .extension,
       ],
     }),
   });

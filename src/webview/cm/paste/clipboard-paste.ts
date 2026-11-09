@@ -2,7 +2,11 @@ import { type EditorState, Prec } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 
 import type { WebviewToHost } from "../../../shared/protocol.js";
-import { createImageFileTransport } from "../image/image-paste.js";
+import {
+  createImageFileTransport,
+  filesFromTransfer,
+  imageFileDrop,
+} from "../image/image-paste.js";
 import { decideTablePaste } from "./html-table-paste.js";
 import { decideListPaste } from "./list-reindent.js";
 import { createPasteOperationCoordinator, type PasteDecision } from "./paste-operation.js";
@@ -16,21 +20,11 @@ export function snapshotClipboard(data: DataTransfer | null) {
     present: types.includes(type),
     value: data?.getData(type) ?? "",
   });
-  const files: File[] = [];
-  for (const item of Array.from(data?.items ?? [])) {
-    if (item.kind !== "file") {
-      continue;
-    }
-    const file = item.getAsFile();
-    if (file) {
-      files.push(file);
-    }
-  }
   return {
     plain: flavour("text/plain"),
     html: flavour("text/html"),
     uri: flavour("text/uri-list"),
-    files,
+    files: filesFromTransfer(data),
   };
 }
 
@@ -67,18 +61,24 @@ export function decideClipboardPaste(
   return null;
 }
 
-/** Independent clipboard entry; production remains on the temporary legacy adapter. */
+/** Single clipboard owner; File drops share its coordinator and transport. */
 export function createClipboardPaste(options: {
   canWrite: () => boolean;
   post: (message: WebviewToHost) => void;
   onFailure: () => void;
   onUnlinkedPath?: (path: string) => void;
 }) {
+  const reportUnlinked =
+    options.onUnlinkedPath ??
+    ((relativePath: string) => {
+      console.warn("[quoll] pasted image written but not linked", { relativePath });
+    });
   const transport = createImageFileTransport({ post: options.post });
   let capturedFiles: readonly File[] = [];
   const coordinator = createPasteOperationCoordinator({
+    canWrite: options.canWrite,
     onFailure: options.onFailure,
-    onUnlinkedPath: options.onUnlinkedPath,
+    onUnlinkedPath: reportUnlinked,
     startResources: (id) =>
       transport.start(capturedFiles, (slot, path) => coordinator.settle(id, slot, path)),
     onReady: (id): void => {
@@ -88,6 +88,14 @@ export function createClipboardPaste(options: {
   return {
     extension: [
       coordinator.extension,
+      imageFileDrop({
+        canWrite: options.canWrite,
+        capture(view, files, from) {
+          capturedFiles = files;
+          coordinator.capture(view, { from, to: from, render: () => "" }, files.length);
+          capturedFiles = [];
+        },
+      }),
       Prec.high(
         EditorView.domEventHandlers({
           paste(event, view) {
@@ -98,7 +106,7 @@ export function createClipboardPaste(options: {
               return false;
             }
             event.preventDefault();
-            if (!options.canWrite()) {
+            if (!options.canWrite() || view.state.readOnly) {
               return true;
             }
             if (!snapshot.files.length && !text && !decided) {
@@ -115,7 +123,11 @@ export function createClipboardPaste(options: {
         })
       ),
     ],
-    resolve: transport.resolve,
+    resolve(requestId: string, path: string | null) {
+      if (!transport.resolve(requestId, path) && path !== null) {
+        reportUnlinked(path);
+      }
+    },
     dispose: coordinator.dispose,
   };
 }

@@ -1,20 +1,4 @@
-// Paste re-indent: when the clipboard carries a MULTI-LINE plain-text Markdown
-// LIST fragment and the caret sits on an otherwise-blank (whitespace-only) line
-// inside an existing list context, re-base the fragment's leading indentation so
-// its top level aligns with the caret's column, preserving the fragment's inner
-// relative structure (Obsidian analogue). Pure text transform on the paste content; the
-// handler (below) inserts it through the normal edit pipeline. Every
-// non-qualifying paste defers (return null / false) so the other paste handlers
-// + CM's default plain-text paste still run.
-//
-// v1 is deliberately conservative — "never corrupt" beats "re-base everything":
-// a fragment containing a fenced code block, tabs in its indentation, a
-// non-list first line, or a non-list line shallower than the list markers is
-// DEFERRED (inserted unchanged), because re-basing those cases could corrupt
-// the Markdown. Re-basing around a preserved fence is future work.
-
-import { type EditorState, type Extension, Prec } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import type { EditorState } from "@codemirror/state";
 
 import { columnAt } from "../list/list-geometry.js";
 import { parseListMark } from "../list/list-transform.js";
@@ -214,37 +198,4 @@ export function decideListPaste(state: EditorState, text: string) {
     render: (live: EditorState, _start: number, end: number) =>
       reindentPastedList(text, columnAt(live, end), live.tabSize) ?? rebased,
   };
-}
-
-export function listReindentPaste(opts: { canWrite: () => boolean }): Extension {
-  return Prec.high(
-    EditorView.domEventHandlers({
-      paste: (event, view) => {
-        const text = event.clipboardData?.getData("text/plain");
-        const decision = text ? decideListPaste(view.state, text) : null;
-        if (decision === null) {
-          return false;
-        }
-        // preventDefault ONLY here, AFTER committing to the re-base (mirrors
-        // htmlTablePaste): moving it earlier would swallow non-qualifying pastes.
-        event.preventDefault();
-        // Read-only: swallow silently with NO fallback insert. canWrite() is the
-        // same source that drives EditorState.readOnly, so they cannot diverge.
-        if (!opts.canWrite()) {
-          return true;
-        }
-        // Replace from the LINE START (swallowing the spaces prefix) so the
-        // transform's absolute indentation is not double-counted with the prefix.
-        const { from, to } = decision;
-        const insert = decision.render(view.state, from, to);
-        view.dispatch({
-          changes: { from, to, insert },
-          selection: { anchor: from + insert.length },
-          scrollIntoView: true,
-          userEvent: "input.paste",
-        });
-        return true;
-      },
-    })
-  );
 }

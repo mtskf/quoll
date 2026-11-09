@@ -27,7 +27,6 @@ import { EditorSelection, EditorState, Text } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { autoCloseFenceOnEnter } from "../../src/webview/cm/fenced-code/fenced-code-enter-keymap.js";
-import { addPendingAnchor } from "../../src/webview/cm/image/image-paste.js";
 import { continueListOnEnter } from "../../src/webview/cm/list/list-continuation-keymap.js";
 import { quollDocumentEol } from "../../src/webview/cm/seed.js";
 import { type EditorHandle, mountEditor } from "../../src/webview/editor.js";
@@ -265,7 +264,7 @@ describe("Quoll's own multi-line insert paths, in a CRLF document", () => {
     expectCleanLineModel(view.state.doc);
   });
 
-  it("imagePaste (resolveImageWrite) keeps a clean line model", () => {
+  it("imagePaste (resolveImageWrite) keeps a clean line model", async () => {
     const { handle, view } = mount();
     handle.applyDocument({
       content: "ab\r\ncd",
@@ -274,10 +273,15 @@ describe("Quoll's own multi-line insert paths, in a CRLF document", () => {
       docVersion: 1,
       ...PAIR,
     });
-    // Anchor mid-line so the insert carries the leading "\n" (image-paste.ts's
-    // standalone-block prefix), exercising the multi-line insert path.
-    view.dispatch({ effects: addPendingAnchor.of({ requestId: "1", anchor: 1 }) });
-    handle.resolveImageWrite("1", "./assets/x.png");
+    view.dispatch({ selection: { anchor: 1 } });
+    firePasteAt(view.contentDOM, { files: [{ type: "image/png" }] });
+    await vi.waitFor(() =>
+      expect(postMessage.mock.calls.some(([message]) => message.type === "image-write")).toBe(true)
+    );
+    const request = postMessage.mock.calls
+      .map(([message]) => message)
+      .find((message) => message.type === "image-write");
+    handle.resolveImageWrite(request.requestId, "./assets/x.png");
     expectLineModel(view.state.doc, ["a", "![](./assets/x.png)", "b", "cd"]);
     expectCleanLineModel(view.state.doc);
   });

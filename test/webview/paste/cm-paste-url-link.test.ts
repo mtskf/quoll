@@ -1,11 +1,12 @@
 // @vitest-environment happy-dom
+
 import { history, undo } from "@codemirror/commands";
 import { EditorSelection, EditorState } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
-
 import { quollMarkdownLanguage } from "../../../src/webview/cm/markdown.js";
-import { detectPasteLinkUrl, pasteUrlOverSelection } from "../../../src/webview/cm/paste/index.js";
+import { createClipboardPaste } from "../../../src/webview/cm/paste/clipboard-paste.js";
+import { detectPasteLinkUrl } from "../../../src/webview/cm/paste/index.js";
 import {
   decideUrlPaste,
   selectionIsPlainText,
@@ -84,7 +85,8 @@ function mount(doc: string, anchor: number, head: number, canWrite = true): Edit
         quollMarkdownLanguage(),
         EditorState.readOnly.of(!canWrite),
         history(),
-        pasteUrlOverSelection({ canWrite: () => canWrite }),
+        createClipboardPaste({ canWrite: () => canWrite, post: () => {}, onFailure: () => {} })
+          .extension,
       ],
     }),
   });
