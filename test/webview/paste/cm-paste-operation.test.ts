@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { history, redo, redoDepth, undo } from "@codemirror/commands";
-import { EditorSelection, EditorState, StateEffect } from "@codemirror/state";
+import { EditorSelection, EditorState, StateEffect, type TransactionSpec } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { expect, it, vi } from "vitest";
 
@@ -705,6 +705,157 @@ it("dispose aborts readers and clears timers", () => {
     expect(other.state.doc.toString()).toBe("");
     expect(ready).not.toHaveBeenCalled();
   } finally {
+    view.destroy();
+    vi.useRealTimers();
+  }
+});
+
+it.each([
+  "construction",
+  "dispatch",
+  "normalization",
+])("precommit failure preserves document and terminates operation (%s)", (stage) => {
+  vi.useFakeTimers();
+  const onFailure = vi.fn();
+  const onUnlinkedPath = vi.fn();
+  const release = vi.fn();
+  const coordinator = createPasteOperationCoordinator({
+    onFailure,
+    onUnlinkedPath,
+    startResources: () => release,
+  });
+  const view = new EditorView({
+    doc: "target",
+    selection: { anchor: 0, head: 6 },
+    extensions: [coordinator.extension],
+  });
+  try {
+    const id = coordinator.capture(view, { from: 0, to: 6, render: () => "caption" }, 1)!;
+    const before = view.state;
+    coordinator.settle(id, 0, "./unlinked.png");
+    if (stage === "construction") {
+      const update = before.update.bind(before);
+      vi.spyOn(before, "update").mockImplementation((...specs: TransactionSpec[]) => {
+        if (specs.some((spec) => spec.changes)) {
+          throw new Error("construction failed");
+        }
+        return update(...specs);
+      });
+    } else if (stage === "dispatch") {
+      const dispatch = view.dispatch.bind(view);
+      vi.spyOn(view, "dispatch").mockImplementation((...args: Parameters<typeof view.dispatch>) => {
+        if (args[0] && "docChanged" in args[0] && args[0].docChanged) {
+          throw new Error("dispatch failed");
+        }
+        dispatch(...args);
+      });
+    } else {
+      vi.spyOn(before, "toText").mockImplementationOnce(() => {
+        throw new Error("normalization failed");
+      });
+    }
+    expect(() => coordinator.complete(id)).not.toThrow();
+    expect(view.state.doc.eq(before.doc)).toBe(true);
+    expect(view.state.selection.eq(before.selection)).toBe(true);
+    expect(view.state.field(pendingPasteOperations)).toEqual([]);
+    expect(coordinator.results(id)).toBeUndefined();
+    expect(release).toHaveBeenCalledOnce();
+    expect(onFailure).toHaveBeenCalledOnce();
+    expect(onUnlinkedPath).toHaveBeenCalledExactlyOnceWith("./unlinked.png");
+    coordinator.settle(id, 0, "./late.png");
+    coordinator.complete(id);
+    vi.advanceTimersByTime(30_000);
+    expect(view.state.doc.eq(before.doc)).toBe(true);
+    expect(onFailure).toHaveBeenCalledOnce();
+  } finally {
+    vi.restoreAllMocks();
+    view.destroy();
+    vi.useRealTimers();
+  }
+});
+
+it("throwing live render terminates once and reports unlinked path", () => {
+  vi.useFakeTimers();
+  const onFailure = vi.fn();
+  const onUnlinkedPath = vi.fn();
+  const release = vi.fn();
+  const render = vi.fn(() => {
+    throw new Error("render failed");
+  });
+  const coordinator = createPasteOperationCoordinator({
+    onFailure,
+    onUnlinkedPath,
+    startResources: () => release,
+  });
+  const view = new EditorView({ doc: "target", extensions: [coordinator.extension] });
+  try {
+    const id = coordinator.capture(view, { from: 0, to: 6, render }, 1)!;
+    const before = view.state;
+    coordinator.settle(id, 0, "./unlinked.png");
+    expect(() => coordinator.complete(id)).not.toThrow();
+    expect(view.state.doc.eq(before.doc)).toBe(true);
+    expect(view.state.selection.eq(before.selection)).toBe(true);
+    expect(view.state.field(pendingPasteOperations)).toEqual([]);
+    expect(coordinator.results(id)).toBeUndefined();
+    expect(release).toHaveBeenCalledOnce();
+    expect(onFailure).toHaveBeenCalledOnce();
+    expect(onUnlinkedPath).toHaveBeenCalledExactlyOnceWith("./unlinked.png");
+    coordinator.settle(id, 0, "./late.png");
+    coordinator.complete(id);
+    vi.advanceTimersByTime(30_000);
+    expect(render).toHaveBeenCalledOnce();
+    expect(onFailure).toHaveBeenCalledOnce();
+    expect(view.state.doc.eq(before.doc)).toBe(true);
+  } finally {
+    view.destroy();
+    vi.useRealTimers();
+  }
+});
+
+it("postcommit failure never reinserts", () => {
+  vi.useFakeTimers();
+  const onFailure = vi.fn();
+  const release = vi.fn();
+  const coordinator = createPasteOperationCoordinator({ onFailure, startResources: () => release });
+  let edits = 0;
+  const view = new EditorView({
+    doc: "target",
+    extensions: [
+      coordinator.extension,
+      EditorView.updateListener.of((update) => {
+        if (update.docChanged) {
+          edits++;
+        }
+      }),
+    ],
+  });
+  try {
+    const id = coordinator.capture(view, { from: 0, to: 6, render: () => "caption" }, 1)!;
+    coordinator.settle(id, 0, "./accepted.png");
+    const dispatch = view.dispatch.bind(view);
+    const spy = vi
+      .spyOn(view, "dispatch")
+      .mockImplementation((...args: Parameters<typeof view.dispatch>) => {
+        dispatch(...args);
+        if (args[0] && "docChanged" in args[0] && args[0].docChanged) {
+          throw new Error("postcommit failed");
+        }
+      });
+    expect(() => coordinator.complete(id)).not.toThrow();
+    expect(view.state.doc.toString()).toBe("caption\n![](./accepted.png)\n");
+    expect(view.state.field(pendingPasteOperations)).toEqual([]);
+    expect(coordinator.results(id)).toBeUndefined();
+    expect(release).toHaveBeenCalledOnce();
+    expect(onFailure).toHaveBeenCalledOnce();
+    coordinator.settle(id, 0, "./late.png");
+    coordinator.complete(id);
+    vi.advanceTimersByTime(30_000);
+    expect(edits).toBe(1);
+    expect(spy).toHaveBeenCalledOnce();
+    expect(onFailure).toHaveBeenCalledOnce();
+    expect(view.state.doc.toString()).toBe("caption\n![](./accepted.png)\n");
+  } finally {
+    vi.restoreAllMocks();
     view.destroy();
     vi.useRealTimers();
   }

@@ -47,6 +47,7 @@ function mount(doc = "", anchor = 0, head = anchor) {
   const onFailure = vi.fn();
   const paste = createClipboardPaste({ canWrite: () => true, post, onFailure });
   let edits = 0;
+  let transactions = 0;
   const view = new EditorView({
     state: EditorState.create({
       doc,
@@ -55,6 +56,7 @@ function mount(doc = "", anchor = 0, head = anchor) {
         quollMarkdownLanguage(),
         paste.extension,
         EditorView.updateListener.of((update) => {
+          transactions += update.transactions.length;
           if (update.docChanged) {
             edits++;
           }
@@ -63,7 +65,7 @@ function mount(doc = "", anchor = 0, head = anchor) {
     }),
   });
   views.push(view);
-  return { view, paste, post, onFailure, edits: () => edits };
+  return { view, paste, post, onFailure, edits: () => edits, transactions: () => transactions };
 }
 it("ordinary text-only paste delegates once to CM", () => {
   const { view, post, edits } = mount("hello", 5);
@@ -254,4 +256,67 @@ it("rich prose-to-code fallback retains accepted image", async () => {
   expect(view.state.doc.toString()).toBe("```\ncaptured\n![](./assets/a.png)\n");
   expect(edits()).toBe(2);
   expect(view.state.field(pendingPasteOperations)).toEqual([]);
+});
+
+it("rich prose-to-code without fallback and rejected image preserves target", async () => {
+  const { view, paste, requestId, onFailure, edits } = await pendingRich();
+  const selection = view.state.selection;
+  paste.resolve(requestId, null);
+  expect(view.state.doc.toString()).toBe("```\ntarget");
+  expect(view.state.selection.eq(selection)).toBe(true);
+  expect(view.state.field(pendingPasteOperations)).toEqual([]);
+  expect(onFailure).toHaveBeenCalledTimes(1);
+  expect(edits()).toBe(1);
+});
+
+it("rich prose-to-code without fallback retains accepted image only", async () => {
+  const { view, paste, requestId, onFailure, edits } = await pendingRich();
+  paste.resolve(requestId, "./assets/a.png");
+  expect(view.state.doc.toString()).toBe("```\n![](./assets/a.png)\n");
+  expect(edits()).toBe(2);
+  expect(view.state.field(pendingPasteOperations)).toEqual([]);
+  expect(onFailure).not.toHaveBeenCalled();
+});
+
+it("rich prose-to-code plain fallback survives image rejection", async () => {
+  const { view, paste, requestId, edits } = await pendingRich("captured");
+  paste.resolve(requestId, null);
+  expect(view.state.doc.toString()).toBe("```\ncaptured");
+  expect(edits()).toBe(2);
+  expect(view.state.field(pendingPasteOperations)).toEqual([]);
+});
+
+it.each([
+  undefined,
+  "plain caption",
+  "",
+])("HTML-only caption survives non-image File rejection (%s)", async (text) => {
+  const { view, paste, post, edits } = mount("target", 0, 6);
+  firePasteAt(view.contentDOM, {
+    html: "<p>HTML caption</p>",
+    text,
+    files: [{ type: "application/pdf" }],
+  });
+  expect(edits()).toBe(0);
+  await vi.waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+  paste.resolve(post.mock.calls[0][0].requestId, null);
+  expect(view.state.doc.toString()).toBe(text || "HTML caption\n");
+  expect(edits()).toBe(1);
+  expect(view.state.field(pendingPasteOperations)).toEqual([]);
+});
+
+it.each([
+  {},
+  { text: "", html: "<img src='remote.png'>" },
+])("unusable clipboard does not delete selected text (%j)", (clipboard) => {
+  const { view, post, onFailure, edits, transactions } = mount("target", 0, 6);
+  const selection = view.state.selection;
+  firePasteAt(view.contentDOM, clipboard);
+  expect(view.state.doc.toString()).toBe("target");
+  expect(view.state.selection.eq(selection)).toBe(true);
+  expect(view.state.field(pendingPasteOperations)).toEqual([]);
+  expect(post).not.toHaveBeenCalled();
+  expect(edits()).toBe(0);
+  expect(transactions()).toBe(0);
+  expect(onFailure).toHaveBeenCalledOnce();
 });

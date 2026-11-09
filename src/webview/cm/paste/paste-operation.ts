@@ -264,24 +264,39 @@ export function createPasteOperationCoordinator(options: {
         return;
       }
       const state = view.state;
-      const insert = composePasteReplacement(state, decision, target, slots);
-      const spec = {
-        changes: { from: target.from, to: target.to, insert },
-        selection: target.selectionMoved ? undefined : { anchor: target.from + insert.length },
-        scrollIntoView: !target.selectionMoved,
-        userEvent: "input.paste",
-        annotations: [completingPasteOperation.of(id), isolateHistory.of("full")],
-        effects: removePasteOperation.of(id),
-      };
-      const expected = state.changes(spec.changes).apply(state.doc);
-      const tr = state.update(spec);
-      if (!tr.newDoc.eq(expected)) {
+      try {
+        const insert = composePasteReplacement(state, decision, target, slots);
+        if (!insert.length) {
+          fail(view, id);
+          return;
+        }
+        const spec = {
+          changes: { from: target.from, to: target.to, insert },
+          selection: target.selectionMoved ? undefined : { anchor: target.from + insert.length },
+          scrollIntoView: !target.selectionMoved,
+          userEvent: "input.paste",
+          annotations: [completingPasteOperation.of(id), isolateHistory.of("full")],
+          effects: removePasteOperation.of(id),
+        };
+        const expected = state.changes(spec.changes).apply(state.doc);
+        const tr = state.update(spec);
+        if (!tr.newDoc.eq(expected)) {
+          fail(view, id);
+          return;
+        }
+        view.dispatch(tr);
+        release(id);
+        clearMetadata(view, id);
+      } catch {
+        if (view.state !== state) {
+          // Adoption is terminal even when dispatch did not finish successfully.
+          release(id);
+          clearMetadata(view, id);
+          options.onFailure();
+          return;
+        }
         fail(view, id);
-        return;
       }
-      view.dispatch(tr);
-      release(id);
-      clearMetadata(view, id);
     },
     settle,
     results: (id: string) => operations.get(id)?.slots.slice(),

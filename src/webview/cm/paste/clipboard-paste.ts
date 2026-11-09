@@ -60,6 +60,10 @@ export function decideClipboardPaste(
   if (rich?.emittedMarkdownSyntax) {
     return rich;
   }
+  if (rich) {
+    const text = snapshot.plain.value || snapshot.uri.value;
+    return text ? { from: rich.from, to: rich.to, render: () => text } : rich;
+  }
   return null;
 }
 
@@ -95,6 +99,10 @@ export function createClipboardPaste(options: {
             }
             event.preventDefault();
             if (!options.canWrite()) {
+              return true;
+            }
+            if (!snapshot.files.length && !text && !decided) {
+              options.onFailure();
               return true;
             }
             const { from, to } = view.state.selection.main;
