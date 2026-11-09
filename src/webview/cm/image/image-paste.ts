@@ -1,7 +1,5 @@
-// Capture pasted/dropped image files and round-trip them through the host write
-// path. Capture-only re: the host: this module posts `image-write` and, on the
-// host's reply, inserts `![](relativePath)` at a position-mapped anchor. The
-// insert rides the normal CM updateListener → edit-sync → host write pipeline.
+// Callback-based File transport and the temporary legacy paste/drop adapter.
+// Only the adapter inserts links; transport never changes the document.
 
 import { type Extension, StateEffect, StateField } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
@@ -124,6 +122,131 @@ function estimatedBase64Length(size: number): number {
   return Math.ceil(size / 3) * 4;
 }
 
+/** Shared transport bounds preserve enumeration order and stop at the aggregate ceiling. */
+function visitTransferFiles(
+  files: readonly File[],
+  accept: (file: File, slot: number) => void,
+  refuse: (slot: number) => void
+) {
+  if (files.length > MAX_IMAGES_PER_EVENT) {
+    console.warn(
+      `[quoll] dropped ${files.length - MAX_IMAGES_PER_EVENT} image(s) (per-event count cap of ${MAX_IMAGES_PER_EVENT} reached)`
+    );
+  }
+  let totalBytes = 0;
+  let aggregateExceeded = false;
+  files.forEach((file, slot) => {
+    if (slot >= MAX_IMAGES_PER_EVENT || aggregateExceeded) {
+      refuse(slot);
+    } else if (estimatedBase64Length(file.size) > MAX_IMAGE_DATA_LENGTH) {
+      console.warn("[quoll] dropped oversized image (exceeds transfer ceiling)");
+      refuse(slot);
+    } else if (totalBytes + file.size > MAX_TOTAL_IMAGE_BYTES_PER_EVENT) {
+      console.warn("[quoll] dropped image (per-event aggregate byte cap reached)");
+      aggregateExceeded = true;
+      refuse(slot);
+    } else {
+      totalBytes += file.size;
+      accept(file, slot);
+    }
+  });
+}
+
+/** File transport settles callbacks only; it never retains or edits an EditorView. */
+export function createImageFileTransport(opts: { post: (message: WebviewToHost) => void }) {
+  let seq = 0;
+  // Late replies from an earlier webview session must not resolve a fresh request.
+  const sessionNonce = crypto.randomUUID();
+  const pending = new Map<string, (path: string | null) => void>();
+  function resolve(requestId: string, path: string | null): boolean {
+    const callback = pending.get(requestId);
+    if (!callback) {
+      return false;
+    }
+    pending.delete(requestId);
+    callback(path);
+    return true;
+  }
+  function submit(
+    file: File,
+    onResult: (path: string | null) => void,
+    onRequest?: (requestId: string) => void,
+    onFailure?: () => void
+  ): () => void {
+    const requestId = `${sessionNonce}-${++seq}`;
+    pending.set(requestId, onResult);
+    onRequest?.(requestId);
+    const failed = () => {
+      if (pending.delete(requestId)) {
+        if (onFailure) {
+          onFailure();
+        } else {
+          onResult(null);
+        }
+      }
+    };
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result;
+      if (typeof result !== "string") {
+        // Defensive browser-contract failure; log metadata without clipboard bytes.
+        console.warn("[quoll] dropped pasted image (FileReader returned a non-string result)", {
+          requestId,
+        });
+        failed();
+        return;
+      }
+      const comma = result.indexOf(",");
+      const base64 = comma >= 0 ? result.slice(comma + 1) : "";
+      if (base64 === "" && (file.size !== 0 || comma < 0)) {
+        // Empty Files are forwarded, but malformed or unexpectedly empty reads fail locally.
+        console.warn("[quoll] dropped pasted image (data URL carried no base64 payload)", {
+          requestId,
+        });
+        failed();
+        return;
+      }
+      const ok = safePostMessage(
+        { postMessage: opts.post },
+        { protocol: PROTOCOL_VERSION, type: "image-write", requestId, data: base64 },
+        "image-write"
+      );
+      if (!ok) {
+        failed();
+      }
+    };
+    reader.onerror = () => {
+      // The browser error distinguishes read failures without exposing file contents.
+      console.error("[quoll] failed to read pasted image", { err: reader.error, requestId });
+      failed();
+    };
+    reader.onabort = failed;
+    try {
+      reader.readAsDataURL(file);
+    } catch {
+      failed();
+    }
+    return () => {
+      pending.delete(requestId);
+      reader.onload = reader.onerror = reader.onabort = null;
+      reader.abort?.();
+    };
+  }
+  function start(files: readonly File[], onResult: (slot: number, path: string | null) => void) {
+    const cancel: (() => void)[] = [];
+    visitTransferFiles(
+      files,
+      (file, slot) => cancel.push(submit(file, (path) => onResult(slot, path))),
+      (slot) => onResult(slot, null)
+    );
+    return () =>
+      cancel.forEach((release) => {
+        release();
+      });
+  }
+  return { submit, start, resolve };
+}
+
 export function createImagePasteDrop(opts: {
   canWrite: () => boolean;
   post: (message: WebviewToHost) => void;
@@ -131,14 +254,6 @@ export function createImagePasteDrop(opts: {
   extension: Extension;
   resolve: (view: EditorView, requestId: string, relativePath: string | null) => void;
 } {
-  let seq = 0;
-  // Per-session nonce so requestIds never collide across a webview reload. A bare
-  // counter resets to 1 on reload; a late image-write-result from the previous
-  // session (same "1") would otherwise resolve a fresh pending anchor and insert
-  // the wrong image path. With the nonce, a stale reply falls into resolve()'s
-  // unknown-requestId no-op.
-  const sessionNonce = crypto.randomUUID();
-
   // Dispatch guarded against a view torn down mid-round-trip (tab closed between
   // FileReader start and callback). CM 6.43 does NOT actually throw there —
   // `EditorView.update` early-returns on `this.destroyed` (measured; see the
@@ -170,66 +285,18 @@ export function createImagePasteDrop(opts: {
     }
   };
 
+  const transport = createImageFileTransport({ post: opts.post });
   const submit = (view: EditorView, file: File, anchor: number): void => {
-    const requestId = `${sessionNonce}-${++seq}`;
-    // Register the anchor BEFORE the async read so it maps from capture time.
-    // Synchronous, inside the live event handler → no destroyed-view risk here.
-    view.dispatch({ effects: addPendingAnchor.of({ requestId, anchor }) });
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result;
-      if (typeof result !== "string") {
-        // Defensive: `readAsDataURL` is specified to yield a string, so this arm is
-        // not reachable through a conforming browser. Logged anyway, for the same
-        // reason clearPending's catch is: an unreachable branch that fires is
-        // exactly the one nobody will guess at, and a paste that vanishes with no
-        // trace is the failure this module keeps having.
-        // `requestId` carried like every other log here: one paste event can start
-        // several concurrent reads, and two bare copies of this line would be
-        // indistinguishable — you could not tell which image of the batch died.
-        console.warn("[quoll] dropped pasted image (FileReader returned a non-string result)", {
-          requestId,
-        });
-        clearPending(view, requestId);
-        return;
-      }
-      const comma = result.indexOf(",");
-      const base64 = comma >= 0 ? result.slice(comma + 1) : "";
-      if (base64 === "") {
-        // Reachable only for a malformed data URL — a zero-byte file, the other way
-        // to land an empty payload here, is already refused (with its own warn) back
-        // in `handle`. Either way the paste is abandoned on a writable doc, so it says so.
-        console.warn("[quoll] dropped pasted image (data URL carried no base64 payload)", {
-          requestId,
-        });
-        clearPending(view, requestId);
-        return;
-      }
-      const ok = safePostMessage(
-        { postMessage: opts.post },
-        { protocol: PROTOCOL_VERSION, type: "image-write", requestId, data: base64 },
-        "image-write"
-      );
-      if (!ok) {
-        clearPending(view, requestId);
-      }
-    };
-    reader.onerror = () => {
-      // No webview toast channel; rare browser-internal failure. Log + clear the
-      // pending anchor so nothing leaks. (Documented in the security-audit note.)
-      // `reader.error` is passed on because it is the ONLY account of the failure
-      // that exists — a DOMException whose `name` separates NotReadableError (the
-      // file moved/permissions) from the rest. It is metadata about the read, not
-      // image content, so it is safe to log. Matches the policy in
-      // `paste/html-to-markdown.ts`, which logs its caught `err` for the same reason.
-      // Paired with `requestId` for the reason the two warns above are: concurrent
-      // reads from one paste event are only tellable apart by it, and this is the arm
-      // most likely to hit several at once (a batch dropped from a folder that then
-      // moves).
-      console.error("[quoll] failed to read pasted image", { err: reader.error, requestId });
-      clearPending(view, requestId);
-    };
-    reader.readAsDataURL(file);
+    let requestId = "";
+    transport.submit(
+      file,
+      (path) => resolveLegacy(view, requestId, path),
+      (id) => {
+        requestId = id;
+        view.dispatch({ effects: addPendingAnchor.of({ requestId, anchor }) });
+      },
+      () => clearPending(view, requestId)
+    );
   };
 
   // Caller contract: invoked only with files.length > 0 AND canWrite() === true, after the
@@ -243,50 +310,17 @@ export function createImagePasteDrop(opts: {
   // regardless. Kept as belt-and-braces, and because it is the honest answer to "did this
   // handler own the event?" on the branch where every file was refused.
   const handle = (view: EditorView, files: File[], anchor: number): boolean => {
-    // Warned OUTSIDE the loop because this refusal is a property of the EVENT, not
-    // of any one file: the overflow is discarded whole, so the loop never meets the
-    // files it drops and could only ever report "and some more". Stated up front,
-    // with the exact count, it is the one refusal a reader can act on directly.
-    if (files.length > MAX_IMAGES_PER_EVENT) {
-      const dropped = files.length - MAX_IMAGES_PER_EVENT;
-      console.warn(
-        `[quoll] dropped ${dropped} image(s) (per-event count cap of ${MAX_IMAGES_PER_EVENT} reached)`
-      );
-    }
-    let totalBytes = 0;
-    for (const file of files.slice(0, MAX_IMAGES_PER_EVENT)) {
-      if (file.size === 0) {
-        // The only refusal in this loop that used to be silent, and the one with the
-        // widest blast radius. `handle` is shared by the paste and drop paths: on the
-        // PASTE path `isIngestibleImageItem` never looks at size, so richHtmlPaste has
-        // already handed the event on for this item; on the DROP path there is no such
-        // upstream. Either way this handler then preventDefaults for the event, skips
-        // every file and returns true — the event is fully consumed, no image is
-        // inserted, and (on paste) CM's plain-text fallback is suppressed too. Unless a
-        // converted HTML flavour rode along (richHtmlPaste inserted that first), the
-        // paste vanishes with no trace anywhere.
-        //
-        // Deliberately NOT hoisted into `isIngestibleImageItem`: the per-event
-        // aggregate cap below is order-dependent and cannot live in a per-item
-        // membership predicate at all, so hoisting the size refusals would only make
-        // the shared floor LOOK like imagePaste's acceptance set while still not
-        // being it. The predicate's honest contract is "this item is an image
-        // candidate"; refusals belong in `handle`, and every one of them warns —
-        // this loop's three plus the per-event count cap above it.
-        console.warn("[quoll] dropped empty image file (zero bytes)");
-        continue;
-      }
-      if (estimatedBase64Length(file.size) > MAX_IMAGE_DATA_LENGTH) {
-        console.warn("[quoll] dropped oversized image (exceeds transfer ceiling)");
-        continue;
-      }
-      if (totalBytes + file.size > MAX_TOTAL_IMAGE_BYTES_PER_EVENT) {
-        console.warn("[quoll] dropped image (per-event aggregate byte cap reached)");
-        break;
-      }
-      totalBytes += file.size;
-      submit(view, file, anchor);
-    }
+    visitTransferFiles(
+      files,
+      (file) => {
+        if (file.size === 0) {
+          console.warn("[quoll] dropped empty image file (zero bytes)");
+          return;
+        }
+        submit(view, file, anchor);
+      },
+      () => {}
+    );
     return true;
   };
 
@@ -325,7 +359,11 @@ export function createImagePasteDrop(opts: {
     }),
   ];
 
-  const resolve = (view: EditorView, requestId: string, relativePath: string | null): void => {
+  const resolveLegacy = (
+    view: EditorView,
+    requestId: string,
+    relativePath: string | null
+  ): void => {
     const pending = view.state.field(pendingImageAnchors).find((p) => p.requestId === requestId);
     if (!pending) {
       // unknown / duplicate / already-resolved / cleared by a reseed. The last of
@@ -468,5 +506,12 @@ export function createImagePasteDrop(opts: {
     }
   };
 
-  return { extension, resolve };
+  return {
+    extension,
+    resolve: (view: EditorView, requestId: string, path: string | null) => {
+      if (!transport.resolve(requestId, path)) {
+        resolveLegacy(view, requestId, path);
+      }
+    },
+  };
 }

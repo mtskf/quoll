@@ -12,6 +12,7 @@ import {
 import { hostDocumentReseed } from "../../../src/webview/cm/host-reseed.js";
 import {
   addPendingAnchor,
+  createImageFileTransport,
   createImagePasteDrop,
   isIngestibleImageItem,
   pendingImageAnchors,
@@ -1092,4 +1093,79 @@ describe("imagePaste — drop and dragover", () => {
     expect(post).not.toHaveBeenCalled();
     view.destroy();
   });
+});
+
+it("extracted transport never inserts and legacy adapter preserves paste behavior", async () => {
+  const { view, paste, post } = mount("hello");
+  const settled = vi.fn();
+  const transport = createImageFileTransport({ post });
+  transport.submit(pngFile(), settled);
+  await vi.waitFor(() => expect(imageWrites(post)).toHaveLength(1));
+  const first = imageWrites(post)[0];
+  transport.resolve(first.requestId, "./assets/transport.png");
+  expect(settled).toHaveBeenCalledWith("./assets/transport.png");
+  expect(view.state.doc.toString()).toBe("hello");
+  firePasteAt(view.contentDOM, { files: IMAGE_FILE });
+  await vi.waitFor(() => expect(imageWrites(post)).toHaveLength(2));
+  const second = imageWrites(post)[1];
+  paste.resolve(view, second.requestId, "./assets/legacy.png");
+  expect(view.state.doc.toString()).toBe("![](./assets/legacy.png)\nhello");
+  expect(view.state.field(pendingImageAnchors)).toEqual([]);
+  view.destroy();
+});
+
+it.each([
+  "encoded",
+  "count",
+  "aggregate",
+])("transport ceiling refusal settles without posting (%s)", (ceiling) => {
+  stubFileReader((reader) => {
+    reader.result = "data:image/png;base64,eA==";
+    reader.onload?.();
+  });
+  const post = vi.fn<(message: WebviewToHost) => void>();
+  const settled = vi.fn();
+  const transport = createImageFileTransport({ post });
+  const files =
+    ceiling === "encoded"
+      ? [sizedImageFile(20 * MIB)]
+      : ceiling === "count"
+        ? Array.from({ length: 17 }, pngFile)
+        : Array.from({ length: 6 }, () => sizedImageFile(8 * MIB));
+  transport.start(files, settled);
+  const accepted = ceiling === "encoded" ? 0 : ceiling === "count" ? 16 : 5;
+  expect(imageWrites(post)).toHaveLength(accepted);
+  expect(settled.mock.calls).toEqual([[accepted, null]]);
+});
+
+it("zero-byte candidate reaches host as empty base64", async () => {
+  const post = vi.fn<(message: WebviewToHost) => void>();
+  const settled = vi.fn();
+  const transport = createImageFileTransport({ post });
+  transport.start([new File([], "empty", { type: "image/png" })], settled);
+  await vi.waitFor(() => expect(imageWrites(post)).toHaveLength(1));
+  expect(imageWrites(post)[0]).toEqual({
+    protocol: PROTOCOL_VERSION,
+    type: "image-write",
+    requestId: expect.any(String),
+    data: "",
+  });
+  expect(settled).not.toHaveBeenCalled();
+  transport.resolve(imageWrites(post)[0].requestId, null);
+  expect(settled).toHaveBeenCalledWith(0, null);
+});
+
+it.each([
+  "application/pdf",
+  "",
+])("non-image MIME candidate reaches host byte decision (%s)", async (type) => {
+  const post = vi.fn<(message: WebviewToHost) => void>();
+  const settled = vi.fn();
+  const transport = createImageFileTransport({ post });
+  transport.start([new File([PNG_BYTES], "untyped", { type })], settled);
+  await vi.waitFor(() => expect(imageWrites(post)).toHaveLength(1));
+  const request = imageWrites(post)[0];
+  expect(decodeBase64(request.data)).toEqual(PNG_BYTES);
+  transport.resolve(request.requestId, "./assets/accepted.png");
+  expect(settled).toHaveBeenCalledWith(0, "./assets/accepted.png");
 });

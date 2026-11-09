@@ -79,11 +79,11 @@ const GUARD_PARSE_BUDGET_MS = 50;
  * (defer) when the tree can't be produced within the budget, so an unclassified
  * selection is never wrapped.
  */
-function selectionIsPlainText(view: EditorView, from: number, to: number): boolean {
-  if (!markdownLanguage.isActiveAt(view.state, from, 1)) {
+export function selectionIsPlainText(state: EditorState, from: number, to: number): boolean {
+  if (!markdownLanguage.isActiveAt(state, from, 1)) {
     return false;
   }
-  const tree = ensureSyntaxTree(view.state, to, GUARD_PARSE_BUDGET_MS);
+  const tree = ensureSyntaxTree(state, to, GUARD_PARSE_BUDGET_MS);
   if (tree === null) {
     return false; // tree unavailable for the selection → can't verify → defer
   }
@@ -141,14 +141,13 @@ function insertLinkOverSelection(view: EditorView, url: AllowlistedUrl): void {
 }
 
 /** Capture the URL and label range; rendering does not retain the view. */
-export function decideUrlPaste(view: EditorView, text: string) {
-  const { state } = view;
+export function decideUrlPaste(state: EditorState, text: string) {
   const { from, to, empty } = state.selection.main;
   if (empty || state.doc.lineAt(from).number !== state.doc.lineAt(to).number) {
     return null;
   }
   const url = detectPasteLinkUrl(text);
-  if (url === null || !selectionIsPlainText(view, from, to)) {
+  if (url === null || !selectionIsPlainText(state, from, to)) {
     return null;
   }
   return {
@@ -156,7 +155,10 @@ export function decideUrlPaste(view: EditorView, text: string) {
     to,
     url,
     render: (live: EditorState, start: number, end: number) =>
-      `[${live.doc.sliceString(start, end)}](${linkDestination(url)})`,
+      live.doc.lineAt(start).number === live.doc.lineAt(end).number &&
+      selectionIsPlainText(live, start, end)
+        ? `[${live.doc.sliceString(start, end)}](${linkDestination(url)})`
+        : text,
   };
 }
 
@@ -165,7 +167,7 @@ export function pasteUrlOverSelection(opts: { canWrite: () => boolean }): Extens
     EditorView.domEventHandlers({
       paste: (event, view) => {
         const text = event.clipboardData?.getData("text/plain");
-        const decision = text ? decideUrlPaste(view, text) : null;
+        const decision = text ? decideUrlPaste(view.state, text) : null;
         if (decision === null) {
           return false;
         }

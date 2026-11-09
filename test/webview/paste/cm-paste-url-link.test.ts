@@ -6,7 +6,10 @@ import { describe, expect, it } from "vitest";
 
 import { quollMarkdownLanguage } from "../../../src/webview/cm/markdown.js";
 import { detectPasteLinkUrl, pasteUrlOverSelection } from "../../../src/webview/cm/paste/index.js";
-import { decideUrlPaste } from "../../../src/webview/cm/paste/url-link-paste.js";
+import {
+  decideUrlPaste,
+  selectionIsPlainText,
+} from "../../../src/webview/cm/paste/url-link-paste.js";
 import { settledMount } from "../helpers/settled-view.js";
 
 describe("detectPasteLinkUrl — URL detection boundary", () => {
@@ -224,7 +227,7 @@ it("URL decision preserves selected label", async () => {
     extensions: [quollMarkdownLanguage()],
   });
   try {
-    const decision = decideUrlPaste(view, "https://example.com/a(b)");
+    const decision = decideUrlPaste(view.state, "https://example.com/a(b)");
     expect(decision).not.toBeNull();
     expect({ from: decision!.from, to: decision!.to }).toEqual({ from: 7, to: 12 });
     expect(decision!.render(view.state, 7, 12)).toBe("[label](<https://example.com/a(b)>)");
@@ -232,4 +235,32 @@ it("URL decision preserves selected label", async () => {
   } finally {
     view.destroy();
   }
+});
+
+it("URL syntax guard uses supplied state and owned range", () => {
+  const state = EditorState.create({
+    doc: "label `code`",
+    selection: { anchor: 7, head: 11 },
+    extensions: [quollMarkdownLanguage()],
+  });
+  expect(selectionIsPlainText(state, 0, 5)).toBe(true);
+  expect(selectionIsPlainText(state, 7, 11)).toBe(false);
+});
+
+it.each([
+  "multiline",
+  "unclassified",
+])("URL live guard falls back for multiline or unclassified range (%s)", (kind) => {
+  const initial = EditorState.create({
+    doc: "label",
+    selection: { anchor: 0, head: 5 },
+    extensions: [quollMarkdownLanguage()],
+  });
+  const decision = decideUrlPaste(initial, "https://example.com");
+  expect(decision).not.toBeNull();
+  const live = EditorState.create({
+    doc: kind === "multiline" ? "label\nmore" : "label",
+    extensions: kind === "multiline" ? [quollMarkdownLanguage()] : [],
+  });
+  expect(decision?.render(live, 0, live.doc.length)).toBe("https://example.com");
 });
