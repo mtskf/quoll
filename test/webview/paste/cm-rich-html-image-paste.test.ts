@@ -14,7 +14,7 @@ import {
   pendingImageAnchors,
 } from "../../../src/webview/cm/image/image-paste.js";
 import { richHtmlPaste } from "../../../src/webview/cm/paste/rich-html-paste.js";
-import { firePasteAt, IMAGE_FILE } from "../helpers/clipboard-double.js";
+import { firePasteAt, IMAGE_FILE, makeClipboardData } from "../helpers/clipboard-double.js";
 import { imageWrites, sizedImageFile } from "../helpers/image-paste-doubles.js";
 
 const CAPTION_HTML = "<div>caption</div>";
@@ -173,4 +173,23 @@ describe("richHtmlPaste + imagePaste — one clipboard carrying HTML and an imag
     expect(imageWrites(post)).toEqual([]);
     view.destroy();
   });
+});
+
+it("clipboard snapshot acquires stable File references", () => {
+  const supplied = new File(["given"], "given.png", { type: "image/png" });
+  const data = makeClipboardData({
+    text: "caption",
+    files: [
+      ...IMAGE_FILE,
+      { type: "image/png", file: supplied },
+      { type: "image/png", file: null },
+      { type: "image/png", file: undefined },
+    ],
+  });
+  const items = data.items.filter((item) => item.kind === "file");
+  expect(items[0].getAsFile()).toBe(items[0].getAsFile());
+  expect(items[0].getAsFile()).toBe(data.files[0]);
+  expect(items[1].getAsFile()).toBe(supplied);
+  expect(items[2].getAsFile()).toBeNull();
+  expect(items[3].getAsFile()).toBeUndefined();
 });

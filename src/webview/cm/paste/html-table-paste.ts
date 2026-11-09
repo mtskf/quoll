@@ -10,7 +10,7 @@
 // dispatch → updateListener → edit-sync → host write-lock → applyEdit settlement
 // pipeline (no raw write path).
 
-import { type Extension, Prec } from "@codemirror/state";
+import { type EditorState, type Extension, Prec } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 
 import { htmlTableToGfm } from "./html-table-to-gfm.js";
@@ -36,6 +36,21 @@ function blockSuffix(after: string): string {
   return after.startsWith("\n") ? "\n" : "\n\n";
 }
 
+/** Capture conversion once; frame it against the mapped replacement range. */
+export function decideTablePaste(state: EditorState, html: string) {
+  const gfm = htmlTableToGfm(html);
+  if (gfm === null) {
+    return null;
+  }
+  const { from, to } = state.selection.main;
+  return {
+    from,
+    to,
+    render: (live: EditorState, start: number, end: number) =>
+      blockPrefix(live.doc.sliceString(0, start)) + gfm + blockSuffix(live.doc.sliceString(end)),
+  };
+}
+
 export function htmlTablePaste(opts: { canWrite: () => boolean }): Extension {
   return Prec.high(
     EditorView.domEventHandlers({
@@ -44,8 +59,8 @@ export function htmlTablePaste(opts: { canWrite: () => boolean }): Extension {
         if (!html) {
           return false; // no HTML flavour → let normal paste handlers run
         }
-        const gfm = htmlTableToGfm(html);
-        if (gfm === null) {
+        const decision = decideTablePaste(view.state, html);
+        if (decision === null) {
           return false; // not a convertible table → defer to the other handlers
         }
         // preventDefault ONLY here, AFTER the null-check. This is intentionally the
@@ -62,10 +77,8 @@ export function htmlTablePaste(opts: { canWrite: () => boolean }): Extension {
         // table under multi-cursor is degenerate — acceptable). The handler runs
         // synchronously inside the live DOM event, so the view is always alive at
         // dispatch time (unlike imagePaste's async FileReader path).
-        const { from, to } = view.state.selection.main;
-        const before = view.state.doc.sliceString(0, from);
-        const after = view.state.doc.sliceString(to);
-        const insert = blockPrefix(before) + gfm + blockSuffix(after);
+        const { from, to } = decision;
+        const insert = decision.render(view.state, from, to);
         view.dispatch({
           changes: { from, to, insert },
           selection: { anchor: from + insert.length },

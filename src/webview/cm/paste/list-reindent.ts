@@ -13,7 +13,7 @@
 // DEFERRED (inserted unchanged), because re-basing those cases could corrupt
 // the Markdown. Re-basing around a preserved fence is future work.
 
-import { type Extension, Prec } from "@codemirror/state";
+import { type EditorState, type Extension, Prec } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 
 import { columnAt } from "../list/list-geometry.js";
@@ -168,49 +168,62 @@ function prefixIsSpacesOnly(prefix: string): boolean {
   return /^ *$/.test(prefix);
 }
 
+/** The leading whitespace belongs to this replacement, not to its caller. */
+export function decideListPaste(state: EditorState, text: string) {
+  // Multi-line only. Accept any of \n, \r\n, or lone \r as a line separator
+  // so the handler reaches the (CR-normalising) transform for every
+  // real-world clipboard; a single-line paste defers.
+  if (!text || (!text.includes("\n") && !text.includes("\r"))) {
+    return null;
+  }
+  const { from, empty } = state.selection.main;
+  // Empty selection only: a non-empty (possibly reverse) selection has an
+  // ambiguous caret and would make the [line.from, from) replace cross
+  // selected text. Defer to default paste.
+  if (!empty) {
+    return null;
+  }
+  const line = state.doc.lineAt(from);
+  // Only paste-at-line-start is safe: a non-spaces prefix would glue a
+  // pasted marker mid-line, and a tab prefix would be rewritten to spaces.
+  if (!prefixIsSpacesOnly(state.doc.sliceString(line.from, from))) {
+    return null;
+  }
+  // The rest of the caret line must ALSO be blank. Without this, a caret
+  // resting in the leading indentation of a NON-blank list line (e.g. click
+  // / smart-Home before `  - existing`'s marker) still passes the prefix
+  // and listItemAt gates, and the prefix-swallow would strip that line's
+  // indentation — silently de-indenting / gluing pre-existing content the
+  // user never pasted. The feature targets a caret at the blank end of a
+  // line inside a list. (A spaces-only remainder is allowed — trim() empty.)
+  if (state.doc.sliceString(from, line.to).trim() !== "") {
+    return null;
+  }
+  // Must be an existing list context (spec), and never inside code.
+  if (caretInCode(state, from) || listItemAt(state, from) === null) {
+    return null;
+  }
+  const destColumn = columnAt(state, from);
+  const rebased = reindentPastedList(text, destColumn, state.tabSize);
+  if (rebased === null) {
+    return null; // not a clean list fragment / ambiguous → default paste
+  }
+  return {
+    from: line.from,
+    to: from,
+    render: (live: EditorState, _start: number, end: number) =>
+      reindentPastedList(text, columnAt(live, end), live.tabSize) ?? rebased,
+  };
+}
+
 export function listReindentPaste(opts: { canWrite: () => boolean }): Extension {
   return Prec.high(
     EditorView.domEventHandlers({
       paste: (event, view) => {
         const text = event.clipboardData?.getData("text/plain");
-        // Multi-line only. Accept any of \n, \r\n, or lone \r as a line separator
-        // so the handler reaches the (CR-normalising) transform for every
-        // real-world clipboard; a single-line paste defers.
-        if (!text || (!text.includes("\n") && !text.includes("\r"))) {
+        const decision = text ? decideListPaste(view.state, text) : null;
+        if (decision === null) {
           return false;
-        }
-        const { state } = view;
-        const { from, empty } = state.selection.main;
-        // Empty selection only: a non-empty (possibly reverse) selection has an
-        // ambiguous caret and would make the [line.from, from) replace cross
-        // selected text. Defer to default paste.
-        if (!empty) {
-          return false;
-        }
-        const line = state.doc.lineAt(from);
-        // Only paste-at-line-start is safe: a non-spaces prefix would glue a
-        // pasted marker mid-line, and a tab prefix would be rewritten to spaces.
-        if (!prefixIsSpacesOnly(state.doc.sliceString(line.from, from))) {
-          return false;
-        }
-        // The rest of the caret line must ALSO be blank. Without this, a caret
-        // resting in the leading indentation of a NON-blank list line (e.g. click
-        // / smart-Home before `  - existing`'s marker) still passes the prefix
-        // and listItemAt gates, and the prefix-swallow would strip that line's
-        // indentation — silently de-indenting / gluing pre-existing content the
-        // user never pasted. The feature targets a caret at the blank end of a
-        // line inside a list. (A spaces-only remainder is allowed — trim() empty.)
-        if (state.doc.sliceString(from, line.to).trim() !== "") {
-          return false;
-        }
-        // Must be an existing list context (spec), and never inside code.
-        if (caretInCode(state, from) || listItemAt(state, from) === null) {
-          return false;
-        }
-        const destColumn = columnAt(state, from);
-        const rebased = reindentPastedList(text, destColumn, state.tabSize);
-        if (rebased === null) {
-          return false; // not a clean list fragment / ambiguous → default paste
         }
         // preventDefault ONLY here, AFTER committing to the re-base (mirrors
         // htmlTablePaste): moving it earlier would swallow non-qualifying pastes.
@@ -222,9 +235,11 @@ export function listReindentPaste(opts: { canWrite: () => boolean }): Extension 
         }
         // Replace from the LINE START (swallowing the spaces prefix) so the
         // transform's absolute indentation is not double-counted with the prefix.
+        const { from, to } = decision;
+        const insert = decision.render(view.state, from, to);
         view.dispatch({
-          changes: { from: line.from, to: from, insert: rebased },
-          selection: { anchor: line.from + rebased.length },
+          changes: { from, to, insert },
+          selection: { anchor: from + insert.length },
           scrollIntoView: true,
           userEvent: "input.paste",
         });

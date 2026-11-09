@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import { quollMarkdownLanguage } from "../../../src/webview/cm/markdown.js";
 import { detectPasteLinkUrl, pasteUrlOverSelection } from "../../../src/webview/cm/paste/index.js";
+import { decideUrlPaste } from "../../../src/webview/cm/paste/url-link-paste.js";
 import { settledMount } from "../helpers/settled-view.js";
 
 describe("detectPasteLinkUrl — URL detection boundary", () => {
@@ -215,3 +216,20 @@ describe("pasteUrlOverSelection — syntax-context guard", () => {
 // deterministically (a probe test passed identically with and without the fix).
 // The fix is a defensive robustness improvement over the ported built-in; the
 // tree-available guard behaviour is covered by the code/link defer tests above.
+
+it("URL decision preserves selected label", async () => {
+  const view = await settledMount({
+    doc: "before label after",
+    selection: { anchor: 7, head: 12 },
+    extensions: [quollMarkdownLanguage()],
+  });
+  try {
+    const decision = decideUrlPaste(view, "https://example.com/a(b)");
+    expect(decision).not.toBeNull();
+    expect({ from: decision!.from, to: decision!.to }).toEqual({ from: 7, to: 12 });
+    expect(decision!.render(view.state, 7, 12)).toBe("[label](<https://example.com/a(b)>)");
+    expect(view.state.doc.toString()).toBe("before label after");
+  } finally {
+    view.destroy();
+  }
+});

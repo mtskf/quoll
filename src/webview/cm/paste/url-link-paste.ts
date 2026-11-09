@@ -19,7 +19,7 @@
 
 import { markdownLanguage } from "@codemirror/lang-markdown";
 import { ensureSyntaxTree } from "@codemirror/language";
-import { type Extension, Prec } from "@codemirror/state";
+import { type EditorState, type Extension, Prec } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 
 import { type AllowlistedUrl, isAllowedUrl } from "../../../markdown/url-allowlist.js";
@@ -140,33 +140,33 @@ function insertLinkOverSelection(view: EditorView, url: AllowlistedUrl): void {
   });
 }
 
+/** Capture the URL and label range; rendering does not retain the view. */
+export function decideUrlPaste(view: EditorView, text: string) {
+  const { state } = view;
+  const { from, to, empty } = state.selection.main;
+  if (empty || state.doc.lineAt(from).number !== state.doc.lineAt(to).number) {
+    return null;
+  }
+  const url = detectPasteLinkUrl(text);
+  if (url === null || !selectionIsPlainText(view, from, to)) {
+    return null;
+  }
+  return {
+    from,
+    to,
+    url,
+    render: (live: EditorState, start: number, end: number) =>
+      `[${live.doc.sliceString(start, end)}](${linkDestination(url)})`,
+  };
+}
+
 export function pasteUrlOverSelection(opts: { canWrite: () => boolean }): Extension {
   return Prec.high(
     EditorView.domEventHandlers({
       paste: (event, view) => {
-        const { main } = view.state.selection;
-        // No selection → nothing to wrap; defer to plain paste / other handlers.
-        if (main.empty) {
-          return false;
-        }
-        // Single-line only: a multi-line selection is a block operation, not a
-        // link label. Defer to plain paste.
-        const startLine = view.state.doc.lineAt(main.from).number;
-        const endLine = view.state.doc.lineAt(main.to).number;
-        if (startLine !== endLine) {
-          return false;
-        }
         const text = event.clipboardData?.getData("text/plain");
-        if (!text) {
-          return false;
-        }
-        const url = detectPasteLinkUrl(text);
-        if (url === null) {
-          return false; // not a bare http(s) URL → normal paste
-        }
-        // Don't wrap inside code / an existing link / emphasis / raw HTML —
-        // mirrors the built-in pasteURLAsLink guard we replaced.
-        if (!selectionIsPlainText(view, main.from, main.to)) {
+        const decision = text ? decideUrlPaste(view, text) : null;
+        if (decision === null) {
           return false;
         }
         // preventDefault ONLY here, AFTER we commit to wrapping (mirrors
@@ -177,7 +177,7 @@ export function pasteUrlOverSelection(opts: { canWrite: () => boolean }): Extens
         if (!opts.canWrite()) {
           return true;
         }
-        insertLinkOverSelection(view, url);
+        insertLinkOverSelection(view, decision.url);
         return true;
       },
     })

@@ -3,6 +3,7 @@ import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 
+import { decideTablePaste } from "../../../src/webview/cm/paste/html-table-paste.js";
 import { htmlTablePaste, htmlTableToGfm } from "../../../src/webview/cm/paste/index.js";
 
 describe("htmlTableToGfm — structure", () => {
@@ -459,4 +460,21 @@ describe("htmlTablePaste — handler", () => {
     expect(view.state.doc.toString()).toBe("");
     view.destroy();
   });
+});
+
+it("table decision preserves framing and surrounding prose", () => {
+  const state = EditorState.create({
+    doc: "beforeTARGETafter",
+    selection: { anchor: 6, head: 12 },
+  });
+  const decision = decideTablePaste(state, "<table><tr><td>A</td></tr></table>");
+  expect(decision).not.toBeNull();
+  const { from, to } = decision!;
+  expect({ from, to }).toEqual({ from: 6, to: 12 });
+  const insert = decision!.render(state, from, to);
+  expect(state.update({ changes: { from, to, insert } }).state.doc.toString()).toBe(
+    "before\n\n| A |\n| --- |\n\nafter"
+  );
+  const live = state.update({ changes: { from: 0, insert: "intro\n\n" } }).state;
+  expect(decision!.render(live, from + 7, to + 7)).toBe(insert);
 });

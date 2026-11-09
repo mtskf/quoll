@@ -263,6 +263,34 @@ function canDeferWithoutDataLoss(event: ClipboardEvent, from: number, to: number
   return !pasteWouldBeDropped(event) || from === to;
 }
 
+/** Freeze conversion bytes, but decide inline placement against live neighbours. */
+export function decideRichPaste(
+  state: EditorState,
+  html: string,
+  plainFallback = "",
+  forceBlock = false
+) {
+  const converted = htmlToMarkdown(html);
+  if (converted === null) {
+    return null;
+  }
+  const md = converted.markdown;
+  const { from, to } = state.selection.main;
+  return {
+    from,
+    to,
+    emittedMarkdownSyntax: converted.emittedMarkdownSyntax,
+    render: (live: EditorState, start: number, end: number) => {
+      if (caretInCode(live, start) || caretInCode(live, end)) {
+        return plainFallback;
+      }
+      return !forceBlock && insertsInline(live, start, end, md)
+        ? md
+        : blockPrefix(live.doc.sliceString(0, start)) + md + blockSuffix(live.doc.sliceString(end));
+    },
+  };
+}
+
 export function richHtmlPaste(opts: { canWrite: () => boolean }): Extension {
   return Prec.high(
     EditorView.domEventHandlers({
@@ -303,7 +331,15 @@ export function richHtmlPaste(opts: { canWrite: () => boolean }): Extension {
           event.preventDefault();
           return true;
         }
-        const converted = htmlToMarkdown(html);
+        const imageRidesAlong = hasImageFileItem(event);
+        const converted = decideRichPaste(
+          view.state,
+          html,
+          event.clipboardData?.getData("text/plain") ||
+            event.clipboardData?.getData("text/uri-list") ||
+            "",
+          imageRidesAlong
+        );
         if (converted === null) {
           // Nothing convertible (whitespace-only, cap breached, parse error) → the
           // clipboard's own bytes are the best available paste. Same requirement as
@@ -365,7 +401,6 @@ export function richHtmlPaste(opts: { canWrite: () => boolean }): Extension {
         // EditorView.editable (editor.ts's `editableComp`) are reconfigured from
         // the same `canWrite` wire value that drives opts.canWrite(), so the two
         // cannot diverge — the same invariant html-table-paste.ts relies on.
-        const imageRidesAlong = hasImageFileItem(event);
         if (!converted.emittedMarkdownSyntax && hasPlainFallback(event) && !imageRidesAlong) {
           return false;
         }
@@ -384,7 +419,6 @@ export function richHtmlPaste(opts: { canWrite: () => boolean }): Extension {
         // ordinary history, a property of ANY pending image — this path is a new
         // way to reach it. Pinned in cm-rich-html-image-paste.test.ts; closing it
         // is left to the PASTE-03 clipboard-arbitration work.
-        const md = converted.markdown;
         if (!opts.canWrite()) {
           event.preventDefault();
           return true; // read-only: swallow, no fallback insert (mirrors siblings)
@@ -396,12 +430,7 @@ export function richHtmlPaste(opts: { canWrite: () => boolean }): Extension {
         // plain paste — bold text pasted into a sentence must not split it. Anything
         // else gets blank-line separators so it stands as its own block, and so does
         // prose with an image riding along: the image lands after it, on its own line.
-        const insert =
-          !imageRidesAlong && insertsInline(view.state, from, to, md)
-            ? md
-            : blockPrefix(view.state.doc.sliceString(0, from)) +
-              md +
-              blockSuffix(view.state.doc.sliceString(to));
+        const insert = converted.render(view.state, from, to);
         view.dispatch({
           changes: { from, to, insert },
           selection: { anchor: from + insert.length },

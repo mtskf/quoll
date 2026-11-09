@@ -60,17 +60,20 @@ export function makeClipboardData(data: ClipboardFlavours): {
     type,
     getAsFile: () => null,
   }));
-  const fileItems = (data.files ?? []).map((spec) => ({
-    kind: "file" as const,
-    type: spec.type,
-    // `"file" in spec`, not `spec.file === undefined`: the latter cannot tell an
-    // omitted key from an explicit `file: undefined`, which is one of the two
-    // no-File shapes this helper exists to be able to construct.
-    // Non-empty content deliberately: imagePaste skips a zero-byte file (`file.size
-    // === 0`), so a `new File([""], …)` default would make every ingestion test
-    // pass the membership predicate and then silently do nothing.
-    getAsFile: () => ("file" in spec ? spec.file : new File(["x"], "f", { type: spec.type })),
-  }));
+  const fileItems = (data.files ?? []).map((spec) => {
+    const file = "file" in spec ? spec.file : new File(["x"], "f", { type: spec.type });
+    return {
+      kind: "file" as const,
+      type: spec.type,
+      // `"file" in spec`, not `spec.file === undefined`: the latter cannot tell an
+      // omitted key from an explicit `file: undefined`, which is one of the two
+      // no-File shapes this helper exists to be able to construct.
+      // Non-empty content deliberately: imagePaste skips a zero-byte file (`file.size
+      // === 0`), so a `new File([""], …)` default would make every ingestion test
+      // pass the membership predicate and then silently do nothing.
+      getAsFile: () => file,
+    };
+  });
 
   const files = fileItems.map((item) => item.getAsFile()).filter((f): f is File => !!f);
   return {

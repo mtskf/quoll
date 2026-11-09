@@ -7,7 +7,7 @@ import type { Tree } from "@lezer/common";
 import { describe, expect, it } from "vitest";
 import { quollMarkdownLanguage } from "../../../src/webview/cm/markdown.js";
 import { htmlToMarkdown } from "../../../src/webview/cm/paste/html-to-markdown.js";
-import { richHtmlPaste } from "../../../src/webview/cm/paste/rich-html-paste.js";
+import { decideRichPaste, richHtmlPaste } from "../../../src/webview/cm/paste/rich-html-paste.js";
 import { type ClipboardFlavours, firePasteAt, IMAGE_FILE } from "../helpers/clipboard-double.js";
 
 function mount(doc: string, canWrite = true) {
@@ -753,4 +753,45 @@ describe("richHtmlPaste — plain-text-like fragments defer", () => {
     expect(view.state.doc.toString()).toBe("hellomidworld");
     view.destroy();
   });
+});
+
+it("changed neighbours force safe block framing", () => {
+  const state = EditorState.create({
+    doc: "hello world",
+    selection: { anchor: 6 },
+    extensions: [markdown()],
+  });
+  const decision = decideRichPaste(state, "<strong>bold</strong>");
+  expect(decision).not.toBeNull();
+  expect(decision!.render(state, 6, 6)).toBe("**bold**");
+  const live = state.update({ changes: { from: 6, insert: "\\" } }).state;
+  expect(decision!.render(live, 7, 7)).toBe("\n\n**bold**\n\n");
+  expect(state.doc.toString()).toBe("hello world");
+});
+
+it("rich render uses captured plain after an outside fence insertion", () => {
+  const state = EditorState.create({
+    doc: "intro\n\nlabel",
+    selection: { anchor: 7, head: 12 },
+    extensions: [markdown()],
+  });
+  const decision = decideRichPaste(state, "<strong>bold</strong>", "captured plain");
+  expect(decision).not.toBeNull();
+  const live = state.update({ changes: { from: 0, insert: "```\n" } }).state;
+  expect(decision!.render(live, 11, 16)).toBe("captured plain");
+  expect(live.doc.sliceString(11, 16)).toBe("label");
+});
+
+it("rich render emits no text in code without captured fallback", () => {
+  for (const prefix of ["```\n", "    "]) {
+    const state = EditorState.create({
+      doc: "label",
+      selection: { anchor: 1, head: 4 },
+      extensions: [markdown()],
+    });
+    const decision = decideRichPaste(state, "<strong>bold</strong>");
+    expect(decision).not.toBeNull();
+    const live = state.update({ changes: { from: 0, insert: prefix } }).state;
+    expect(decision!.render(live, 1 + prefix.length, 4 + prefix.length)).toBe("");
+  }
 });

@@ -3,8 +3,8 @@ import { markdown } from "@codemirror/lang-markdown";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
-
 import { listReindentPaste, reindentPastedList } from "../../../src/webview/cm/paste/index.js";
+import { decideListPaste } from "../../../src/webview/cm/paste/list-reindent.js";
 
 describe("reindentPastedList — pure transform", () => {
   it("re-bases a top-level list fragment to the destination column (delta +2)", () => {
@@ -257,4 +257,18 @@ describe("listReindentPaste — handler", () => {
     expect(view.state.doc.toString()).toBe(LOOSE);
     view.destroy();
   });
+});
+
+it("list decision owns indentation replacement range", () => {
+  const doc = "- a\n  - b\n  \n  more";
+  const state = EditorState.create({ doc, selection: { anchor: 12 }, extensions: [markdown()] });
+  const decision = decideListPaste(state, "- a\n  - b\n- c");
+  expect(decision).not.toBeNull();
+  expect({ from: decision!.from, to: decision!.to }).toEqual({ from: 10, to: 12 });
+  const insert = decision!.render(state, decision!.from, decision!.to);
+  expect(
+    state
+      .update({ changes: { from: decision!.from, to: decision!.to, insert } })
+      .state.doc.toString()
+  ).toBe("- a\n  - b\n  - a\n    - b\n  - c\n  more");
 });
