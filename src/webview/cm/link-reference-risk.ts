@@ -1,5 +1,8 @@
 import type { EditorState } from "@codemirror/state";
 
+const BLANK_LINE = /^[ \t]*$/;
+const LINK_REFERENCE_START = /^[ \t>*+\d.)-]*\[/;
+
 /** Lezer's LinkReference leaf starts with `[`, but its length-limited nonempty label,
  *  destination and optional quoted/parenthesized title can reach later lines. The colon
  *  must immediately follow `]`; whitespace may put the destination or title on a
@@ -14,15 +17,32 @@ import type { EditorState } from "@codemirror/state";
  *  and over-triggers on malformed prefixes, ordinary line-start links/code, and later
  *  prose in the same run. Inline images (`![…]`) remain on the bounded hot path.
  *  Newline/blank/indent changes are handled by the callers' other arms; this check
- *  also covers shapeless continuation edits. */
+ *  also covers shapeless continuation edits. A reverse cursor avoids per-line tree lookups. */
 export function linkReferenceRisk(state: EditorState, pos: number): boolean {
-  for (let n = state.doc.lineAt(pos).number; n > 0; n--) {
-    const text = state.doc.line(n).text;
-    if (/^[ \t]*$/.test(text)) {
-      break;
-    }
-    if (/^[ \t>*+\d.)-]*\[/.test(text)) {
-      return true;
+  const line = state.doc.lineAt(pos);
+  if (BLANK_LINE.test(line.text)) {
+    return false;
+  }
+  if (LINK_REFERENCE_START.test(line.text)) {
+    return true;
+  }
+  const cursor = state.doc.iterRange(line.from, 0);
+  let haveText = true;
+  while (!cursor.next().done) {
+    if (cursor.lineBreak) {
+      // Empty lines have no text item; the first break follows the inspected line.
+      if (!haveText) {
+        return false;
+      }
+      haveText = false;
+    } else {
+      haveText = true;
+      if (BLANK_LINE.test(cursor.value)) {
+        return false;
+      }
+      if (LINK_REFERENCE_START.test(cursor.value)) {
+        return true;
+      }
     }
   }
   return false;
