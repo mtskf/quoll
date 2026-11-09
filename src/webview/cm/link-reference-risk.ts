@@ -27,16 +27,16 @@ export function linkReferenceRisk(state: EditorState, pos: number): boolean {
     return true;
   }
   const cursor = state.doc.iterRange(line.from, 0);
-  let haveText = true;
+  let lineHasText = true;
   while (!cursor.next().done) {
     if (cursor.lineBreak) {
       // Empty lines have no text item; the first break follows the inspected line.
-      if (!haveText) {
+      if (!lineHasText) {
         return false;
       }
-      haveText = false;
+      lineHasText = false;
     } else {
-      haveText = true;
+      lineHasText = true;
       if (BLANK_LINE.test(cursor.value)) {
         return false;
       }
