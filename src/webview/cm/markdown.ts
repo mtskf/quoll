@@ -77,9 +77,10 @@ function firstContentChild(node: SyntaxNode): SyntaxNode | null {
 // fold-suppression and widget emission in lockstep by construction — a table inside
 // leading frontmatter, one `parseTable` rejects, or one whose build threw has no record,
 // so its list fold stays; a state without the field has no widget at all. `recordAt` is a
-// chunk scan of the set, O(N/250) per fold query (see `recordAt` in structural-blocks.ts; a linear `.some()` would
-// make a list of N table-bearing items O(N²)); the whole-document cost is accepted by the
-// Performance gate's fold row (.claude/docs/PERF.md), not by this argument.
+// chunk scan of the set, O(N/250) per fold query (see `recordAt` in structural-blocks.ts;
+// a linear `.some()` would make a list of N table-bearing items O(N²)); the whole-document
+// cost is accepted by the Performance gate's fold row (.claude/docs/PERF.md), not by this
+// argument.
 function tableEmitsBlockWidget(state: EditorState, from: number): boolean {
   const records = state.field(tableBlockField, false)?.records;
   if (records === undefined) {

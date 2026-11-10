@@ -28,8 +28,8 @@
 // 2. Change range / tree identity / determinacy. On a doc change,
 //    `requiresFullBoundedRebuild` (../structural-guard.ts — the home of the structural
 //    and frontier full-rebuild reasons; the frontmatter (Contract 1) and tree-identity
-//    reasons live in this file) → full; otherwise every prev record whose block is untouched and
-//    outside the span (changed ranges ±1 line) is reused — the SAME decoration when unmoved,
+//    reasons live in this file) → full; otherwise every prev record whose block is untouched
+//    and outside the span (changed ranges ±1 line) is reused — the SAME decoration when unmoved,
 //    else rebased through `makeRecord` with the SAME payload — and only the span is
 //    re-walked, each matched node processed at most once per rebuild (`visited`). Reused
 //    records and walked nodes are disjoint by construction: the reuse guard drops every
