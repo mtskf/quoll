@@ -183,4 +183,22 @@ describe("editor — a committed edit is never silently unsent (SYNC-01)", () =>
     expect(view.state.doc.toString()).toBe("seedx");
     expect(editPosts().map((m) => m.content)).toEqual(["seedx"]);
   });
+
+  it("does not retain an unscheduled programmatic edit while read-only, so write access returning cannot post it", () => {
+    const { view, hostDocument } = mount();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    // Read-only, same lineage. Programmatic dispatch is not stopped by the
+    // readOnly facet, so a change can still be committed here.
+    hostDocument({ ...SNAPSHOT, docVersion: 2, canWrite: false });
+    syncFault.throwOnLocalChange = true;
+    view.dispatch({ changes: { from: 4, insert: "x" } });
+    vi.advanceTimersByTime(300);
+    expect(editPosts()).toEqual([]);
+    // Write access returns on the same lineage with the host's bytes. Nothing was
+    // retained, so the reseed wins and no Edit for the readonly change goes out.
+    hostDocument({ ...SNAPSHOT, docVersion: 3, canWrite: true });
+    vi.advanceTimersByTime(300);
+    expect(view.state.doc.toString()).toBe("seed");
+    expect(editPosts()).toEqual([]);
+  });
 });
