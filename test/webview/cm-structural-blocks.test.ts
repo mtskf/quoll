@@ -576,3 +576,168 @@ describe("structural block contract (toy spec)", () => {
     expect(ranges(closed, t).map((r) => r[0])).toEqual([after]);
   });
 });
+
+describe("structural block contract updates (toy spec)", () => {
+  function fromOf(state: EditorState, needle: string): number {
+    const i = state.doc.toString().indexOf(needle);
+    expect(i).toBeGreaterThanOrEqual(0); // precondition: the fixture carries the needle
+    return state.doc.lineAt(i).from;
+  }
+
+  it("toy bounded update: an edit clear of a block reuses its record; an edit inside rebuilds only it", () => {
+    const t = toy();
+    const state = toyState(TOY_DOC, t);
+    const before = state.field(t.field).records;
+    expect(before).toHaveLength(3); // precondition
+
+    const clearTr = state.update({
+      changes: { from: state.doc.toString().indexOf("Tail paragraph.") + 4, insert: "x" },
+    });
+    expect(requiresFullBoundedRebuild(clearTr)).toBe(false); // precondition: bounded path
+    const clear = clearTr.state.field(t.field).records;
+    clear.forEach((r, i) => {
+      expect(r).toBe(before[i]);
+    });
+    expect(t.calls.build).toEqual([]);
+
+    // Inside the LAST block, so no other block moves (a moved block is rebased: "toy rebase").
+    const gamma = before[2].block.from;
+    const insideTr = state.update({
+      changes: { from: state.doc.toString().indexOf("gamma") + 2, insert: "x" },
+    });
+    expect(requiresFullBoundedRebuild(insideTr)).toBe(false); // precondition: bounded path
+    const inside = insideTr.state.field(t.field).records;
+    expect(t.calls.build).toEqual([gamma]);
+    expect(inside[2]).not.toBe(before[2]);
+    expect(inside[2].block.text).toContain("gaxmma");
+    expect(inside[0]).toBe(before[0]);
+    expect(inside[1]).toBe(before[1]);
+  });
+
+  it("toy rebase: an insertion before a block mints a shifted record without rebuilding it", () => {
+    const t = toy();
+    const state = toyState(TOY_DOC, t);
+    const before = state.field(t.field).records;
+    const tr = state.update({ changes: { from: 4, insert: "x" } });
+    expect(requiresFullBoundedRebuild(tr)).toBe(false); // precondition: bounded path
+    const after = tr.state.field(t.field).records;
+    expect(after.map((r) => [r.block.from, r.block.to])).toEqual(
+      before.map((r) => [r.block.from + 1, r.block.to + 1])
+    );
+    after.forEach((r, i) => {
+      expect(r).not.toBe(before[i]);
+    });
+    expect(t.calls.build).toEqual([]);
+    expect(t.calls.widget).toEqual(before.map((r) => r.block.from + 1));
+    expect(widgetSlots(tr.state, ToyWidget).map((s) => (s.widget as ToyWidget).at)).toEqual(
+      before.map((r) => r.block.from + 1)
+    );
+  });
+
+  it("toy widget throws on rebase: the dispatch succeeds and the rebased block is absent", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const gamma = TOY_DOC.indexOf("```\ngamma");
+    const t = toy({
+      widget: (b) => {
+        if (b.from === gamma + 1) {
+          throw new Error("toy widget on rebase");
+        }
+      },
+    });
+    const state = toyState(TOY_DOC, t);
+    expect(ranges(state, t).map((r) => r[0])).toContain(gamma); // precondition: first build ok
+    const tr = state.update({ changes: { from: 4, insert: "x" } });
+    expect(requiresFullBoundedRebuild(tr)).toBe(false); // precondition: bounded path
+    expect(t.calls.build).toEqual([]);
+    expect(t.calls.widget).toContain(gamma + 1);
+    const after = ranges(tr.state, t).map((r) => r[0]);
+    expect(after).toHaveLength(2);
+    expect(after).not.toContain(gamma + 1);
+    expect(hookLogCount(spy)).toBe(1);
+  });
+
+  it("toy dedupe: two distant edits inside one long block call each hook once for it", () => {
+    const t = toy();
+    const body = Array.from({ length: 12 }, (_, i) => `code line ${i}`);
+    const doc = ["Intro.", "", ...fence(body), "", "Tail.", ""].join("\n");
+    const state = toyState(doc, t);
+    const blockFrom = fromOf(state, "```");
+    const text = state.doc.toString();
+    const tr = state.update({
+      changes: [
+        { from: text.indexOf("code line 1") + 2, insert: "x" },
+        { from: text.indexOf("code line 9") + 2, insert: "y" },
+      ],
+    });
+    expect(requiresFullBoundedRebuild(tr)).toBe(false); // precondition: bounded path
+    expect(t.calls.build).toEqual([blockFrom]);
+    expect(t.calls.widget).toEqual([blockFrom]);
+    expect(ranges(tr.state, t)).toEqual(fencedRanges(tr.state));
+  });
+
+  it("toy tree identity: a republished tree with no doc change publishes a block past the old frontier", () => {
+    const t = toy();
+    const doc = beyondInitFrontier([...fence(["late"]), "", "End.", ""]);
+    const state = EditorState.create({ doc, extensions: [quollMarkdownLanguage(), t.field] });
+    const late = doc.indexOf("```\nlate");
+    expect(syntaxTree(state).length).toBeLessThan(late); // precondition: partial snapshot
+    expect(ranges(state, t)).toEqual([]);
+    expect(ensureSyntaxTree(state, state.doc.length, 10_000)).not.toBeNull();
+    const next = state.update({}).state;
+    expect(syntaxTree(next)).not.toBe(syntaxTree(state)); // precondition: tree republished
+    expect(ranges(next, t).map((r) => r[0])).toEqual([late]);
+  });
+
+  it("toy branching: transactions and states sharing the field keep independent records", () => {
+    const t = toy();
+    const state = toyState(TOY_DOC, t);
+    const base = state.field(t.field).records;
+    const text = state.doc.toString();
+    // Two branches: one edits inside the last block, the other the prose after it.
+    const a = state.update({ changes: { from: text.indexOf("gamma") + 1, insert: "x" } }).state;
+    const b = state.update({ changes: { from: text.indexOf("Tail") + 1, insert: "y" } }).state;
+    expect(state.field(t.field).records).toBe(base);
+    const ra = a.field(t.field).records;
+    const rb = b.field(t.field).records;
+    expect(ra[2]).not.toBe(base[2]);
+    expect(ra[0]).toBe(base[0]);
+    rb.forEach((r, i) => {
+      expect(r).toBe(base[i]);
+    });
+    expect(ra[2].block.text).toContain("gxamma");
+    expect(rb[2].block.text).not.toContain("gxamma");
+    expect(base[2].block.text).not.toContain("gxamma");
+
+    // A second state built with the same field instance is untouched by updates to the first.
+    const other = toyState(["Other.", "", ...fence(["delta"]), ""].join("\n"), t);
+    const otherRecords = other.field(t.field).records;
+    state.update({ changes: { from: 0, insert: "\n\n" } });
+    expect(other.field(t.field).records).toBe(otherRecords);
+    expect(otherRecords.map((r) => r.block.text)).toEqual(["```\ndelta\n```"]);
+  });
+
+  it("toy seeded oracle: after each of 20 seeded edits the records equal a fresh full build", () => {
+    let seed = 0x5eed;
+    const rand = (n: number): number => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return seed % n;
+    };
+    const inserts = ["x", " ", "\n", "`", "```\n", "\n\n", "ab"];
+    const t = toy();
+    let state = toyState(TOY_DOC, t);
+    for (let i = 0; i < 20; i++) {
+      const len = state.doc.length;
+      const from = rand(len + 1);
+      const spec =
+        rand(3) === 0 && from < len
+          ? { from, to: Math.min(len, from + 1 + rand(4)) }
+          : { from, insert: inserts[rand(inserts.length)] };
+      state = state.update({ changes: spec }).state;
+      const got = ranges(state, t);
+      const sorted = [...got].sort((x, y) => x[0] - y[0]);
+      expect(got).toEqual(sorted);
+      const oracle = toyState(state.doc.toString(), toy());
+      expect(got).toEqual(fencedRanges(oracle));
+    }
+  });
+});
