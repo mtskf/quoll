@@ -15,7 +15,7 @@
 //
 // Driven by the shell's synchronous post-commit dispatch (editor.ts +
 // shell.ts):
-//   - onLocalChange from the CM updateListener (debounced post).
+//   - onLocalChange from the editor's dispatchTransactions (debounced post).
 //   - onHostSnapshot from applyDocument (records the snapshot's metadata and
 //     judges the in-flight Edit against it, demoting one the host did not apply
 //     into the replay buffer — never touches editInFlight, never drains).
@@ -160,7 +160,8 @@ export type EditSyncOptions = {
    *  The implementation must apply it as a host reseed, not as a user edit
    *  (non-history, and not read back through `onLocalChange`).
    *  MUST NEVER RUN INSIDE A CODEMIRROR UPDATE: it dispatches on the view. The
-   *  only drain reachable from the update listener is the one driven by
+   *  only drain reachable from a local edit's hand-off (`noteLocalChange` in
+   *  the editor's `dispatchTransactions`) is the one driven by
    *  `local-edit-attempt`, and that dispatch is preceded by `discardBuffer()`,
    *  so the drain finds no buffer and never gets here.
    *  NOT called while a debounce timer is live: the view then holds a keystroke
@@ -213,8 +214,15 @@ export type EditSyncOptions = {
 export type SettleOutcome = "settled" | "unsynced" | "cancelled";
 
 export type EditSync = {
-  /** Editor content changed locally (CM updateListener docChanged). */
+  /** Editor content changed locally (a committed change, from the editor's
+   *  `dispatchTransactions`). */
   onLocalChange: () => void;
+  /** A committed local change could NOT be scheduled (the editor's
+   *  `onLocalChange` hand-off threw). Hold the view's bytes as the replay
+   *  buffer, so `viewHoldsUnackedEdit` keeps a same-lineage Document from
+   *  reseeding over them and the next open-gate drain posts them. Same
+   *  readonly rule as `trySend`: under `canWrite` false nothing is held. */
+  retainLocalChange: () => void;
   /** A host Document arrived. Records its metadata — the version + canWrite
    *  edit-sync echoes on the next Edit, and the identity pair — and JUDGES the
    *  in-flight Edit against it (below). Returns `true` while that Edit still
@@ -1130,6 +1138,11 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
         // post), and then no reducer commit follows to wake a waiter.
         rejudgeSettleWaiters();
       }),
+    retainLocalChange: () => {
+      if (canWrite) {
+        buffered = stampHeld(opts.getDoc());
+      }
+    },
     onHostSnapshot: (d) => {
       const transition = isIdentityTransition(d.externalEpoch, d.epochGeneration);
       // Generation-aware acceptance ordering (S3b): version order is meaningful

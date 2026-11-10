@@ -529,6 +529,16 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       } catch (dispatchErr) {
         console.error("[quoll] send-failure dispatch itself failed", dispatchErr);
       }
+      // AFTER the send-failure dispatch: its drain finds the gate closed, so
+      // the retained bytes are not posted from inside this update. Without the
+      // hold, a same-lineage Document (an earlier Edit's ack) finds nothing
+      // un-acked, reseeds over the unsent change, and its reducer arm clears
+      // the banner — the edit vanishes unseen.
+      try {
+        sync.retainLocalChange();
+      } catch (retainErr) {
+        console.error("[quoll] retaining the unscheduled edit failed", retainErr);
+      }
     }
   }
 
@@ -565,7 +575,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // In-editor find & replace over the raw-Markdown text canonical
         // (@codemirror/search core module). `search({ top: true })` mounts the
         // panel at the top (VS Code-like). A replace is an ordinary transaction,
-        // so it rides the normal updateListener → edit-sync → host write-lock →
+        // so it rides the normal dispatchTransactions → edit-sync → host write-lock →
         // verified-write pipeline. In read-only
         // mode CM's replace commands return false and the panel omits its replace
         // UI (both guard on EditorState.readOnly, set when canWrite=false), so
@@ -1078,8 +1088,8 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         });
       } finally {
         // try/finally: if dispatch throws, seeding must NOT stay stuck
-        // true — a stuck guard permanently suppresses the updateListener's
-        // echo-Edit detection.
+        // true — a stuck guard permanently suppresses noteLocalChange's
+        // hand-off of local edits to edit-sync.
         seeding = false;
       }
     }
@@ -1091,8 +1101,8 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     // that strips a folded heading's OWN marker can orphan its fold entirely (no
     // canonical range left to clamp to). Only meaningful when the reseed actually
     // changed the document (reseedChange !== null). This is a SEPARATE, display-only
-    // dispatch carrying NO `changes` — byte-identical round-trip, and a no-op for the
-    // updateListener's `docChanged`-gated edit-sync — so it behaves exactly like a
+    // dispatch carrying NO `changes` — byte-identical round-trip, and a no-op for
+    // dispatchTransactions' doc-identity-gated edit-sync — so it behaves exactly like a
     // user fold/unfold (hence NOT annotated as a hostDocumentReseed; it rewrites no
     // document bytes). addToHistory.of(false) keeps the clamp out of undo.
     // reconcileReseedFolds self-guards on a complete parse tree. The edited-span

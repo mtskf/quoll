@@ -101,7 +101,14 @@ function mount() {
   if (!view) {
     throw new Error("EditorView not found via findFromDOM");
   }
-  return { handle, view, actions };
+  // A host Document as the shell delivers it: applyDocument, then the reducer's
+  // `document` arm (which clears the send-failure gate), then the drain.
+  const hostDocument = (snapshot: typeof SNAPSHOT) => {
+    handle.applyDocument(snapshot);
+    state = { ...state, docVersion: snapshot.docVersion, sendFailure: null };
+    handle.onReducerCommit(false);
+  };
+  return { handle, view, actions, hostDocument };
 }
 
 // A widget whose DOM build throws: CodeMirror calls toDOM unwrapped inside its
@@ -160,5 +167,20 @@ describe("editor — a committed edit is never silently unsent (SYNC-01)", () =>
     view.dispatch({ changes: { from: 5, insert: "y" } });
     vi.advanceTimersByTime(300);
     expect(editPosts().map((m) => m.content)).toEqual(["seedxy"]);
+  });
+
+  it("keeps the unscheduled edit when a same-lineage Document arrives before the next keystroke, and posts it", () => {
+    const { view, hostDocument } = mount();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    syncFault.throwOnLocalChange = true;
+    view.dispatch({ changes: { from: 4, insert: "x" } });
+    vi.advanceTimersByTime(300);
+    expect(editPosts()).toEqual([]);
+    // Same epoch and generation, a newer version, the host's old bytes: a
+    // Document of the lineage the unsent change was typed on. Its reducer arm
+    // clears the banner, so a reseed here would lose the edit unseen.
+    hostDocument({ ...SNAPSHOT, docVersion: 2 });
+    expect(view.state.doc.toString()).toBe("seedx");
+    expect(editPosts().map((m) => m.content)).toEqual(["seedx"]);
   });
 });
