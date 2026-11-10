@@ -55,13 +55,11 @@ export const pendingPasteOperations = StateField.define<readonly PendingPasteOpe
           return tr.changes.mapPos(target.from, 1, MapMode.TrackDel) !== null;
         }
         let overwritten = false;
-        if (target.from !== target.to) {
-          tr.changes.iterChanges((from, to) => {
-            if (from < target.to && to > target.from) {
-              overwritten = true;
-            }
-          });
-        }
+        tr.changes.iterChanges((from, to) => {
+          if (from < target.to && to > target.from) {
+            overwritten = true;
+          }
+        });
         return !overwritten;
       })
       .map((target) => {
@@ -332,13 +330,14 @@ export function composePasteReplacement(
   const paths = slots.filter((path): path is string => typeof path === "string");
   if (paths.length) {
     const atLineStart = target.from === state.doc.lineAt(target.from).from;
-    const prefix = text.length
-      ? text.sliceString(text.length - 1) === "\n"
-        ? ""
-        : "\n"
-      : atLineStart
-        ? ""
-        : "\n";
+    let prefix = "";
+    if (text.length) {
+      if (text.sliceString(text.length - 1) !== "\n") {
+        prefix = "\n";
+      }
+    } else if (!atLineStart) {
+      prefix = "\n";
+    }
     text = text.append(state.toText(prefix + paths.map((path) => `![](${path})\n`).join("")));
   }
   return text;
