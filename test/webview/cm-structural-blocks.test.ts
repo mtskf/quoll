@@ -741,3 +741,33 @@ describe("structural block contract updates (toy spec)", () => {
     }
   });
 });
+
+describe("structural block reveal (toy spec)", () => {
+  it("reveal: a caret on a block line hides its widget, leaving shows the SAME widget object", () => {
+    const t = toy();
+    const state = toyState(TOY_DOC, t);
+    const before = widgetSlots(state, ToyWidget);
+    expect(before).toHaveLength(3); // precondition: caret at 0 reveals nothing
+    const alpha = before[0];
+
+    const entered = state.update({ selection: { anchor: alpha.from + 1 } }).state;
+    expect(widgetSlots(entered, ToyWidget).map((s) => s.from)).toEqual([
+      before[1].from,
+      before[2].from,
+    ]);
+    // The record is kept while its decoration is hidden.
+    expect(entered.field(t.field).records).toBe(state.field(t.field).records);
+
+    const left = entered.update({ selection: { anchor: 0 } }).state;
+    const after = widgetSlots(left, ToyWidget);
+    expect(after.map((s) => s.from)).toEqual(before.map((s) => s.from));
+    after.forEach((s, i) => {
+      expect(s.widget).toBe(before[i].widget);
+    });
+    expect(t.calls.widget).toEqual([]);
+
+    // A caret move that keeps the same line spans returns the field value itself.
+    const same = left.update({ selection: { anchor: 1 } }).state;
+    expect(same.field(t.field)).toBe(left.field(t.field));
+  });
+});
