@@ -9,10 +9,11 @@
 //
 // Precondition asserts are separate `expect`s from the behaviour assert, so a harness
 // failure is never read as "behaviour absent".
-import { foldable } from "@codemirror/language";
+import { ensureSyntaxTree, foldable, syntaxTree, syntaxTreeAvailable } from "@codemirror/language";
 import { EditorState, type Extension } from "@codemirror/state";
 import { EditorView, type WidgetType } from "@codemirror/view";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { touchesStructuralReparse } from "../../src/webview/cm/structural-guard.js";
 import { settledState } from "./helpers/settled-state.js";
 import { settledMount } from "./helpers/settled-view.js";
 
@@ -270,5 +271,67 @@ describe("structural block widget identity", () => {
     const after = widgetSlots(st1, TableBlockWidget);
     expect(after.map((s) => s.from)).toEqual(before.map((s) => s.from));
     expect(after[1].widget).toBe(before[1].widget);
+  });
+});
+
+/** Prose long enough that `EditorState.create` publishes a PARTIAL snapshot (its init
+ *  parse stops near a 3000-char viewport), followed by `tail`. No fixed offset is relied
+ *  on: the partial snapshot is asserted where it matters. */
+function beyondInitFrontier(tail: string[]): string {
+  const prose: string[] = [];
+  for (let i = 0; prose.join("\n").length < 20_000; i++) {
+    prose.push(`Paragraph ${i} of plain prose that the initial parse does not reach.`, "");
+  }
+  return [...prose, ...tail].join("\n");
+}
+
+describe("structural blocks beyond the initial parse frontier", () => {
+  it("frontier advance: a distant prose edit after an ensureSyntaxTree context advance publishes the blocks", async () => {
+    const { tableBlockField, TableBlockWidget } = await import(
+      "../../src/webview/cm/table/index.js"
+    );
+    const { imageBlockField, ImageBlockWidget } = await import(
+      "../../src/webview/cm/image/index.js"
+    );
+    const { quollMarkdownLanguage } = await import("../../src/webview/cm/markdown.js");
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const doc = beyondInitFrontier([
+      "| a | b |",
+      "| - | - |",
+      "| 1 | 2 |",
+      "",
+      "![alt](https://example.com/a.png)",
+      "",
+      "End.",
+      "",
+    ]);
+    const state = EditorState.create({
+      doc,
+      extensions: [quollMarkdownLanguage(), tableBlockField, imageBlockField],
+    });
+    // Precondition: the init snapshot is partial and stops before both blocks.
+    expect(syntaxTree(state).length).toBeLessThan(doc.indexOf("| a |"));
+    expect(widgetSlots(state, TableBlockWidget)).toEqual([]);
+    expect(widgetSlots(state, ImageBlockWidget)).toEqual([]);
+
+    // Advance the parse CONTEXT to the end without republishing the snapshot.
+    expect(ensureSyntaxTree(state, state.doc.length, 10_000)).not.toBeNull();
+    expect(syntaxTree(state).length).toBeLessThan(state.doc.length);
+
+    // A single letter inside the first plain paragraph line, far above both blocks.
+    const tr = state.update({ changes: { from: 4, insert: "x" } });
+    // Preconditions: the post-edit snapshot is complete, and HEAD's admission test sends
+    // this transaction down the bounded path.
+    expect(syntaxTree(tr.state).length).toBe(tr.state.doc.length);
+    expect(touchesStructuralReparse(tr)).toBe(false);
+    expect(syntaxTreeAvailable(tr.state, tr.state.doc.length)).toBe(true);
+
+    const text = tr.state.doc.toString();
+    expect(widgetSlots(tr.state, TableBlockWidget).map((s) => s.from)).toEqual([
+      text.indexOf("| a |"),
+    ]);
+    expect(widgetSlots(tr.state, ImageBlockWidget).map((s) => s.from)).toEqual([
+      text.indexOf("![alt]"),
+    ]);
   });
 });
