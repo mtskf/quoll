@@ -17,7 +17,6 @@
 // zone is non-atomic, and reachability is the auto-expand's job — not the generic
 // blockZoneArrowKeymap's.
 
-import { syntaxTreeAvailable } from "@codemirror/language";
 import type { EditorState, Transaction } from "@codemirror/state";
 import type { DecorationSet } from "@codemirror/view";
 import { type Interval, lineExpandWithNeighbours, mergeIntervals } from "../bounded-recompute.js";
@@ -29,6 +28,7 @@ import {
 } from "../collapse/line-collapse-field.js";
 import { leadingFrontmatterEnd } from "../frontmatter/detect.js";
 import { linkReferenceRisk } from "../link-reference-risk.js";
+import { frontierIncomplete } from "../structural-guard.js";
 import { fencedCollapseTarget } from "./fenced-code-collapse-state.js";
 import { FencedCollapseToggleWidget } from "./fenced-code-collapse-widget.js";
 
@@ -195,11 +195,12 @@ function computeExtendedSpan(tr: Transaction): Interval[] {
 }
 
 // The fenced policy, unchanged: GF structural edit or a top-level boundary move → full;
-// an incomplete parse → full (G2 frontier); otherwise changed lines ±1 ∪ selection lines.
+// an incomplete parse frontier → full; otherwise changed lines ±1 ∪ selection lines.
 //
-// The frontier gate (an incomplete parse can reveal nodes outside the span) is spelled out
-// here, and the structural-reparse fallback is deliberately NOT part of this condition, the
-// way it is in the fields that import ../structural-guard.js: `touchesStructural` /
+// The frontier gate (an incomplete parse can reveal nodes outside the span, and records
+// built over a partial snapshot miss blocks beyond it) is the shared `frontierIncomplete`,
+// but the structural-reparse half of `requiresFullBoundedRebuild` is deliberately NOT part
+// of this condition, the way it is in the other bounded fields: `touchesStructural` /
 // `topLevelBoundaryRisk` above already return "full" before the gate is reached. That guard
 // is narrower than the shared predicate on purpose — this field's hot path is editing INSIDE
 // a code fence, where a `#` comment or a `___` line must stay bounded; ../structural-guard.ts's
@@ -221,7 +222,7 @@ const fencedCollapseSpec: LineCollapseSpec<null> = {
     leadingFrontmatterEnd(tr.startState) !== leadingFrontmatterEnd(tr.state) ||
     touchesStructural(tr) ||
     topLevelBoundaryRisk(tr, prevBlocks) ||
-    !syntaxTreeAvailable(tr.state, tr.state.doc.length)
+    frontierIncomplete(tr)
       ? "full"
       : computeExtendedSpan(tr),
 };

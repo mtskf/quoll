@@ -26,7 +26,7 @@
 // so if a future CM ever cloned the transaction per field, each field would just
 // recompute the same verdict — result unchanged, only the sharing lost.
 
-import { syntaxTreeAvailable } from "@codemirror/language";
+import { syntaxTree, syntaxTreeAvailable } from "@codemirror/language";
 import type { EditorState, Transaction } from "@codemirror/state";
 import type { Interval } from "./bounded-recompute.js";
 import { linkReferenceRisk } from "./link-reference-risk.js";
@@ -359,7 +359,8 @@ export function touchesStructuralReparse(tr: Transaction): boolean {
  *  transaction before it may reuse records: take the FULL rebuild when either the edit
  *  could re-shape a block boundary outside the recomputed window (`touchesStructuralReparse`
  *  — see above), or the post-edit parse frontier is incomplete so the tree cannot be
- *  trusted outside it (G2).
+ *  trusted outside it, or the records were built over a partial snapshot
+ *  (`frontierIncomplete` — see below).
  *
  *  The two terms answer DIFFERENT questions and neither implies the other: a structural
  *  reparse happens with a COMPLETE frontier, and a starved frontier happens on edits with
@@ -370,7 +371,43 @@ export function touchesStructuralReparse(tr: Transaction): boolean {
  *  Callers may OR their own extra risks IN FRONT of this (fold/index.ts adds a facet flip);
  *  what they must not do is take either term away. */
 export function requiresFullBoundedRebuild(tr: Transaction): boolean {
-  return touchesStructuralReparse(tr) || !syntaxTreeAvailable(tr.state, tr.state.doc.length);
+  return touchesStructuralReparse(tr) || frontierIncomplete(tr);
+}
+
+/** The frontier half of `requiresFullBoundedRebuild`: true when the records a bounded field
+ *  holds cannot be trusted outside the recomputed window because some parse frontier is
+ *  incomplete.
+ *
+ *  Two frontiers are in play, and they diverge. The parse CONTEXT (`syntaxTreeAvailable`)
+ *  is what an `ensureSyntaxTree` caller advances; the SNAPSHOT (`syntaxTree(state)`, the
+ *  tree stored in the state) is what every field walked to build its records, and it is
+ *  only replaced by the next transaction. So:
+ *   - `!syntaxTreeAvailable(tr.state, …)` — the post-edit parse has not reached the end
+ *     (G2): the tree outside the window is not final.
+ *   - `syntaxTree(tr.startState).length < tr.startState.doc.length` — the records were
+ *     built over a PARTIAL snapshot. Spelled on the snapshot, never as
+ *     `syntaxTreeAvailable(tr.startState, …)`: after `ensureSyntaxTree` the context is
+ *     already complete while the snapshot is still partial, so the context spelling stays
+ *     false on exactly the transaction this term exists for — the first docChanged
+ *     transaction after the context advance, whose new tree holds blocks the records never
+ *     saw beyond the old snapshot's end. A bounded update there would keep the stale
+ *     records and never add those blocks.
+ *  A selection-only transaction after `ensureSyntaxTree` self-heals without this term:
+ *  the tree identity changes with no doc change, which every bounded field already treats
+ *  as "full". The gap is specifically a docChanged first transaction.
+ *
+ *  Cost: one extra full rebuild on the first docChanged transaction after the snapshot
+ *  completes (edits made while the frontier is incomplete are already full through G2).
+ *  Rows "frontier advance*" in test/webview/cm-structural-blocks.test.ts pin it.
+ *
+ *  Exported for fenced-code/fenced-code-collapse.ts only, which pairs it with its own
+ *  narrower structural check. Any other bounded field calls `requiresFullBoundedRebuild`;
+ *  test/build/frontier-gate-needs-structural-guard.test.ts counts calls to this name. */
+export function frontierIncomplete(tr: Transaction): boolean {
+  return (
+    !syntaxTreeAvailable(tr.state, tr.state.doc.length) ||
+    syntaxTree(tr.startState).length < tr.startState.doc.length
+  );
 }
 
 /** Expand [from,to] to the enclosing blank-line-delimited block: line-align, then

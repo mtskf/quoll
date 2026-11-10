@@ -1,7 +1,10 @@
 // Choke point: `syntaxTreeAvailable(<expr>.state, …)` — the transaction-reducer spelling
 // of the parse-frontier check a changed-range-bounded StateField consults before reusing
-// its records — may appear in exactly ONE place: the definition of
-// `requiresFullBoundedRebuild` in structural-guard.ts.
+// its records — may appear in exactly ONE place: the definition of `frontierIncomplete`
+// in structural-guard.ts, the frontier half that `requiresFullBoundedRebuild` composes.
+// A call to `frontierIncomplete` itself is counted the same way, by NAME: it is the
+// frontier term alone, so a field that imported it as its whole admission test would be
+// exactly the hand-spelled frontier-only gate this guard exists to stop.
 //
 // WHY: two bounded fields (imageBlockField, tableSkeletonField) shipped with only this
 // frontier half of the admission test and no structural-reparse half, because the OR was
@@ -28,10 +31,10 @@
 // already reached for the same answer for the same class of bug in
 // no-bare-unstarved-gate.test.ts and no-file-level-ts-nocheck.test.ts.
 //
-// SCOPE — this walks `src/webview/cm/**/*.ts` and counts exactly one CALL SHAPE: a
+// SCOPE — this walks `src/webview/cm/**/*.ts` and counts two CALL SHAPES: a
 // `CallExpression` whose callee is the bare identifier `syntaxTreeAvailable` and whose
 // FIRST argument is a property-access expression named `state` (the `tr.state` /
-// `view.state` reducer spelling). A first argument that is a plain identifier —
+// `view.state` reducer spelling), and any bare call to `frontierIncomplete`. A first argument that is a plain identifier —
 // `syntaxTreeAvailable(state, …)` inside `fold/index.ts`'s `reconcileReseedFolds`, a
 // helper QUERY rather than a bounded-field reducer — is deliberately NOT counted; that is
 // what lets `fold/index.ts` hold a plain call while still being required to route its
@@ -42,14 +45,16 @@
 // exactly the discipline no-bare-unstarved-gate.test.ts already argues for.
 //
 // ALLOWLIST:
-//   - structural-guard.ts (1) — the definition of `requiresFullBoundedRebuild` itself.
+//   - structural-guard.ts (2) — the `syntaxTreeAvailable(tr.state, …)` call inside
+//     `frontierIncomplete`, and the `frontierIncomplete(tr)` call inside
+//     `requiresFullBoundedRebuild`.
 //   - fenced-code/fenced-code-collapse.ts (1) — documented, deliberate exception. Its
-//     frontier check is the `!syntaxTreeAvailable(…)` term of its `docChangePlan`
-//     (the test-oracle `mode === "full"` switch now lives in the shared collapse reducer,
-//     which holds no such call); it is a DIFFERENT disjunction from the structural guard's,
-//     and its actual structural check (`touchesStructural` + `topLevelBoundaryRisk`) is the
-//     first term of that same plan. It is not migrated to `requiresFullBoundedRebuild` —
-//     see the comment at its own call site and structural-guard.ts's header.
+//     frontier term is the `frontierIncomplete(tr)` call in its `docChangePlan` (the
+//     test-oracle `mode === "full"` switch lives in the shared collapse reducer, which holds
+//     no such call); its structural check (`touchesStructural` + `topLevelBoundaryRisk`) is
+//     narrower than the shared guard's and stays local, as the first terms of that same plan.
+//     It is not migrated to `requiresFullBoundedRebuild` — see the comment at its own call
+//     site and structural-guard.ts's header.
 //   - every other file — 0.
 //
 // Two further assertions close the gap a call-count alone cannot: (a) `structural-guard.ts`
@@ -62,8 +67,8 @@
 // the helper itself, only of `syntaxTreeAvailable`.
 //
 // KNOWN GAPS — the match is SYNTACTIC, so each of these slips past it:
-//   - an import alias, or a re-exported wrapper around `syntaxTreeAvailable`, defeats the
-//     bare-identifier match.
+//   - an import alias, or a re-exported wrapper around `syntaxTreeAvailable` under any name
+//     other than `frontierIncomplete`, defeats the bare-identifier match.
 //   - a first argument reached through a local variable (`const st = tr.state;
 //     syntaxTreeAvailable(st, …)`) is not the property-access shape and is not counted —
 //     it would neither be flagged as a violation NOR correctly recognised as the reducer
@@ -85,7 +90,7 @@ const CM_ROOT = fileURLToPath(new URL("../../src/webview/cm", import.meta.url));
  *  here — as a field on this Map or as a comment beside each entry — so there is one place
  *  to read them and none to leave stale. */
 const ALLOW = new Map<string, number>([
-  ["structural-guard.ts", 1],
+  ["structural-guard.ts", 2],
   ["fenced-code/fenced-code-collapse.ts", 1],
 ]);
 
@@ -110,9 +115,15 @@ function matchingNodeLines(
 }
 
 function isReducerShapedCall(node: ts.Node): boolean {
+  if (!ts.isCallExpression(node) || !ts.isIdentifier(node.expression)) {
+    return false;
+  }
+  // Counted by NAME: a field reaches the frontier term only through
+  // requiresFullBoundedRebuild or the allowlisted fenced policy.
+  if (node.expression.text === "frontierIncomplete") {
+    return true;
+  }
   return (
-    ts.isCallExpression(node) &&
-    ts.isIdentifier(node.expression) &&
     node.expression.text === "syntaxTreeAvailable" &&
     node.arguments.length >= 1 &&
     ts.isPropertyAccessExpression(node.arguments[0]) &&
@@ -121,7 +132,7 @@ function isReducerShapedCall(node: ts.Node): boolean {
 }
 
 /** 1-based line numbers of every reducer-shaped `syntaxTreeAvailable(<expr>.state, …)`
- *  call in `text`. Not exported: this file's own tests below are its only consumer. */
+ *  or `frontierIncomplete(…)` call in `text`. Not exported: this file's own tests below are its only consumer. */
 function findReducerShapedGates(text: string, fileName: string): number[] {
   return matchingNodeLines(text, fileName, isReducerShapedCall);
 }
@@ -223,6 +234,8 @@ describe("the scanner itself is not vacuous", () => {
         "x.ts"
       )
     ).toEqual([2]);
+    // The exported frontier term, counted by name.
+    expect(findReducerShapedGates("frontierIncomplete(tr);", "x.ts")).toEqual([1]);
   });
 
   it("reports EVERY gate in a file that carries more than one", () => {

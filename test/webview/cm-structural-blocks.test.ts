@@ -14,6 +14,9 @@ import { EditorState, type Extension, type StateField } from "@codemirror/state"
 import { EditorView, type WidgetType } from "@codemirror/view";
 import { type Tree, TreeFragment } from "@lezer/common";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { calloutMarkerConcealField } from "../../src/webview/cm/decorations/callout-marker-conceal.js";
+import { fencedCodeCollapseField } from "../../src/webview/cm/fenced-code/fenced-code-collapse.js";
+import { headingFoldGutterLineClass } from "../../src/webview/cm/fold/index.js";
 import { quollMarkdownLanguage } from "../../src/webview/cm/markdown.js";
 import {
   recordAt,
@@ -346,6 +349,77 @@ describe("structural blocks beyond the initial parse frontier", () => {
     expect(widgetSlots(tr.state, ImageBlockWidget).map((s) => s.from)).toEqual([
       text.indexOf("![alt]"),
     ]);
+  });
+});
+
+/** The other bounded consumers of the frontier term share the same gap: each target record
+ *  is absent over the partial init snapshot, and after the ensureSyntaxTree context advance
+ *  plus a distant prose keystroke it must be present and equal to a fully-parsed oracle. */
+function expectFrontierAdvancePublishes(
+  extensions: Extension[],
+  tail: string[],
+  needle: string,
+  read: (state: EditorState) => unknown[]
+): void {
+  const doc = beyondInitFrontier(tail);
+  const state = EditorState.create({ doc, extensions: [quollMarkdownLanguage(), ...extensions] });
+  expect(syntaxTree(state).length).toBeLessThan(doc.indexOf(needle)); // partial snapshot
+  expect(read(state)).toEqual([]);
+  expect(ensureSyntaxTree(state, state.doc.length, 10_000)).not.toBeNull();
+  expect(syntaxTree(state).length).toBeLessThan(state.doc.length); // snapshot/context split
+  const tr = state.update({ changes: { from: 4, insert: "x" } });
+  expect(syntaxTree(tr.state).length).toBe(tr.state.doc.length);
+  expect(touchesStructuralReparse(tr)).toBe(false);
+  expect(syntaxTreeAvailable(tr.state, tr.state.doc.length)).toBe(true);
+  const oracle = read(
+    settledState(
+      EditorState.create({
+        doc: tr.state.doc,
+        extensions: [quollMarkdownLanguage(), ...extensions],
+      })
+    )
+  );
+  expect(oracle.length).toBeGreaterThan(0); // non-vacuity: the target exists when fully parsed
+  expect(read(tr.state)).toEqual(oracle);
+}
+
+describe("bounded consumers beyond the initial parse frontier", () => {
+  it("frontier advance fenced: the collapse record of a long fence is published", () => {
+    const body = Array.from({ length: 30 }, (_, i) => `code line ${i}`);
+    expectFrontierAdvancePublishes(
+      [fencedCodeCollapseField],
+      ["```txt", ...body, "```", "", "End.", ""],
+      "```txt",
+      (st) =>
+        st.field(fencedCodeCollapseField).blocks.map((b) => [b.blockFrom, b.blockTo, b.hiddenCount])
+    );
+  });
+
+  it("frontier advance fold: the heading gutter marker is published", () => {
+    expectFrontierAdvancePublishes(
+      [headingFoldGutterLineClass],
+      ["## Late heading", "", "Body under it.", "", "End.", ""],
+      "## Late heading",
+      (st) => {
+        const out: Array<[number, string]> = [];
+        st.field(headingFoldGutterLineClass).between(0, st.doc.length, (from, _to, marker) => {
+          out.push([from, marker.elementClass]);
+        });
+        return out;
+      }
+    );
+  });
+
+  it("frontier advance callout: the callout marker conceal record is published", () => {
+    expectFrontierAdvancePublishes(
+      [calloutMarkerConcealField],
+      ["> [!NOTE]", "> callout body", "", "End.", ""],
+      "> [!NOTE]",
+      (st) =>
+        st
+          .field(calloutMarkerConcealField)
+          .records.map((r) => [r.markerFrom, r.markerTo, r.blockTo])
+    );
   });
 });
 
