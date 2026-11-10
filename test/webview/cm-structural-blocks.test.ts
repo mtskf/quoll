@@ -557,8 +557,9 @@ describe("structural blocks beyond the initial parse frontier", () => {
 
         // A single letter inside the first plain paragraph line, far above both blocks.
         const tr = state.update({ changes: { from: 4, insert: "x" } });
-        // Preconditions: the post-edit snapshot is complete, and HEAD's admission test sends
-        // this transaction down the bounded path.
+        // Preconditions: the post-edit snapshot is complete, and the structural half of the
+        // admission test (`touchesStructuralReparse`) does not fire, so only the frontier
+        // term's start-state snapshot clause can send this transaction to a full rebuild.
         requireUnstarvedFrontier(tr.state);
         expect(syntaxTree(tr.state).length).toBe(tr.state.doc.length);
         expect(touchesStructuralReparse(tr)).toBe(false);
@@ -925,6 +926,45 @@ describe("structural block contract preconditions (toy spec)", () => {
       arm: "build",
       errKind: "invalid-range",
     });
+  });
+
+  // One row per `validRange` conjunct the rows above leave unpinned. Each drops alpha's
+  // block (its siblings survive) on create AND on a bounded update that re-walks alpha, and
+  // logs `invalid-range` exactly once without throwing out of `StateField.update`.
+  const ALPHA_CLOSER = "```\nalpha".length; // offset of alpha's body line end from its block start
+  it.each([
+    ["from < 0", (b: BuiltBlock<ToyBlock>) => ({ ...b, from: -1 })],
+    // +2: the update's 1-char insert grows the doc to length + 1, so +1 would turn valid.
+    ["to past the document end", (b: BuiltBlock<ToyBlock>) => ({ ...b, to: TOY_DOC.length + 2 })],
+    [
+      // from - 2 is the end of "Intro paragraph." — before the node, but not a line start.
+      "from mid-line (to at a line end)",
+      (b: BuiltBlock<ToyBlock>) => ({ ...b, from: b.from - 2 }),
+    ],
+    [
+      "to at a line end before the node end",
+      (b: BuiltBlock<ToyBlock>) => ({ ...b, to: b.from + ALPHA_CLOSER }),
+    ],
+  ])("toy invalid range (%s): dropped on create and on a bounded update", (_name, mutate) => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const t = toy({ build: (b) => (b.block.text.includes("alpha") ? mutate(b) : b) });
+    const state = toyState(TOY_DOC, t);
+    const all = fencedRanges(state);
+    expect(all).toHaveLength(3); // precondition
+    expect(ranges(state, t)).toEqual([all[1], all[2]]);
+    expect(hookLogCount(spy)).toBe(1);
+    expect(spy.mock.calls.find((c) => String(c[0]).startsWith(HOOK_LOG))?.[1]).toEqual({
+      name: "toy",
+      arm: "build",
+      errKind: "invalid-range",
+    });
+
+    // An edit inside alpha's body: bounded, and the span re-walks (re-validates) alpha.
+    const tr = state.update({ changes: { from: TOY_DOC.indexOf("alpha"), insert: "x" } });
+    expect(requiresFullBoundedRebuild(tr)).toBe(false); // precondition
+    expect(t.calls.build).toContain(all[0][0]); // alpha was re-walked
+    expect(ranges(tr.state, t)).toEqual(fencedRanges(tr.state).slice(1));
+    expect(hookLogCount(spy)).toBe(1);
   });
 
   it("brand pin: one field's records are not another field's record set", () => {
