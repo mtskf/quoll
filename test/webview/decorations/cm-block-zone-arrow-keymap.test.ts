@@ -67,14 +67,14 @@ describe("blockZoneArrowDown", () => {
     const view = mount(DOC, EditorSelection.cursor(blankLineAboveTable));
     try {
       // Pre-state: widget is rendered (caret is off the table).
-      expect(rangesOf(view.state.field(tableBlockField))).toHaveLength(1);
+      expect(rangesOf(view.state.field(tableBlockField).decorations)).toHaveLength(1);
 
       const handled = blockZoneArrowDown(view);
       expect(handled).toBe(true);
       // Caret lands at the widget's first byte = first source line.from.
       expect(view.state.selection.main.head).toBe(TABLE_FROM);
       // Widget reveals (line-level overlap with the caret).
-      expect(rangesOf(view.state.field(tableBlockField))).toHaveLength(0);
+      expect(rangesOf(view.state.field(tableBlockField).decorations)).toHaveLength(0);
     } finally {
       view.destroy();
     }
@@ -234,7 +234,7 @@ describe("mount — forces parse readiness (lazy-parse flake guard)", () => {
     // Caret at doc start — off the table, so the reveal does not hide the widget.
     const view = mount(bigDoc, EditorSelection.cursor(0));
     try {
-      expect(rangesOf(view.state.field(tableBlockField))).toHaveLength(1);
+      expect(rangesOf(view.state.field(tableBlockField).decorations)).toHaveLength(1);
     } finally {
       view.destroy();
     }
@@ -248,14 +248,14 @@ describe("blockZoneArrowUp", () => {
     const blankLineBelowTable = TABLE_TO + 1;
     const view = mount(DOC, EditorSelection.cursor(blankLineBelowTable));
     try {
-      expect(rangesOf(view.state.field(tableBlockField))).toHaveLength(1);
+      expect(rangesOf(view.state.field(tableBlockField).decorations)).toHaveLength(1);
 
       const handled = blockZoneArrowUp(view);
       expect(handled).toBe(true);
       // Caret lands at the widget's last byte = last source line.to.
       expect(view.state.selection.main.head).toBe(TABLE_TO);
       // Widget reveals (line-level overlap with the caret).
-      expect(rangesOf(view.state.field(tableBlockField))).toHaveLength(0);
+      expect(rangesOf(view.state.field(tableBlockField).decorations)).toHaveLength(0);
     } finally {
       view.destroy();
     }

@@ -6,7 +6,8 @@
 // frontier term alone, so a field that imported it as its whole admission test would be
 // exactly the hand-spelled frontier-only gate this guard exists to stop.
 //
-// WHY: two bounded fields (imageBlockField, tableSkeletonField) shipped with only this
+// WHY: two bounded fields (the image and table block fields, now `imageBlockField` and
+// `tableBlockField` on the structural block contract) shipped with only this
 // frontier half of the admission test and no structural-reparse half, because the OR was
 // hand-spelled per field instead of named once. `requiresFullBoundedRebuild` (structural-
 // guard.ts) is the fix — a single function that pairs both terms so a caller cannot invoke

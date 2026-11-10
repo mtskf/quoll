@@ -152,9 +152,9 @@ const armedRelease = new WeakMap<HTMLElement, AbortController>();
  *  grep cell-point.ts describes finds one claim to audit instead of three.
  *
  *  A cast, not a check, and what it asserts is traceable: `docFrom` reaches the
- *  constructor from `TableModel.blockFrom` (table-field.ts), which is
+ *  constructor from `TableBlock.from` (table-field.ts), which is
  *  `state.doc.lineAt(nodeFrom).from` or that value remapped through
- *  `tr.changes.mapPos` (table-skeleton.ts) — CodeMirror document positions, so
+ *  `tr.changes.mapPos` (structural-blocks.ts) — CodeMirror document positions, so
  *  there is nothing further to validate, only to name.
  *
  *  ⚠️ Read `widget.docFrom` here, NEVER `widget.nodeFrom` — same-typed,
@@ -162,7 +162,7 @@ const armedRelease = new WeakMap<HTMLElement, AbortController>();
  *  tells them apart. `nodeFrom` is the Lezer `Table` node start (the CELL
  *  caret base), not the block line-start; the two differ whenever the node
  *  START is not a line start — any 1-3-space-indented or list-nested table
- *  (table-skeleton.ts's `blockFrom` snaps to `doc.lineAt(nodeFrom).from`,
+ *  (table-field.ts's block `from` snaps to `doc.lineAt(nodeFrom).from`,
  *  which is earlier than `nodeFrom` there) — and reading `nodeFrom` here
  *  would land a margin click inside the table instead of at its first byte.
  *  Pinned by "keeps docFrom (margin) and nodeFrom (cell base) independent
@@ -480,7 +480,7 @@ export class TableBlockWidget extends QuollWidget {
 
   constructor(
     readonly table: Table,
-    /** LF-normalised source slice (table-skeleton's `m.slice`) — sameAs() key.
+    /** LF-normalised source slice (the table block's `slice`) — sameAs() key.
      *  A byte change rebuilds; matches the pre-existing widget identity. */
     readonly slice: string,
     /** Absolute LF-internal doc offset of the widget's first byte (block
@@ -497,7 +497,7 @@ export class TableBlockWidget extends QuollWidget {
      *  TS2345, forcing an explicit `asAbsoluteOffset` cast at each caller.
      *  Leaving it unbranded keeps that crossing inside this module, at one
      *  site (`blockStartOf`), instead of spreading it to every constructor
-     *  caller — the trade the deferred paragraph below declines for now.
+     *  caller.
      *
      *  The actual staleness hazard is upstream of the type system, at the
      *  two READ sites (the document `mouseup` seam, the root `click`
@@ -508,13 +508,7 @@ export class TableBlockWidget extends QuollWidget {
      *  reads the WeakMap FIRST and only falls back to the constructor value
      *  on a miss. Freshness is `blockStartCaret`'s job, not this field's type.
      *  The block start enters the branded space through `blockStartOf`, at
-     *  one site, on purpose.
-     *
-     *  (Deferred, out of scope here: minting at `TableModel.blockFrom`'s
-     *  origin in table-skeleton.ts instead would move the crossing to the
-     *  true source, turn a `docFrom`/`nodeFrom` constructor-argument swap
-     *  into a compile error, and remove `blockStartOf` entirely — it ripples
-     *  into the model, so not done in this PR.) */
+     *  one site, on purpose. */
     readonly docFrom: number,
     /** Absolute LF-internal doc offset of the Lezer `Table` node start — base
      *  for each cell's caret offset (`nodeFrom + cell.from`). CodeMirror is

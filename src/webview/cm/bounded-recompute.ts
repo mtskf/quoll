@@ -1,15 +1,8 @@
-// Small pure leaf helpers shared by the block-widget StateFields that maintain
-// their DecorationSet / model list with a changed-range-bounded recompute
-// (image/image-field.ts, table/table-field.ts, table/table-skeleton.ts — see
-// PERF.md). These were byte-identical copies in each file; they live here as ONE
-// implementation so the copies cannot drift.
-//
-// SCOPE: only the small, self-contained leaf helpers are shared. A full
-// `defineBlockWidgetField` FACTORY over `buildAll` was deliberately REJECTED as
-// leaky — the table field's global ordinal makes bounding it genuinely different
-// from the image field's widget-reuse — and is gated on a future third consumer
-// (the list block widget). See the recorded decision in
-// .claude/docs/TODO-archive.md. Do NOT grow this module into that factory.
+// Small pure leaf helpers shared by the changed-range-bounded StateFields. The
+// structural block widgets (table, image) use them through the contract module
+// structural-blocks.ts, which owns the bounded update itself; this module stays the
+// home of the leaf helpers only, so the field logic lives in exactly one place
+// (structural-blocks.ts) and the helpers cannot drift between consumers.
 //
 // The three fold-gutter fields (fold/index.ts), the callout marker-conceal field
 // (decorations/callout-marker-conceal.ts), and fenced-code collapse

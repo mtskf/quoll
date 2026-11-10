@@ -64,10 +64,8 @@ function mount(
       ...(extraExtensions as never[]),
     ],
   });
-  // Settle: these extensions register tableBlockField WITHOUT tableSkeletonField,
-  // so resolveModels() takes its fallback arm into tableModels(state) — the
-  // syntaxTree(state) read (table-skeleton.ts). A mounted view never self-heals
-  // under happy-dom, so force the full tree at mount time.
+  // Settle: tableBlockField walks syntaxTree(state). A mounted view never self-heals under
+  // happy-dom, so force the full tree at mount time.
   return settledMount({ state, parent });
 }
 
@@ -77,7 +75,7 @@ describe("tableBlockField", () => {
   it("emits exactly one block Decoration.replace per well-formed Table node", () => {
     const view = mount(`${TABLE}\n`);
     try {
-      const set = view.state.field(tableBlockField);
+      const set = view.state.field(tableBlockField).decorations;
       expect(rangesOf(set)).toHaveLength(1);
     } finally {
       view.destroy();
@@ -87,7 +85,7 @@ describe("tableBlockField", () => {
   it("emits the widget across whole-line boundaries (covers the source)", () => {
     const view = mount(`${TABLE}\n`);
     try {
-      const set = view.state.field(tableBlockField);
+      const set = view.state.field(tableBlockField).decorations;
       const ranges = rangesOf(set);
       expect(ranges).toHaveLength(1);
       const { from, to } = ranges[0];
@@ -106,7 +104,7 @@ describe("tableBlockField", () => {
   it("hides the widget when caret is inside the table (line-level reveal)", () => {
     const view = mount(`${TABLE}\n`, EditorSelection.cursor(3));
     try {
-      expect(rangesOf(view.state.field(tableBlockField))).toHaveLength(0);
+      expect(rangesOf(view.state.field(tableBlockField).decorations)).toHaveLength(0);
     } finally {
       view.destroy();
     }
@@ -117,7 +115,7 @@ describe("tableBlockField", () => {
     // because r.from == r.to == from. Line-level overlap MUST fire.
     const view = mount(`${TABLE}\n`, EditorSelection.cursor(0));
     try {
-      expect(rangesOf(view.state.field(tableBlockField))).toHaveLength(0);
+      expect(rangesOf(view.state.field(tableBlockField).decorations)).toHaveLength(0);
     } finally {
       view.destroy();
     }
@@ -126,7 +124,7 @@ describe("tableBlockField", () => {
   it("hides the widget when caret is AT the table's last content character (line.to boundary)", () => {
     const view = mount(`${TABLE}\n\nbelow`, EditorSelection.cursor(TABLE.length));
     try {
-      expect(rangesOf(view.state.field(tableBlockField))).toHaveLength(0);
+      expect(rangesOf(view.state.field(tableBlockField).decorations)).toHaveLength(0);
     } finally {
       view.destroy();
     }
@@ -136,7 +134,7 @@ describe("tableBlockField", () => {
     const doc = `${TABLE}\n\nbelow`;
     const view = mount(doc, EditorSelection.cursor(TABLE.length + 2));
     try {
-      expect(rangesOf(view.state.field(tableBlockField))).toHaveLength(1);
+      expect(rangesOf(view.state.field(tableBlockField).decorations)).toHaveLength(1);
     } finally {
       view.destroy();
     }
@@ -145,9 +143,9 @@ describe("tableBlockField", () => {
   it("re-emits the widget after the caret moves off the table", () => {
     const view = mount(`${TABLE}\n\nbelow`, EditorSelection.cursor(3));
     try {
-      expect(rangesOf(view.state.field(tableBlockField))).toHaveLength(0);
+      expect(rangesOf(view.state.field(tableBlockField).decorations)).toHaveLength(0);
       view.dispatch({ selection: { anchor: view.state.doc.length } });
-      expect(rangesOf(view.state.field(tableBlockField))).toHaveLength(1);
+      expect(rangesOf(view.state.field(tableBlockField).decorations)).toHaveLength(1);
     } finally {
       view.destroy();
     }
@@ -171,7 +169,7 @@ describe("tableBlockField", () => {
     );
     try {
       // First table hidden (caret inside), second table visible (no cursor).
-      const ranges = rangesOf(view.state.field(tableBlockField));
+      const ranges = rangesOf(view.state.field(tableBlockField).decorations);
       expect(ranges).toHaveLength(1);
       expect(ranges[0].from).toBeGreaterThanOrEqual(secondTableFirstCharOffset);
     } finally {
@@ -184,7 +182,7 @@ describe("tableBlockField", () => {
     try {
       const zones = view.state.facet(quollBlockReplaceZones);
       expect(zones).toHaveLength(1);
-      const fieldRanges = rangesOf(view.state.field(tableBlockField));
+      const fieldRanges = rangesOf(view.state.field(tableBlockField).decorations);
       expect(zones[0]).toEqual(fieldRanges[0]);
     } finally {
       view.destroy();
@@ -203,7 +201,7 @@ describe("tableBlockField", () => {
   it("ignores a malformed table (header/delimiter cell-count mismatch)", () => {
     const view = mount("| A | B |\n| - |\n");
     try {
-      expect(rangesOf(view.state.field(tableBlockField))).toHaveLength(0);
+      expect(rangesOf(view.state.field(tableBlockField).decorations)).toHaveLength(0);
       expect(view.state.facet(quollBlockReplaceZones)).toHaveLength(0);
     } finally {
       view.destroy();
@@ -214,7 +212,7 @@ describe("tableBlockField", () => {
     const doc = `${TABLE}\n\n${TABLE}\n`;
     const view = mount(doc);
     try {
-      expect(rangesOf(view.state.field(tableBlockField))).toHaveLength(2);
+      expect(rangesOf(view.state.field(tableBlockField).decorations)).toHaveLength(2);
       expect(view.state.facet(quollBlockReplaceZones)).toHaveLength(2);
     } finally {
       view.destroy();
@@ -224,11 +222,11 @@ describe("tableBlockField", () => {
   it("updates after a doc edit that introduces a new table", () => {
     const view = mount("plain text");
     try {
-      expect(rangesOf(view.state.field(tableBlockField))).toHaveLength(0);
+      expect(rangesOf(view.state.field(tableBlockField).decorations)).toHaveLength(0);
       view.dispatch({
         changes: { from: 0, to: view.state.doc.length, insert: `${TABLE}\n` },
       });
-      expect(rangesOf(view.state.field(tableBlockField))).toHaveLength(1);
+      expect(rangesOf(view.state.field(tableBlockField).decorations)).toHaveLength(1);
     } finally {
       view.destroy();
     }
@@ -247,7 +245,7 @@ describe("tableBlockField", () => {
   it("handles a Table node with no trailing newline (line-snap precondition)", () => {
     const view = mount(`${TABLE}\n\nafter`);
     try {
-      const ranges = rangesOf(view.state.field(tableBlockField));
+      const ranges = rangesOf(view.state.field(tableBlockField).decorations);
       expect(ranges).toHaveLength(1);
       // Widget spans line-1.from (0) .. line-3.to (TABLE.length) — the
       // table's last source line ends at TABLE.length (the `|` byte) and
@@ -264,7 +262,7 @@ describe("tableBlockField", () => {
     const crlfTable = "| A | B |\r\n| - | - |\r\n| 1 | 2 |\r\n";
     const view = mount(crlfTable);
     try {
-      const ranges = rangesOf(view.state.field(tableBlockField));
+      const ranges = rangesOf(view.state.field(tableBlockField).decorations);
       // Lezer's GFM parser ignores CRLF tables in the version we pin
       // (Caveat 2 in test/markdown/table/lezer-parity.test.ts), so the
       // current contract is "either 0 widgets, or, if a future Lezer
@@ -289,10 +287,10 @@ describe("tableBlockField", () => {
     const doc = `${TABLE}\n\nbelow with some text`;
     const view = mount(doc, EditorSelection.cursor(doc.length));
     try {
-      const before = view.state.field(tableBlockField);
+      const before = view.state.field(tableBlockField).decorations;
       // Move caret to a different "below"-line position (still off the table).
       view.dispatch({ selection: { anchor: doc.length - 3 } });
-      const after = view.state.field(tableBlockField);
+      const after = view.state.field(tableBlockField).decorations;
       expect(after).toBe(before);
     } finally {
       view.destroy();
@@ -303,9 +301,9 @@ describe("tableBlockField", () => {
     const doc = `${TABLE}\n\nbelow`;
     const view = mount(doc, EditorSelection.cursor(doc.length));
     try {
-      expect(rangesOf(view.state.field(tableBlockField))).toHaveLength(1);
+      expect(rangesOf(view.state.field(tableBlockField).decorations)).toHaveLength(1);
       view.dispatch({ selection: { anchor: 3 } });
-      expect(rangesOf(view.state.field(tableBlockField))).toHaveLength(0);
+      expect(rangesOf(view.state.field(tableBlockField).decorations)).toHaveLength(0);
     } finally {
       view.destroy();
     }
@@ -331,7 +329,7 @@ describe("tableBlockField × C4a orchestrator integration", () => {
       const merged = sources.map((s) => (typeof s === "function" ? s(view) : s));
       const insideTable: Array<{ from: number; to: number }> = [];
       const outsideTable: Array<{ from: number; to: number }> = [];
-      const widgetRanges = rangesOf(view.state.field(tableBlockField));
+      const widgetRanges = rangesOf(view.state.field(tableBlockField).decorations);
       for (const set of merged) {
         const iter = set.iter();
         while (iter.value !== null) {
@@ -387,7 +385,7 @@ describe("tableBlockField × C4a orchestrator integration", () => {
       // the exact count is 2 — a weaker `> 0` would not distinguish
       // "filter is correctly inactive" from "filter is inactive AND
       // half the marks went missing for another reason".
-      expect(rangesOf(view.state.field(tableBlockField))).toHaveLength(0);
+      expect(rangesOf(view.state.field(tableBlockField).decorations)).toHaveLength(0);
       const sources = view.state.facet(EditorView.decorations);
       const merged = sources.map((s) => (typeof s === "function" ? s(view) : s));
       const headerMarks: Array<{ from: number; to: number }> = [];
@@ -417,7 +415,7 @@ describe("tableBlockField — frontmatter exclusion (C8a guard)", () => {
     // underline absorbing the table.
     const view = mount("---\n| a | b |\n| - | - |\n\n---\n\n# body\n");
     try {
-      expect(rangesOf(view.state.field(tableBlockField))).toHaveLength(0);
+      expect(rangesOf(view.state.field(tableBlockField).decorations)).toHaveLength(0);
     } finally {
       view.destroy();
     }
@@ -429,11 +427,11 @@ describe("tableBlockField — reveal and offset pins", () => {
     // Default cursor (doc end) is off the table → widget present.
     const view = mount("text\n\n| a | b |\n| - | - |\n\nmore");
     try {
-      expect(rangesOf(view.state.field(tableBlockField))).toHaveLength(1);
+      expect(rangesOf(view.state.field(tableBlockField).decorations)).toHaveLength(1);
       // Move caret onto the first table line → widget hides.
       const onTable = view.state.doc.line(3).from; // "| a | b |"
       view.dispatch({ selection: { anchor: onTable } });
-      expect(rangesOf(view.state.field(tableBlockField))).toHaveLength(0);
+      expect(rangesOf(view.state.field(tableBlockField).decorations)).toHaveLength(0);
     } finally {
       view.destroy();
     }
@@ -446,7 +444,7 @@ describe("tableBlockField — reveal and offset pins", () => {
     const lfText = splitToCmText(raw);
     const parent = document.createElement("div");
     document.body.appendChild(parent);
-    // Settle: same tableModels(state)/syntaxTree(state) fallback read as mount() above.
+    // Settle: same syntaxTree(state) read as mount() above.
     const view = settledMount({
       parent,
       state: EditorState.create({
@@ -460,7 +458,7 @@ describe("tableBlockField — reveal and offset pins", () => {
       }),
     });
     try {
-      const set = view.state.field(tableBlockField);
+      const set = view.state.field(tableBlockField).decorations;
       let widget: TableBlockWidget | null = null;
       set.between(0, view.state.doc.length, (_f, _t, deco) => {
         if (widget === null) {
@@ -500,9 +498,9 @@ describe("tableBlockField — reveal and offset pins", () => {
       rangeView = mount(doc, EditorSelection.single(from, from + 5));
       // Control: a selection entirely outside the table keeps the widget.
       outsideView = mount(doc, EditorSelection.single(0, 3));
-      expect(rangesOf(caretView.state.field(tableBlockField))).toHaveLength(0);
-      expect(rangesOf(rangeView.state.field(tableBlockField))).toHaveLength(0);
-      expect(rangesOf(outsideView.state.field(tableBlockField))).toHaveLength(1);
+      expect(rangesOf(caretView.state.field(tableBlockField).decorations)).toHaveLength(0);
+      expect(rangesOf(rangeView.state.field(tableBlockField).decorations)).toHaveLength(0);
+      expect(rangesOf(outsideView.state.field(tableBlockField).decorations)).toHaveLength(1);
     } finally {
       caretView?.destroy();
       rangeView?.destroy();

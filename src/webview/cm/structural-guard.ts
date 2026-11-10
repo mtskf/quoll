@@ -11,11 +11,8 @@
 // consumer list, and no count is kept here because a count goes stale the next time
 // a field is added.
 //
-// Fenced-code collapse (fenced-code/fenced-code-collapse.ts) does NOT import this:
-// it keeps a NARROWER STRUCTURAL (no ATX/underscore alts) plus its own
-// `topLevelBoundaryRisk` + `insideBlock` record scoping, because its hot path is
-// editing INSIDE a code fence — where a `#` comment or `___` line must stay on
-// the bounded path. See the STRUCTURAL doc-comment below + docs/LEARNING.md.
+// Fenced-code collapse composes the shared frontier predicate with its own structural
+// predicate; see `fencedCollapseSpec.docChangePlan`.
 //
 // The dual old/new line-slice scan is memoised per Transaction (a WeakMap keyed
 // on `tr`): in @codemirror/state 6.6.x CodeMirror hands the SAME Transaction to
@@ -265,26 +262,8 @@ export function tableRowShapeChanged(oldText: string, newText: string): boolean 
  *  ⚠️ Do NOT "simplify" a DELTA clause with an over-approximating predicate the way a
  *  PRESENCE test may be: pinning both sides of a comparison to `true` erases the flip it
  *  exists to detect, turning a cheap false positive into a missed rebuild.
- *  What that costs depends on the consumer's PRE-guard baseline:
- *   - For the fold / callout consumers this guard was written for, the baseline was an
- *     always-full rebuild, so presence-based firing is a strict improvement.
- *   - For `image/image-field.ts` and `table/table-skeleton.ts`, which admitted on the
- *     frontier term alone before they adopted this pair, the baseline was always-BOUNDED, so
- *     it is a REGRESSION on the keystroke classes that now fire: typing in a list-item body,
- *     a blockquote line or an ATX heading, and every Enter (an in-cell keystroke is NOT in
- *     this set — see the TABLE-DELIM note above). EACH field's own
- *     full-walk cost was measured on its own fixtures and accepted for this PR — separately,
- *     because the two cost curves differ in SHAPE: the table field's grows with document
- *     size (its full walk re-runs `parseTable` per node), the image field's is essentially
- *     flat — for a reason that was NOT isolated. It is specifically NOT reuse: the image
- *     field's full walk re-derives alt/safeUrl/slice fresh per node (`buildRange` takes no
- *     `prev`); the reuse lives only on `computeBounded`'s position-shift branch. Sharing
- *     this guard and this trigger set does NOT imply sharing a cost, so neither number may
- *     be inferred from the other. Numbers: PERF.md; scoping follow-up: TODO.md.
- *  A delta-based / per-consumer refinement is deferred to that follow-up
- *  (`fenced-code-collapse.ts`'s `insideBlock` + `topLevelBoundaryRisk` is the in-repo
- *  precedent). Exported so the negative-assertion tests can call it
- *  directly (pinning that plain prose typing stays on the bounded hot path).
+ *  Performance numbers and consumer-specific costs: .claude/docs/PERF.md.
+ *  Exported so the negative-assertion tests can call it directly (pinning that plain prose typing stays on the bounded hot path).
  *  Memoised per Transaction so every consumer shares one dual-slice scan per
  *  dispatch (one scan per dispatch under CM 6.6.x). */
 const structuralMemo = new WeakMap<Transaction, boolean>();
@@ -335,7 +314,7 @@ export function touchesStructuralReparse(tr: Transaction): boolean {
     // `Table` appear or vanish and can CLOSE an enclosing list — re-shaping block structure
     // OUTSIDE the changed run, which SHAPE and the other arms all miss. Keying on the DELTA
     // of pipe presence and cell count, rather than on the mere PRESENCE of a `|` on the
-    // line, is what keeps typing inside a table cell — `tableSkeletonField`'s own primary
+    // line, is what keeps typing inside a table cell — the table spec's (`tableBlockField`) own primary
     // scenario — on the bounded path; the delimiter ROW itself stays on presence.
     if (tableRowShapeChanged(oldLine.text, newLine.text)) {
       hit = true;

@@ -58,9 +58,9 @@ interface Edit {
 // The two ways a `changes` object normalises to an empty ChangeSet are pinned directly by
 // the door-guard test below (`{ changes: { from: 0 } }` and `{ changes: { from: 0, to: 0 } }`,
 // with and without an explicit `insert: ""`), not restated here. An inert `changes` alone
-// only kills imageBlockField.update's docChanged arm (the `if (tr.docChanged)` branch) —
-// paired with a real `selection` on the same `Edit`, it can still reach `computeBounded`
-// through the selection arm (the tail of `update`); the door guard below requires
+// only kills the field's docChanged arm (the `if (tr.docChanged)` branch of the contract in
+// structural-blocks.ts) — paired with a real `selection` on the same `Edit`, it can still
+// reach the selection (reveal) arm (the tail of `update`); the door guard below requires
 // `!e.selection` too. (Named by symbol, not by line: cross-file line numbers in this file
 // drifted twice within one PR.)
 const inertChanges = (c: Edit["changes"]) =>
@@ -68,7 +68,7 @@ const inertChanges = (c: Edit["changes"]) =>
 
 // Where the settles go, and — just as load-bearing — where they do NOT.
 //
-// The MOUNT settles: imageBlockField.create() reads syntaxTree(state) (image-field.ts),
+// The MOUNT settles: imageBlockField.create() reads syntaxTree(state) (structural-blocks.ts),
 // so on a truncated init snapshot the field's INITIAL value is built over a partial tree
 // and the first edit's bounded path starts from a wrong `prev`. A bare ensureSyntaxTree
 // cannot fix that — it advances the parse CONTEXT and leaves the field's published
@@ -79,19 +79,19 @@ const inertChanges = (c: Edit["changes"]) =>
 // to nothing, which is exactly what two bare ensureSyntaxTree calls used to produce.
 //
 // The EDIT LOOP must NOT settle. `forceParsing` dispatches whenever the completed tree
-// differs from the published snapshot, and that dispatch drives imageBlockField.update's
-// tree-identity branch into computeFreshFull — silently turning this bounded-vs-full
+// differs from the published snapshot, and that dispatch drives the contract's
+// tree-identity branch into a full rebuild — silently turning this bounded-vs-full
 // compare into full-vs-full. That trades a flake for a vacuous pass, which is worse.
 // The pin below is what keeps the bounded result trustworthy without a settle.
 //
 // ⚠️ The comparison is ATTEMPTED rather than asserted on the first try, which is why this
 // runs through `withUnstarvedFrontier` (helpers/unstarved-frontier.ts) rather than a local
 // loop. CodeMirror gives its post-edit reparse a 20ms WALL-CLOCK budget, and under CPU
-// starvation that window can elapse while this process is descheduled; image-field.ts's G2
-// arm then self-heals with a full recompute, so the bounded path is not what ran and there
+// starvation that window can elapse while this process is descheduled; the contract's
+// frontier arm then takes a full rebuild, so the bounded path is not what ran and there
 // is nothing to compare. Retrying from a fresh view neither hides a regression (a real
 // bounded bug reds every attempt that gets far enough to compare — measured by breaking
-// computeBounded) nor passes vacuously (an all-starved run throws, and that throw is pinned
+// the bounded update) nor passes vacuously (an all-starved run throws, and that throw is pinned
 // in helpers/unstarved-frontier.test.ts rather than living unguarded here, which is the
 // whole reason the loop moved), which a vitest-level `{ retry: n }` would fail on both
 // counts.
@@ -107,21 +107,20 @@ function checkEquivalence(initial: string, edits: Edit[], oracleSlots: number): 
     // `.every(...)`, so a MIXED array — even one live edit among otherwise-inert ones — passes
     // the door; that is deliberate, since one live edit is enough for the comparison below to
     // be ABLE to exercise a bounded arm. Whether it actually does is decided downstream, by
-    // image-field.ts's own gates — see "What this does NOT rule out" below.
+    // the contract's own gates (structural-blocks.ts) — see "What this does NOT rule out" below.
     // What this does NOT rule out: a `selection`/`cursorAtEnd` edit that dispatches something
     // real but whose selection LINE SPAN happens not to change. On a non-docChanged
-    // transaction, reaching image-field.ts's `computeBounded` requires first surviving its G3
-    // `leadingFrontmatterEnd` check and its `syntaxTree` identity check, and only then finding
+    // transaction the contract (structural-blocks.ts) keeps its records unless the tree
+    // changed, and re-filters the decorations only on
     // `!selectionLineSpansEqual(tr.startState, tr.state)` — so that inequality is a
-    // NECESSARY condition for the bounded arm, not a sufficient one, and deciding it at the
-    // door would mean reimplementing all three checks here (none are exported from
-    // image-field.ts). Unlike the `changes` shape above — which `inertChanges` decides from
+    // NECESSARY condition for the selection arm, not a sufficient one, and deciding it at the
+    // door would mean reimplementing the contract's checks here. Unlike the `changes` shape above — which `inertChanges` decides from
     // the `Edit` literal alone — whether a selection move crosses a line boundary depends on
     // both transaction states, which this predicate does not have. So this guard is a floor,
     // not a guarantee: it catches the fully inert call, not every selection-only call that
     // fails to cross a line boundary. The "selection-only onto then off an image" case below
     // is deliberately NOT inert — moving the cursor onto and then off the image's line
-    // crosses that boundary and exercises computeBounded via the selection arm, not the
+    // crosses that boundary and exercises the selection (reveal) arm, not the
     // docChanged one.
     throw new Error(
       "checkEquivalence: at least one edit with `changes`, `selection`, or `cursorAtEnd` is required to exercise the bounded path"
@@ -157,9 +156,9 @@ function checkEquivalence(initial: string, edits: Edit[], oracleSlots: number): 
         // shape and the guarantee breaks with it.
         //
         // ⚠️ What passing the gate rules out is the STARVED-frontier full walk, and nothing
-        // more. imageBlockField.update takes its G3 arm — computeFreshFull — whenever
-        // leadingFrontmatterEnd changes, BEFORE this predicate is ever consulted
-        // (image-field.ts), so passing does not mean the bounded path ran. The seven "G3"
+        // more. The contract takes a full rebuild whenever the leading frontmatter's end
+        // moves (`frontmatterMoved`, structural-blocks.ts), whatever the frontier, so
+        // passing does not mean the bounded path ran. The seven "G3"
         // rows below take that arm, and what they compare there is the field's
         // INCREMENTALLY parsed full walk against the oracle's freshly parsed one — not
         // bounded against full. That is not a hole: it is how those rows pin the arm, since
@@ -181,8 +180,8 @@ function checkEquivalence(initial: string, edits: Edit[], oracleSlots: number): 
         })
       );
       assertEquivalent(
-        slots(view.state.field(imageBlockField)),
-        slots(oracle.field(imageBlockField)),
+        slots(view.state.field(imageBlockField).decorations),
+        slots(oracle.field(imageBlockField).decorations),
         oracleSlots
       );
     },
@@ -191,7 +190,10 @@ function checkEquivalence(initial: string, edits: Edit[], oracleSlots: number): 
 
 const IMG = "![alt](https://example.com/a.png)";
 
-// Three G3 fixture pairs follow. Each crosses `leadingFrontmatterEnd` by a different
+// "G3" names the pre-contract image field's frontmatter arm; in the structural block
+// contract its job is done by `frontmatterMoved` (structural-blocks.ts) plus the structural
+// guard, and the "Measured 2026-09-02" notes below were taken against the pre-contract
+// field. Three G3 fixture pairs follow. Each crosses `leadingFrontmatterEnd` by a different
 // mechanism — the closer fence MOVES to another line, line 1's own fence identity FLIPS, or
 // the closer APPEARS/DISAPPEARS while line 1 stays a fence — and each pair is one document
 // plus the edit that produces the other, which is what lets a single pair cover both
@@ -300,10 +302,10 @@ describe("imageBlockField bounded ≡ full", () => {
       oracleSlots: 1,
     },
     // The six rows below — three pairs, one per fixture pair above — are the ones that pin
-    // image-field.ts's G3 arm; the length-shift row above does not, and cannot. A length-only
+    // full rebuild a moved frontmatter end needs; the length-shift row above does not, and cannot. A length-only
     // edit INSIDE the fences moves leadingFrontmatterEnd by a couple of characters but never
     // past the image, so eligibility does not flip: with the arm hypothetically deleted,
-    // computeExtendedSpan covers only the frontmatter's own lines, computeBounded re-emits
+    // the bounded span covers only the frontmatter's own lines, the bounded update re-emits
     // the untouched widget byte-identically, and the row stays green. Each of the six instead
     // moves the image ACROSS leadingFrontmatterEnd, and every pair covers both directions
     // because the two failure shapes are different: the enclosing direction leaves a STALE
@@ -335,7 +337,7 @@ describe("imageBlockField bounded ≡ full", () => {
       oracleSlots: 1,
     },
     // The OPENER-FLIP pair: line 1 itself moves, so `detectLeadingFrontmatterInState` returns
-    // a span on one side and `null` on the other, and computeExtendedSpan covers line 1 and
+    // a span on one side and `null` on the other, and the bounded span covers line 1 and
     // its neighbour but never the image four lines below. Measured 2026-09-02: narrowing the
     // G3 check to a closer-only comparison — one that fires only when BOTH states have a span
     // and their `to` differs — reds both rows below while the closer-fence rows stay green
@@ -404,7 +406,7 @@ describe("imageBlockField bounded ≡ full", () => {
       // A structural reparse: an unclosed ``` typed on line 1 swallows the image below
       // into a FencedCode node, so the Image node vanishes with NO edit inside its own
       // bytes and with a COMPLETE frontier — the crossing neither the bounded reuse rule
-      // nor G2 can see. Measured on the unguarded field: a stale widget survived at 10-43
+      // nor the frontier arm can see. Measured on the unguarded field: a stale widget survived at 10-43
       // against an oracle holding none.
       name: "structural reparse — an unclosed fence above swallows the image",
       initial: `intro\n\n${IMG}\n\ntail\n`,
@@ -436,12 +438,11 @@ describe("imageBlockField bounded ≡ full", () => {
   // The guard's breadth (structural-guard.ts) routes many of the rows above to the FULL arm
   // — a newline delta or a blank-line flip is enough. That is sound, and those rows keep
   // their value as full-vs-oracle checks, but it thins out the ones that still reach
-  // `computeBounded` through the docChanged arm. Pin the two below so a widened guard or a
+  // the bounded update through the docChanged arm. Pin the two below so a widened guard or a
   // re-fixtured row cannot quietly leave this file blind to a bounded regression.
   //
-  // NOT a claim that these are the only rows on the bounded path: the selection-driven rows
-  // further down reach `computeBounded` through the SELECTION arm, which this guard does not
-  // touch. This pins two; it does not census the file.
+  // NOT a claim that these are the only rows off the full arm: the selection-driven rows
+  // further down take the SELECTION (reveal) arm, which this guard does not touch. This pins two; it does not census the file.
   //
   // The G3 rows are deliberately NOT here: their edit moves `leadingFrontmatterEnd`, so the
   // field returns from the frontmatter arm ABOVE this condition and never consults it —

@@ -35,7 +35,7 @@ import { settledMount } from "./helpers/settled-view.js";
 
 // One switch for both throwing seams. A mock only throws while `armed` is true, so the
 // fields' `create` (which already calls both seams) never throws at mount.
-const seam = vi.hoisted(() => ({ armed: false, armedCalls: 0 }));
+const seam = vi.hoisted(() => ({ armed: false, armedCalls: 0, log: [] as string[] }));
 
 // The specifier the table block field imports `parseTable` from.
 vi.mock("../../src/markdown/table/index.js", async (importOriginal) => {
@@ -43,6 +43,7 @@ vi.mock("../../src/markdown/table/index.js", async (importOriginal) => {
   return {
     ...real,
     parseTable: (source: string, from: number, to: number) => {
+      seam.log.push(source);
       if (seam.armed) {
         seam.armedCalls++;
         if (source.includes("BOOM")) {
@@ -60,6 +61,7 @@ vi.mock("../../src/webview/cm/inline/inline-ir.js", async (importOriginal) => {
   return {
     ...real,
     commonMarkAltText: (raw: string) => {
+      seam.log.push(raw);
       if (seam.armed) {
         seam.armedCalls++;
         if (raw.includes("BOOM")) {
@@ -74,6 +76,7 @@ vi.mock("../../src/webview/cm/inline/inline-ir.js", async (importOriginal) => {
 afterEach(() => {
   seam.armed = false;
   seam.armedCalls = 0;
+  seam.log.length = 0;
   vi.restoreAllMocks();
 });
 
@@ -287,6 +290,204 @@ describe("structural block widget identity", () => {
     const after = widgetSlots(st1, TableBlockWidget);
     expect(after.map((s) => s.from)).toEqual(before.map((s) => s.from));
     expect(after[1].widget).toBe(before[1].widget);
+  });
+});
+
+/** The production table + image fields over the production parser, from one module
+ *  graph (the rows below compare widget classes with `instanceof`). */
+async function productionBlocks() {
+  const { tableBlockField, TableBlockWidget } = await import("../../src/webview/cm/table/index.js");
+  const { imageBlockField, ImageBlockWidget } = await import("../../src/webview/cm/image/index.js");
+  const { quollMarkdownLanguage } = await import("../../src/webview/cm/markdown.js");
+  const extensions: Extension[] = [quollMarkdownLanguage(), tableBlockField, imageBlockField];
+  const create = (doc: string) => settledState(EditorState.create({ doc, extensions }));
+  /** `(from, to, widget class)` of every table + image decoration, in order. */
+  const shape = (state: EditorState) =>
+    [...widgetSlots(state, TableBlockWidget), ...widgetSlots(state, ImageBlockWidget)]
+      .sort((a, b) => a.from - b.from)
+      .map((s) => [s.from, s.to, s.widget.constructor.name]);
+  return {
+    tableBlockField,
+    TableBlockWidget,
+    imageBlockField,
+    ImageBlockWidget,
+    extensions,
+    create,
+    shape,
+  };
+}
+
+const BLOCKS_TAIL = [
+  "| a | b |",
+  "| - | - |",
+  "| 1 | 2 |",
+  "",
+  "![pic](https://example.com/p.png)",
+  "",
+  "Tail paragraph.",
+  "",
+];
+
+describe("structural blocks: ownership (production fields)", () => {
+  const FM_DOC = [
+    "---",
+    "title: x",
+    "| a | b |",
+    "| - | - |",
+    "| 1 | 2 |",
+    "",
+    "![pic](https://example.com/p.png)",
+    "---",
+    "",
+    "Body.",
+    "",
+  ].join("\n");
+
+  async function ownershipRow(kind: "table" | "image") {
+    const p = await productionBlocks();
+    const cls = kind === "table" ? p.TableBlockWidget : p.ImageBlockWidget;
+    const st0 = p.create(FM_DOC);
+    // Precondition: the frontmatter really is recognised (it spans the closer).
+    expect(widgetSlots(st0, cls)).toEqual([]);
+
+    const closer = FM_DOC.lastIndexOf("---\n");
+    const open = st0.update({ changes: { from: closer, to: closer + 4 } }).state;
+    const needle = kind === "table" ? "| a |" : "![pic]";
+    expect(widgetSlots(open, cls).map((s) => s.from)).toEqual([
+      open.doc.toString().indexOf(needle),
+    ]);
+
+    const closed = open.update({ changes: { from: closer, insert: "---\n" } }).state;
+    expect(closed.doc.toString()).toBe(FM_DOC);
+    expect(widgetSlots(closed, cls)).toEqual([]);
+  }
+
+  it("ownership table: a table inside frontmatter has no widget until the closer goes", async () => {
+    await ownershipRow("table");
+  });
+
+  it("ownership image: an image inside frontmatter has no widget until the closer goes", async () => {
+    await ownershipRow("image");
+  });
+});
+
+describe("structural blocks: frontmatter shift stays bounded (production fields)", () => {
+  const FM_SHIFT_DOC = ["---", "title: x", "note: y", "---", "", ...BLOCKS_TAIL].join("\n");
+  const NO_FM_DOC = ["Top.", "", "Second.", "", ...BLOCKS_TAIL].join("\n");
+
+  /** The table/image positions the widgets were given, per record. */
+  async function positions(state: EditorState) {
+    const p = await productionBlocks();
+    const t = state
+      .field(p.tableBlockField)
+      .records.map(({ block }) => [block.from, block.to, block.from + block.nodeOffset]);
+    const i = state
+      .field(p.imageBlockField)
+      .records.map(({ block, deco }) => [
+        block.from,
+        block.to,
+        (deco.spec.widget as InstanceType<typeof p.ImageBlockWidget>).docFrom,
+      ]);
+    return { t, i };
+  }
+
+  async function shiftRow(doc: string, change: { from: number; to?: number; insert?: string }) {
+    const p = await productionBlocks();
+    const st0 = p.create(doc);
+    // Precondition: both seams built their blocks at mount.
+    expect(seam.log.some((s) => s.includes("| a | b |"))).toBe(true);
+    expect(seam.log).toContain("pic");
+    expect(p.shape(st0)).toHaveLength(2);
+    seam.log.length = 0;
+
+    const tr = st0.update({ changes: change });
+    const st1 = tr.state;
+    expect(requiresFullBoundedRebuild(tr)).toBe(false); // precondition: no full reason
+    expect(p.shape(st1)).toHaveLength(2);
+    // Bounded rebase: neither block was rebuilt.
+    expect(seam.log).toEqual([]);
+    // Every widget-visible position equals a fresh full build's.
+    const fresh = p.create(st1.doc.toString());
+    expect(await positions(st1)).toEqual(await positions(fresh));
+    expect(p.shape(st1)).toEqual(p.shape(fresh));
+  }
+
+  it("frontmatter body insert: one character inside the body rebases the blocks", async () => {
+    await shiftRow(FM_SHIFT_DOC, { from: FM_SHIFT_DOC.indexOf("x\n"), insert: "z" });
+  });
+
+  it("frontmatter body delete: one character out of the body rebases the blocks", async () => {
+    const at = FM_SHIFT_DOC.indexOf("x\n");
+    await shiftRow(FM_SHIFT_DOC, { from: at, to: at + 1 });
+  });
+
+  it("no frontmatter offset-0 insert: a keystroke at offset 0 rebases the blocks", async () => {
+    await shiftRow(NO_FM_DOC, { from: 0, insert: "z" });
+  });
+});
+
+describe("structural blocks: an edit outside the viewport (production fields)", () => {
+  async function viewportRow(kind: "table" | "image") {
+    const p = await productionBlocks();
+    const prose: string[] = [];
+    for (let i = 0; i < 400; i++) {
+      prose.push(`Paragraph ${i} of plain prose between the blocks and the edit.`, "");
+    }
+    const doc = ["Top.", "", ...BLOCKS_TAIL, ...prose, "Last line."].join("\n");
+    const view = mountView(EditorState.create({ doc, extensions: p.extensions }));
+    try {
+      const blocks = (): readonly StructuralBlock[] =>
+        (kind === "table"
+          ? view.state.field(p.tableBlockField)
+          : view.state.field(p.imageBlockField)
+        ).records.map((r) => r.block);
+      const before = blocks();
+      expect(before).toHaveLength(1); // precondition
+      const at = doc.length;
+      // Precondition: the edit is beyond the reported viewport and after every block,
+      // with at least one line between the last block and the edited line.
+      expect(at).toBeGreaterThan(view.viewport.to);
+      const lastBlockLine = view.state.doc.lineAt(
+        Math.max(...p.shape(view.state).map((s) => Number(s[1])))
+      ).number;
+      expect(view.state.doc.lineAt(at).number - lastBlockLine).toBeGreaterThan(1);
+
+      view.dispatch({ changes: { from: at, insert: "x" } });
+      const after = blocks();
+      expect(after).toHaveLength(1);
+      expect(after[0]).toBe(before[0]);
+      expect(p.shape(view.state)).toEqual(p.shape(p.create(view.state.doc.toString())));
+    } finally {
+      view.destroy();
+    }
+  }
+
+  it("viewport outside table: the table block object is reused and matches a fresh build", async () => {
+    await viewportRow("table");
+  });
+
+  it("viewport outside image: the image block object is reused and matches a fresh build", async () => {
+    await viewportRow("image");
+  });
+});
+
+describe("structural blocks: reveal (production fields)", () => {
+  it("reveal table: a caret on a table line hides its widget, leaving shows the SAME widget", async () => {
+    const p = await productionBlocks();
+    const doc = ["Top.", "", ...BLOCKS_TAIL].join("\n");
+    const st0 = p.create(doc);
+    const before = widgetSlots(st0, p.TableBlockWidget);
+    expect(before).toHaveLength(1); // precondition: caret at 0 reveals nothing
+
+    const entered = st0.update({ selection: { anchor: before[0].from + 2 } }).state;
+    expect(widgetSlots(entered, p.TableBlockWidget)).toEqual([]);
+    // The image is on its own line, so it stays rendered.
+    expect(widgetSlots(entered, p.ImageBlockWidget)).toHaveLength(1);
+
+    const left = entered.update({ selection: { anchor: 0 } }).state;
+    const after = widgetSlots(left, p.TableBlockWidget);
+    expect(after.map((s) => s.from)).toEqual([before[0].from]);
+    expect(after[0].widget).toBe(before[0].widget);
   });
 });
 
