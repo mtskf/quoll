@@ -136,7 +136,7 @@ function firePaste(view: EditorView, text: string): Event {
 // column 4, which only our transform produces) must be ABSENT. On ACCEPT we
 // preventDefault (CM core does not run), so exact-content assertions are safe.
 
-describe("listReindentPaste — handler", () => {
+describe("clipboard paste — list re-indent", () => {
   // Fixture note: the caret sits at the end of the blank interior line "  " of a
   // LOOSE item "b" (which has a following continuation "  more"), col 2. A blank
   // interior line resolves via `listItemAt` (a bare TRAILING blank line does not

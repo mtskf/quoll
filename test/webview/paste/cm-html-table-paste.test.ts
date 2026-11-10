@@ -388,7 +388,7 @@ function firePaste(view: EditorView, data: { html?: string; text?: string }): Ev
   return event;
 }
 
-describe("htmlTablePaste — handler", () => {
+describe("clipboard paste — table", () => {
   it("inserts a GFM table for an HTML-table paste and consumes the event", () => {
     const view = mount("");
     const event = firePaste(view, {

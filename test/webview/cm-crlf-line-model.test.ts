@@ -200,7 +200,7 @@ describe("Quoll's own multi-line insert paths, in a CRLF document", () => {
     expectCleanLineModel(view.state.doc);
   });
 
-  it("htmlTablePaste keeps a clean line model", () => {
+  it("clipboard paste — table keeps a clean line model", () => {
     const { handle, view } = mount();
     handle.applyDocument({
       content: "intro\r\ntext",
@@ -227,7 +227,7 @@ describe("Quoll's own multi-line insert paths, in a CRLF document", () => {
     expectCleanLineModel(view.state.doc);
   });
 
-  it("richHtmlPaste keeps a clean line model", () => {
+  it("clipboard paste — rich HTML keeps a clean line model", () => {
     const { handle, view } = mount();
     handle.applyDocument({
       content: "intro\r\ntext",
@@ -242,7 +242,7 @@ describe("Quoll's own multi-line insert paths, in a CRLF document", () => {
     expectCleanLineModel(view.state.doc);
   });
 
-  it("listReindentPaste keeps a clean line model", () => {
+  it("clipboard paste — list re-indent keeps a clean line model", () => {
     const { handle, view } = mount();
     // Fixture mirrors cm-list-reindent-paste.test.ts's LOOSE fixture: the caret
     // sits at the end of the blank interior line "  " of a loose nested item,
@@ -264,7 +264,7 @@ describe("Quoll's own multi-line insert paths, in a CRLF document", () => {
     expectCleanLineModel(view.state.doc);
   });
 
-  it("imagePaste (resolveImageWrite) keeps a clean line model", async () => {
+  it("image paste via the clipboard coordinator (resolveImageWrite) keeps a clean line model", async () => {
     const { handle, view } = mount();
     handle.applyDocument({
       content: "ab\r\ncd",

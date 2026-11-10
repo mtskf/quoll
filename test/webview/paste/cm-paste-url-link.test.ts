@@ -101,7 +101,7 @@ function firePaste(view: EditorView, text: string): Event {
   return event;
 }
 
-describe("pasteUrlOverSelection — handler", () => {
+describe("clipboard paste — URL over selection", () => {
   it("wraps a single-line selection as a link and consumes the event", () => {
     const view = mount("select me", 0, "select".length); // select "select"
     const event = firePaste(view, "https://example.com");
@@ -185,7 +185,7 @@ describe("pasteUrlOverSelection — handler", () => {
 // Syntax-context guard (ported from the built-in pasteURLAsLink): a URL is NEVER
 // wrapped into a non-plain-text construct. Wrapping `](url)` into inline/fenced
 // code, an existing link, etc. would corrupt it, so the handler defers.
-describe("pasteUrlOverSelection — syntax-context guard", () => {
+describe("clipboard paste — URL syntax-context guard", () => {
   it("defers when the selection is inside an inline code span", () => {
     const view = mount("`code`", 1, 5); // select "code" between the backticks
     firePaste(view, "https://example.com");
