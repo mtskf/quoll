@@ -26,6 +26,7 @@ import { quollMarkdownLanguage } from "../../src/webview/cm/markdown.js";
 import { requiresFullBoundedRebuild } from "../../src/webview/cm/structural-guard.js";
 import { tableBlockField } from "../../src/webview/cm/table/table-field.js";
 import { settledState } from "./helpers/settled-state.js";
+import { recordsOf } from "./helpers/structural-records.js";
 import { SHAPE_CORPUS } from "./helpers/table-shape-corpus.js";
 
 const extensions = (): Extension[] => [
@@ -73,7 +74,7 @@ function serializeImages(set: ReturnType<typeof Decoration.set>) {
 function snapshot(state: EditorState): Record<string, string> {
   const callout = state.field(calloutMarkerConcealField);
   return {
-    table: JSON.stringify(state.field(tableBlockField).records.map((r) => r.block)),
+    table: JSON.stringify(recordsOf(state.field(tableBlockField).records)),
     image: serializeImages(state.field(imageBlockField).decorations),
     // The WHOLE callout value: `records` / `markers` / `zones` are what the selection-only
     // path reuses, so comparing `decorations` alone would miss a stale record.
@@ -158,9 +159,9 @@ describe("structural guard — differential fuzz over the real consumers", () =>
         // pipe in prose or in a code fence satisfies it and would satisfy it under the OLD
         // arm too (Codex rev.2, Confidence 94). Ask the table field itself whether the edit
         // landed inside a real `Table` node.
-        const inTable = state
-          .field(tableBlockField)
-          .records.some(({ block }) => pos >= block.from && pos <= block.to);
+        const inTable = recordsOf(state.field(tableBlockField).records).some(
+          (r) => pos >= r.from && pos <= r.to
+        );
         // ⚠️ "inside a `Table` node" alone is NOT enough either: a table's trailing
         // overshoot line carries no pipe, and such an edit takes the bounded path under the
         // OLD presence arm too (measured: `inCellBounded` reached 23 with the arm reverted

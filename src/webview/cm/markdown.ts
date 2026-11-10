@@ -72,18 +72,18 @@ function firstContentChild(node: SyntaxNode): SyntaxNode | null {
 }
 
 // True when the `Table` node starting at `from` renders as a block widget: the table
-// field's record list (../structural-blocks.ts, sorted by `block.from`) holds a record
-// whose node starts there. Reading the field rather than re-deriving its gates keeps
+// field's record set (../structural-blocks.ts) holds a record at its block start whose
+// node starts there. Reading the field rather than re-deriving its gates keeps
 // fold-suppression and widget emission in lockstep by construction — a table inside
 // leading frontmatter, one `parseTable` rejects, or one whose build threw has no record,
-// so its list fold stays; a state without the field has no widget at all. `recordAt` is
-// a binary search, so a list of N table-bearing items stays O(N log N) per fold query.
+// so its list fold stays; a state without the field has no widget at all. `recordAt` is a
+// chunk scan of the set, O(N/250) per fold query (Contract 2; a linear `.some()` would
+// make a list of N table-bearing items O(N²)); the whole-document cost is accepted by the
+// Performance gate's fold row (.claude/docs/PERF.md), not by this argument.
 function tableEmitsBlockWidget(state: EditorState, from: number): boolean {
-  const r = recordAt(
-    state.field(tableBlockField, false)?.records ?? [],
-    state.doc.lineAt(from).from
-  );
-  return r !== undefined && r.block.from + r.block.nodeOffset === from;
+  const records = state.field(tableBlockField, false)?.records;
+  const r = records && recordAt(records, state.doc.lineAt(from).from);
+  return r !== undefined && r.from + r.block.nodeOffset === from;
 }
 
 // True when `node` sits anywhere inside a Blockquote (a callout is a Blockquote
@@ -110,7 +110,7 @@ function insideBlockquote(node: SyntaxNode): boolean {
 // child is a GFM Table that starts on the marker line AND actually emits a block
 // widget. In that tight shape (`- | a | b |\n  | - | - |\n…`) the table's block
 // widget is line-snapped to the marker-line start (the table spec in
-// table/table-field.ts snaps block.from = lineAt(Table.from).from), so it SWALLOWS the `-`/`1.` marker and the
+// table/table-field.ts snaps the block `from` = lineAt(Table.from).from), so it SWALLOWS the `-`/`1.` marker and the
 // ListItem chevron would visually land on the table — a meaningless affordance.
 // Returning null suppresses that lone chevron. The emit guard is load-bearing: a
 // marker-line table that emits NO widget (inside leading frontmatter, a slice

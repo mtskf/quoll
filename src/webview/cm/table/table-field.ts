@@ -6,8 +6,8 @@
 //
 // A block is the node's whole-line range (`block: true` widgets must cover complete lines;
 // Lezer's Table range usually IS line-aligned, but doc-final-no-newline edges may not be),
-// plus everything the widget needs, stored as offsets from `from` so a reused block rebases
-// by a uniform shift: `nodeOffset` (the Lezer node start, the base for per-cell offsets),
+// plus a POSITION-FREE payload carrying everything the widget needs, stored as offsets from
+// the block start so a shifted block keeps the same payload object: `nodeOffset` (the Lezer node start, the base for per-cell offsets),
 // the per-node LF source slice (the widget's eq() key) and the parse. A `Table` node
 // `parseTable` rejects — a blockquote-nested table whose continuation lines carry `>`
 // markers, or a cell-count mismatch — yields no block and stays raw source.
@@ -20,11 +20,12 @@
 import type { EditorState } from "@codemirror/state";
 import type { SyntaxNodeRef } from "@lezer/common";
 import { parseTable, type Table } from "../../../markdown/table/index.js";
-import { type StructuralBlock, structuralBlockWidgets } from "../structural-blocks.js";
+import { type BuiltBlock, structuralBlockWidgets } from "../structural-blocks.js";
 import { TableBlockWidget } from "./table-widget.js";
 
-export interface TableBlock extends StructuralBlock {
-  /** Lezer `Table` node start minus `from` — the widget's `nodeFrom` is `from + nodeOffset`. */
+export interface TableBlock {
+  /** Lezer `Table` node start minus the block start — the widget's `nodeFrom` is
+   *  `from + nodeOffset`. */
   readonly nodeOffset: number;
   /** Per-node source slice: the widget's eq() key and the input `table` was parsed from.
    *  LF-only, because the CM document itself is: `cm/seed.ts`'s `splitToCmText` owns that
@@ -34,7 +35,7 @@ export interface TableBlock extends StructuralBlock {
   readonly table: Table;
 }
 
-function buildTableBlock(state: EditorState, node: SyntaxNodeRef): TableBlock | null {
+function buildTableBlock(state: EditorState, node: SyntaxNodeRef): BuiltBlock<TableBlock> | null {
   // The `\r\n?` replace matches nothing today (see `slice` above); it is a belt-and-braces
   // normaliser, not a sign that the source doc carries CRLF.
   const slice = state.sliceDoc(node.from, node.to).replace(/\r\n?/g, "\n");
@@ -44,7 +45,7 @@ function buildTableBlock(state: EditorState, node: SyntaxNodeRef): TableBlock | 
   }
   const from = state.doc.lineAt(node.from).from;
   const to = state.doc.lineAt(Math.min(node.to, state.doc.length)).to;
-  return { from, to, nodeOffset: node.from - from, slice, table };
+  return { from, to, block: { nodeOffset: node.from - from, slice, table } };
 }
 
 export const tableBlockField = structuralBlockWidgets<TableBlock>({
@@ -53,5 +54,5 @@ export const tableBlockField = structuralBlockWidgets<TableBlock>({
   build: buildTableBlock,
   // `from` (block line-start) is docFrom; `from + nodeOffset` (Lezer node start) is
   // nodeFrom, the base for per-cell offsets. All LF-internal.
-  widget: (b) => new TableBlockWidget(b.table, b.slice, b.from, b.from + b.nodeOffset),
+  widget: (b, from) => new TableBlockWidget(b.table, b.slice, from, from + b.nodeOffset),
 });

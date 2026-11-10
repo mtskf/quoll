@@ -11,27 +11,31 @@
 // failure is never read as "behaviour absent".
 import { ensureSyntaxTree, foldable, syntaxTree } from "@codemirror/language";
 import { EditorState, type Extension, type StateField } from "@codemirror/state";
-import { EditorView, type WidgetType } from "@codemirror/view";
+import { Decoration, EditorView, type WidgetType } from "@codemirror/view";
 import { type Tree, TreeFragment } from "@lezer/common";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { calloutMarkerConcealField } from "../../src/webview/cm/decorations/callout-marker-conceal.js";
 import { fencedCodeCollapseField } from "../../src/webview/cm/fenced-code/fenced-code-collapse.js";
 import { headingFoldGutterLineClass } from "../../src/webview/cm/fold/index.js";
+import type { imageBlockField } from "../../src/webview/cm/image/image-field.js";
 import { quollMarkdownLanguage } from "../../src/webview/cm/markdown.js";
 import {
+  type BuiltBlock,
   recordAt,
-  type StructuralBlock,
   type StructuralBlockSpec,
   type StructuralBlockState,
+  type StructuralRecordSet,
   structuralBlockWidgets,
 } from "../../src/webview/cm/structural-blocks.js";
 import {
   requiresFullBoundedRebuild,
   touchesStructuralReparse,
 } from "../../src/webview/cm/structural-guard.js";
+import type { TableBlock } from "../../src/webview/cm/table/table-field.js";
 import { QuollWidget } from "../../src/webview/cm/widget-base.js";
 import { settledState } from "./helpers/settled-state.js";
 import { settledMount } from "./helpers/settled-view.js";
+import { recordsOf, recordWidgetsOf } from "./helpers/structural-records.js";
 import { withUnstarvedFrontierState } from "./helpers/unstarved-frontier.js";
 
 // One switch for both throwing seams. A mock only throws while `armed` is true, so the
@@ -379,16 +383,18 @@ describe("structural blocks: frontmatter shift stays bounded (production fields)
   /** The table/image positions the widgets were given, per record. */
   async function positions(state: EditorState) {
     const p = await productionBlocks();
-    const t = state
-      .field(p.tableBlockField)
-      .records.map(({ block }) => [block.from, block.to, block.from + block.nodeOffset]);
-    const i = state
-      .field(p.imageBlockField)
-      .records.map(({ block, deco }) => [
-        block.from,
-        block.to,
-        (deco.spec.widget as InstanceType<typeof p.ImageBlockWidget>).docFrom,
-      ]);
+    const t = recordsOf(state.field(p.tableBlockField).records).map(({ from, to, block }) => [
+      from,
+      to,
+      from + block.nodeOffset,
+    ]);
+    const images = state.field(p.imageBlockField).records;
+    const widgets = recordWidgetsOf(images);
+    const i = recordsOf(images).map(({ from, to }, n) => [
+      from,
+      to,
+      (widgets[n] as InstanceType<typeof p.ImageBlockWidget>).docFrom,
+    ]);
     return { t, i };
   }
 
@@ -437,11 +443,15 @@ describe("structural blocks: an edit outside the viewport (production fields)", 
     const doc = ["Top.", "", ...BLOCKS_TAIL, ...prose, "Last line."].join("\n");
     const view = mountView(EditorState.create({ doc, extensions: p.extensions }));
     try {
-      const blocks = (): readonly StructuralBlock[] =>
+      const records = (): StructuralRecordSet<unknown> =>
         (kind === "table"
           ? view.state.field(p.tableBlockField)
           : view.state.field(p.imageBlockField)
-        ).records.map((r) => r.block);
+        ).records;
+      const blocks = (): unknown[] => recordsOf(records()).map((r) => r.block);
+      const widgets = (): unknown[] => recordWidgetsOf(records());
+      const beforeRecords = records();
+      const beforeWidgets = widgets();
       const before = blocks();
       expect(before).toHaveLength(1); // precondition
       const at = doc.length;
@@ -457,6 +467,9 @@ describe("structural blocks: an edit outside the viewport (production fields)", 
       const after = blocks();
       expect(after).toHaveLength(1);
       expect(after[0]).toBe(before[0]);
+      expect(widgets()[0]).toBe(beforeWidgets[0]);
+      // A bounded update that reuses every record unchanged returns the previous set.
+      expect(records()).toBe(beforeRecords);
       expect(p.shape(view.state)).toEqual(p.shape(p.create(view.state.doc.toString())));
     } finally {
       view.destroy();
@@ -647,7 +660,7 @@ describe("bounded consumers beyond the initial parse frontier", () => {
 // Toy spec: the contract arms exercised directly through `structuralBlockWidgets`.
 // A toy block is a fenced code block snapped to whole lines.
 
-interface ToyBlock extends StructuralBlock {
+interface ToyBlock {
   readonly text: string;
 }
 
@@ -671,14 +684,14 @@ class ToyWidget extends QuollWidget {
 
 interface ToyOptions {
   /** Runs after the default block is computed; may throw, transform or veto it. */
-  build?: (block: ToyBlock) => ToyBlock | null;
+  build?: (built: BuiltBlock<ToyBlock>) => BuiltBlock<ToyBlock> | null;
   /** Runs before the widget is made; may throw. */
-  widget?: (block: ToyBlock) => void;
+  widget?: (block: ToyBlock, from: number) => void;
 }
 
 interface Toy {
   field: StateField<StructuralBlockState<ToyBlock>>;
-  /** `block.from` of every hook call, in call order. */
+  /** The block start of every hook call, in call order. */
   calls: { build: number[]; widget: number[] };
 }
 
@@ -691,13 +704,13 @@ function toy(opts: ToyOptions = {}): Toy {
       const from = state.doc.lineAt(node.from).from;
       const to = state.doc.lineAt(node.to).to;
       calls.build.push(from);
-      const block: ToyBlock = { from, to, text: state.sliceDoc(from, to) };
-      return opts.build ? opts.build(block) : block;
+      const built: BuiltBlock<ToyBlock> = { from, to, block: { text: state.sliceDoc(from, to) } };
+      return opts.build ? opts.build(built) : built;
     },
-    widget(block) {
-      calls.widget.push(block.from);
-      opts.widget?.(block);
-      return new ToyWidget(block.from, block.text);
+    widget(block, from) {
+      calls.widget.push(from);
+      opts.widget?.(block, from);
+      return new ToyWidget(from, block.text);
     },
   };
   return { field: structuralBlockWidgets(spec), calls };
@@ -713,7 +726,7 @@ function toyState(doc: string, t: Toy, extra: Extension[] = []): EditorState {
 }
 
 function ranges(state: EditorState, t: Toy): Array<[number, number]> {
-  return state.field(t.field).records.map((r) => [r.block.from, r.block.to]);
+  return recordsOf(state.field(t.field).records).map((r) => [r.from, r.to]);
 }
 
 /** The FencedCode node set of a fully-parsed state, line-snapped, in order. */
@@ -760,13 +773,16 @@ describe("structural block contract (toy spec)", () => {
     expect(expected).toHaveLength(3); // precondition
     expect(ranges(state, t)).toEqual(expected);
     const records = state.field(t.field).records;
-    for (const r of records) {
-      expect(recordAt(records, r.block.from)).toBe(r);
+    const list = recordsOf(records);
+    for (const r of list) {
+      const hit = recordAt(records, r.from);
+      expect(hit).toEqual(r);
+      expect(hit?.block).toBe(r.block);
     }
     expect(recordAt(records, 0)).toBeUndefined();
-    expect(recordAt(records, records[0].block.from + 1)).toBeUndefined();
-    expect(recordAt(records, records[2].block.to + 1)).toBeUndefined();
-    expect(recordAt([], 0)).toBeUndefined();
+    expect(recordAt(records, list[0].from + 1)).toBeUndefined();
+    expect(recordAt(records, list[2].to + 1)).toBeUndefined();
+    expect(recordAt(Decoration.none, 0)).toBeUndefined();
     expect(widgetSlots(state, ToyWidget).map((s) => s.from)).toEqual(expected.map((e) => e[0]));
   });
 
@@ -774,7 +790,7 @@ describe("structural block contract (toy spec)", () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const t = toy({
       build: (b) => {
-        if (b.text.includes("BOOM")) {
+        if (b.block.text.includes("BOOM")) {
           throw new Error("toy build");
         }
         return b;
@@ -822,10 +838,10 @@ describe("structural block contract (toy spec)", () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const t = toy({
       build: (b) => {
-        if (b.text.includes("NARROW")) {
+        if (b.block.text.includes("NARROW")) {
           return { ...b, from: b.from + 4 }; // does not contain its node
         }
-        if (b.text.includes("EMPTY")) {
+        if (b.block.text.includes("EMPTY")) {
           return { ...b, to: b.from }; // from >= to
         }
         return b;
@@ -872,6 +888,57 @@ describe("structural block contract (toy spec)", () => {
   });
 });
 
+describe("structural block contract preconditions (toy spec)", () => {
+  it("toy overlap dropped: of two overlapping blocks the later one goes, its sibling survives", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const betaEnd = TOY_DOC.indexOf("```\n\n```\ngamma") + 3;
+    const t = toy({
+      // alpha's block reaches over beta: whole lines, contains its node, overlaps beta.
+      build: (b) => (b.block.text.includes("alpha") ? { ...b, to: betaEnd } : b),
+    });
+    const state = toyState(TOY_DOC, t);
+    const all = fencedRanges(state);
+    expect(all).toHaveLength(3); // precondition
+    expect(state.doc.lineAt(betaEnd).to).toBe(betaEnd); // precondition: whole lines
+    expect(ranges(state, t)).toEqual([[all[0][0], betaEnd], all[2]]);
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0]).toEqual([
+      "[quoll] structural blocks overlap; dropping the later one",
+      { name: "toy", arm: "overlap" },
+    ]);
+  });
+
+  it("toy non-aligned dropped: a block that does not end at a line end gets no record", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const t = toy({
+      // alpha's block ends 3 characters into "Middle paragraph.": contains its node, in
+      // bounds, from < to — only the whole-lines precondition rejects it.
+      build: (b) => (b.block.text.includes("alpha") ? { ...b, to: b.to + 3 } : b),
+    });
+    const state = toyState(TOY_DOC, t);
+    const all = fencedRanges(state);
+    expect(all).toHaveLength(3); // precondition
+    expect(ranges(state, t)).toEqual([all[1], all[2]]);
+    expect(hookLogCount(spy)).toBe(1);
+    expect(spy.mock.calls.find((c) => String(c[0]).startsWith(HOOK_LOG))?.[1]).toEqual({
+      name: "toy",
+      arm: "build",
+      errKind: "invalid-range",
+    });
+  });
+
+  it("brand pin: one field's records are not another field's record set", () => {
+    // Type-level only (a tsc program covers this file): the brand on StructuralRecordSet
+    // makes the assignment below a compile error, so recordAt infers the right payload.
+    const assign = (state: EditorState, field: typeof imageBlockField) => {
+      // @ts-expect-error — image records are not a StructuralRecordSet<TableBlock>
+      const tables: StructuralRecordSet<TableBlock> = state.field(field).records;
+      return tables;
+    };
+    expect(typeof assign).toBe("function");
+  });
+});
+
 describe("structural block contract updates (toy spec)", () => {
   function fromOf(state: EditorState, needle: string): number {
     const i = state.doc.toString().indexOf(needle);
@@ -882,50 +949,59 @@ describe("structural block contract updates (toy spec)", () => {
   it("toy bounded update: an edit clear of a block reuses its record; an edit inside rebuilds only it", () => {
     const t = toy();
     const state = toyState(TOY_DOC, t);
-    const before = state.field(t.field).records;
+    const beforeSet = state.field(t.field).records;
+    const before = recordsOf(beforeSet);
     expect(before).toHaveLength(3); // precondition
 
     const clearTr = state.update({
       changes: { from: state.doc.toString().indexOf("Tail paragraph.") + 4, insert: "x" },
     });
     expect(requiresFullBoundedRebuild(clearTr)).toBe(false); // precondition: bounded path
-    const clear = clearTr.state.field(t.field).records;
-    clear.forEach((r, i) => {
-      expect(r).toBe(before[i]);
-    });
+    // Every record reused unchanged and none added: the previous set itself.
+    expect(clearTr.state.field(t.field).records).toBe(beforeSet);
     expect(t.calls.build).toEqual([]);
 
     // Inside the LAST block, so no other block moves (a moved block is rebased: "toy rebase").
-    const gamma = before[2].block.from;
+    const gamma = before[2].from;
     const insideTr = state.update({
       changes: { from: state.doc.toString().indexOf("gamma") + 2, insert: "x" },
     });
     expect(requiresFullBoundedRebuild(insideTr)).toBe(false); // precondition: bounded path
-    const inside = insideTr.state.field(t.field).records;
+    const insideSet = insideTr.state.field(t.field).records;
+    const inside = recordsOf(insideSet);
     expect(t.calls.build).toEqual([gamma]);
-    expect(inside[2]).not.toBe(before[2]);
+    expect(inside[2].block).not.toBe(before[2].block);
     expect(inside[2].block.text).toContain("gaxmma");
-    expect(inside[0]).toBe(before[0]);
-    expect(inside[1]).toBe(before[1]);
+    expect(inside[0].block).toBe(before[0].block);
+    expect(inside[1].block).toBe(before[1].block);
+    const beforeWidgets = recordWidgetsOf(beforeSet);
+    const insideWidgets = recordWidgetsOf(insideSet);
+    expect(insideWidgets[0]).toBe(beforeWidgets[0]);
+    expect(insideWidgets[1]).toBe(beforeWidgets[1]);
   });
 
   it("toy rebase: an insertion before a block mints a shifted record without rebuilding it", () => {
     const t = toy();
     const state = toyState(TOY_DOC, t);
-    const before = state.field(t.field).records;
+    const beforeSet = state.field(t.field).records;
+    const before = recordsOf(beforeSet);
     const tr = state.update({ changes: { from: 4, insert: "x" } });
     expect(requiresFullBoundedRebuild(tr)).toBe(false); // precondition: bounded path
-    const after = tr.state.field(t.field).records;
-    expect(after.map((r) => [r.block.from, r.block.to])).toEqual(
-      before.map((r) => [r.block.from + 1, r.block.to + 1])
-    );
+    const afterSet = tr.state.field(t.field).records;
+    const after = recordsOf(afterSet);
+    expect(after.map((r) => [r.from, r.to])).toEqual(before.map((r) => [r.from + 1, r.to + 1]));
+    // The shifted record keeps the SAME payload object; only its widget is re-minted.
     after.forEach((r, i) => {
-      expect(r).not.toBe(before[i]);
+      expect(r.block).toBe(before[i].block);
+    });
+    const beforeWidgets = recordWidgetsOf(beforeSet);
+    recordWidgetsOf(afterSet).forEach((w, i) => {
+      expect(w).not.toBe(beforeWidgets[i]);
     });
     expect(t.calls.build).toEqual([]);
-    expect(t.calls.widget).toEqual(before.map((r) => r.block.from + 1));
+    expect(t.calls.widget).toEqual(before.map((r) => r.from + 1));
     expect(widgetSlots(tr.state, ToyWidget).map((s) => (s.widget as ToyWidget).at)).toEqual(
-      before.map((r) => r.block.from + 1)
+      before.map((r) => r.from + 1)
     );
   });
 
@@ -933,8 +1009,8 @@ describe("structural block contract updates (toy spec)", () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const gamma = TOY_DOC.indexOf("```\ngamma");
     const t = toy({
-      widget: (b) => {
-        if (b.from === gamma + 1) {
+      widget: (_b, from) => {
+        if (from === gamma + 1) {
           throw new Error("toy widget on rebase");
         }
       },
@@ -992,23 +1068,25 @@ describe("structural block contract updates (toy spec)", () => {
     const a = state.update({ changes: { from: text.indexOf("gamma") + 1, insert: "x" } }).state;
     const b = state.update({ changes: { from: text.indexOf("Tail") + 1, insert: "y" } }).state;
     expect(state.field(t.field).records).toBe(base);
-    const ra = a.field(t.field).records;
-    const rb = b.field(t.field).records;
-    expect(ra[2]).not.toBe(base[2]);
-    expect(ra[0]).toBe(base[0]);
+    const baseList = recordsOf(base);
+    const ra = recordsOf(a.field(t.field).records);
+    const rb = recordsOf(b.field(t.field).records);
+    expect(ra[2].block).not.toBe(baseList[2].block);
+    expect(ra[0].block).toBe(baseList[0].block);
     rb.forEach((r, i) => {
-      expect(r).toBe(base[i]);
+      expect(r.block).toBe(baseList[i].block);
     });
+    expect(b.field(t.field).records).toBe(base);
     expect(ra[2].block.text).toContain("gxamma");
     expect(rb[2].block.text).not.toContain("gxamma");
-    expect(base[2].block.text).not.toContain("gxamma");
+    expect(recordsOf(state.field(t.field).records)[2].block.text).not.toContain("gxamma");
 
     // A second state built with the same field instance is untouched by updates to the first.
     const other = toyState(["Other.", "", ...fence(["delta"]), ""].join("\n"), t);
     const otherRecords = other.field(t.field).records;
     state.update({ changes: { from: 0, insert: "\n\n" } });
     expect(other.field(t.field).records).toBe(otherRecords);
-    expect(otherRecords.map((r) => r.block.text)).toEqual(["```\ndelta\n```"]);
+    expect(recordsOf(otherRecords).map((r) => r.block.text)).toEqual(["```\ndelta\n```"]);
   });
 
   it("toy seeded oracle: after each of 20 seeded edits the records equal a fresh full build", () => {
@@ -1044,6 +1122,13 @@ describe("structural block reveal (toy spec)", () => {
     const before = widgetSlots(state, ToyWidget);
     expect(before).toHaveLength(3); // precondition: caret at 0 reveals nothing
     const alpha = before[0];
+    // No record meets the selection: the selection-filtered view IS the record set.
+    expect(state.field(t.field).decorations).toBe(state.field(t.field).records);
+    // A caret move between two prose lines changes no verdict: the field value itself.
+    const prose = state.update({
+      selection: { anchor: TOY_DOC.indexOf("Middle paragraph.") },
+    }).state;
+    expect(prose.field(t.field)).toBe(state.field(t.field));
 
     const entered = state.update({ selection: { anchor: alpha.from + 1 } }).state;
     expect(widgetSlots(entered, ToyWidget).map((s) => s.from)).toEqual([

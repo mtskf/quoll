@@ -29,19 +29,19 @@
 // flatten) so `<img alt>` and the blocked placeholder's `aria-label` carry the rendered
 // text, not the raw markup.
 //
-// The block stores no absolute position besides `from`/`to`, so a reused block rebases by a
-// uniform shift with no re-parse. Performance numbers: .claude/docs/PERF.md.
+// The payload stores no document position (the block range lives in the record set), so a
+// shifted block keeps the same payload object with no re-parse. Performance numbers: .claude/docs/PERF.md.
 
 import type { EditorState } from "@codemirror/state";
 import type { SyntaxNodeRef } from "@lezer/common";
 import { renderSafeMarkdownDestination } from "../../../markdown/render-safe-markdown-destination.js";
 import type { AllowlistedUrl } from "../../../markdown/url-allowlist.js";
 import { commonMarkAltText } from "../inline/inline-ir.js";
-import { type StructuralBlock, structuralBlockWidgets } from "../structural-blocks.js";
+import { type BuiltBlock, structuralBlockWidgets } from "../structural-blocks.js";
 import { ImageBlockWidget } from "./image-widget.js";
 import { quollResourceBaseUri, resolveAgainstBase } from "./resource-base.js";
 
-export interface ImageBlock extends StructuralBlock {
+export interface ImageBlock {
   readonly alt: string;
   readonly safeUrl: AllowlistedUrl | null;
   /** Trimmed image source: the widget's eq() key. */
@@ -60,7 +60,7 @@ function trimAsciiWs(s: string): string {
   return s.replace(/^[ \t\n\r]+/, "").replace(/[ \t\n\r]+$/, "");
 }
 
-function buildImageBlock(state: EditorState, node: SyntaxNodeRef): ImageBlock | null {
+function buildImageBlock(state: EditorState, node: SyntaxNodeRef): BuiltBlock<ImageBlock> | null {
   // (1) inline form only.
   const urlNode = node.node.getChild("URL");
   if (!urlNode) {
@@ -100,12 +100,12 @@ function buildImageBlock(state: EditorState, node: SyntaxNodeRef): ImageBlock | 
   const bracketIdx = parenIdx >= 0 ? gap.lastIndexOf("]", parenIdx) : gap.lastIndexOf("]");
   const altRaw = bracketIdx >= 0 ? gap.slice(0, bracketIdx) : "";
   const alt = commonMarkAltText(altRaw);
-  return { from: startLine.from, to: endLine.to, alt, safeUrl, imgText };
+  return { from: startLine.from, to: endLine.to, block: { alt, safeUrl, imgText } };
 }
 
 export const imageBlockField = structuralBlockWidgets<ImageBlock>({
   name: "image",
   node: "Image",
   build: buildImageBlock,
-  widget: (b) => new ImageBlockWidget(b.alt, b.safeUrl, b.imgText, b.from),
+  widget: (b, from) => new ImageBlockWidget(b.alt, b.safeUrl, b.imgText, from),
 });

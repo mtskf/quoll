@@ -4,22 +4,24 @@ import { syntaxTreeAvailable } from "@codemirror/language";
 import { EditorState, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
+import type { BuiltBlock } from "../../../src/webview/cm/structural-blocks.js";
 import { touchesStructuralReparse } from "../../../src/webview/cm/structural-guard.js";
 import { type TableBlock, tableBlockField } from "../../../src/webview/cm/table/table-field.js";
 import { settledMount, settledView } from "../helpers/settled-view.js";
+import { recordsOf } from "../helpers/structural-records.js";
 import { withUnstarvedFrontier } from "../helpers/unstarved-frontier.js";
 
 const exts = (): Extension[] => [markdown({ base: markdownLanguage }), tableBlockField];
 
-/** The field's canonical records, as blocks. */
-const blocks = (state: EditorState): TableBlock[] =>
-  state.field(tableBlockField).records.map((r) => r.block);
+/** The field's canonical records: block range + payload. */
+const blocks = (state: EditorState): BuiltBlock<TableBlock>[] =>
+  recordsOf(state.field(tableBlockField).records);
 
 /** Oracle: a fresh, fully-parsed view's full walk → blocks (block range + node offset +
  *  slice + parse). Comparing the WHOLE block (incl. `table`) makes the `bounded ≡ fullWalk`
  *  battery pin parse-reuse soundness: a bounded update that reused a stale parse for a
  *  table whose bytes changed would deep-differ here. */
-function freshOracle(doc: string): TableBlock[] {
+function freshOracle(doc: string): BuiltBlock<TableBlock>[] {
   const p = document.createElement("div");
   document.body.appendChild(p);
   const v = new EditorView({ state: EditorState.create({ doc, extensions: exts() }), parent: p });
@@ -267,22 +269,22 @@ describe("list-nested table detection (real Lezer language)", () => {
     const found = freshOracle(doc);
     expect(found).toHaveLength(1);
     const b = found[0];
-    expect(b.table.header.cells).toHaveLength(2);
+    expect(b.block.table.header.cells).toHaveLength(2);
     // The block range covers whole lines including the header line's own indent.
     expect(doc.slice(b.from, b.to)).toBe("  | A | B |\n  |---|---|\n  | 1 | 2 |");
     // Full-doc caret offset (what table-widget uses: nodeFrom + cell.from, with nodeFrom =
     // from + nodeOffset). Pins the header-indent-outside-node / body-indent-inside-node
     // asymmetry end-to-end, so click-to-reveal lands the caret on the right byte.
-    const nodeFrom = b.from + b.nodeOffset;
-    expect(nodeFrom + b.table.header.cells[0].from).toBe(doc.indexOf("A"));
-    expect(nodeFrom + b.table.rows[0].cells[0].from).toBe(doc.indexOf("1"));
+    const nodeFrom = b.from + b.block.nodeOffset;
+    expect(nodeFrom + b.block.table.header.cells[0].from).toBe(doc.indexOf("A"));
+    expect(nodeFrom + b.block.table.rows[0].cells[0].from).toBe(doc.indexOf("1"));
   });
 
   it("emits for a top-level 1-3-space-indented table too (same shape)", () => {
     const doc = "   | A | B |\n   |---|---|\n   | 1 | 2 |\n";
     const found = freshOracle(doc);
     expect(found).toHaveLength(1);
-    expect(found[0].table.header.cells).toHaveLength(2);
+    expect(found[0].block.table.header.cells).toHaveLength(2);
   });
 
   it("yields no block for a blockquote-nested table (out of scope)", () => {
