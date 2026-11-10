@@ -19,7 +19,7 @@ import { expect } from "vitest";
 import { userEvent } from "vitest/browser";
 import "../../../src/webview/styles.css";
 import type { CaretResolver } from "../../../src/webview/cm/table/cell-point.js";
-import { tableBlockField, tableSkeletonField } from "../../../src/webview/cm/table/index.js";
+import { tableBlockField } from "../../../src/webview/cm/table/index.js";
 import { quollTheme } from "../../../src/webview/cm/theme.js";
 
 // Row 1's cells are plain text, so their source map is one identity run and a
@@ -42,8 +42,7 @@ export const TABLE_BLOCK_START = DOC.indexOf("| Alpha");
  *  gesture "select the table plus the paragraph below". */
 export const TAIL = DOC.indexOf("tail");
 
-/** Production extension order for the table island (editor.ts: skeleton field
- *  BEFORE the block field). Caret parked at doc end so the line-level reveal is
+/** Production extension set for the table island (editor.ts). Caret parked at doc end so the line-level reveal is
  *  not already firing when a gesture starts. `extra` exists only so a suite can
  *  pin the OTHER caret-from-point arm through `quollTableCaretResolver.of(...)`
  *  — pass nothing and the widget runs on `defaultCaretResolver`, which is what
@@ -58,13 +57,7 @@ export function mount(extra: Extension = []): EditorView {
       doc: DOC,
       // DOC has no CRLF, so string length IS Text length.
       selection: EditorSelection.cursor(DOC.length),
-      extensions: [
-        quollTheme,
-        markdown({ base: markdownLanguage }),
-        tableSkeletonField,
-        tableBlockField,
-        extra,
-      ],
+      extensions: [quollTheme, markdown({ base: markdownLanguage }), tableBlockField, extra],
     }),
     parent,
   });

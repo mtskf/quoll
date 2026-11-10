@@ -53,11 +53,7 @@ import {
 } from "../../src/webview/cm/frontmatter/index.js";
 import { hostDocumentReseed } from "../../src/webview/cm/host-reseed.js";
 import { quollDocumentEol, serializeDocument, splitToCmText } from "../../src/webview/cm/seed.js";
-import {
-  TableBlockWidget,
-  tableBlockField,
-  tableSkeletonField,
-} from "../../src/webview/cm/table/index.js";
+import { TableBlockWidget, tableBlockField } from "../../src/webview/cm/table/index.js";
 import { settledMount, settledView } from "./helpers/settled-view.js";
 import { withUnstarvedFrontier } from "./helpers/unstarved-frontier.js";
 
@@ -107,7 +103,7 @@ function assertEquivalent(actual: Slot[], oracle: Slot[]): void {
  *  fixtures are LF-only + non-indented, so the node range equals the block
  *  range and the CRLF→LF normalisation is a no-op → an exact byte comparison. */
 function assertTableByteAnchored(state: EditorState): void {
-  for (const s of slots(state.field(tableBlockField))) {
+  for (const s of slots(state.field(tableBlockField).decorations)) {
     const w = s.widget as TableBlockWidget;
     expect(w.slice).toBe(state.sliceDoc(s.from, s.to));
   }
@@ -139,18 +135,14 @@ interface Edit {
 
 // ── TABLE oracle ──────────────────────────────────────────────────────────────
 //
-// tableBlockField reads its widget slices from the bounded-maintained
-// tableSkeletonField, so BOTH must be registered for the bounded path to run
-// (absent, buildAll falls back to a full walk and the oracle would be vacuous).
 // A live view settled through `settledView` is required: settling advances the
 // parse to the doc end AND republishes the tree snapshot, and the field then
 // converges to the fully-parsed result via the tree-identity self-heal branch,
-// exactly as cm-table-skeleton.test.ts drives it.
+// exactly as cm-table-blocks.test.ts drives it.
 
 const tableExts = (): Extension[] => [
   EditorState.allowMultipleSelections.of(true),
   markdown({ base: markdownLanguage }),
-  tableSkeletonField,
   tableBlockField,
 ];
 
@@ -166,7 +158,7 @@ function tableFullSlots(doc: string, selection: EditorSelection): Slot[] {
   });
   try {
     settledView(view, 10_000);
-    return slots(view.state.field(tableBlockField));
+    return slots(view.state.field(tableBlockField).decorations);
   } finally {
     view.destroy();
   }
@@ -183,7 +175,7 @@ function checkTableEquivalence(initial: string, edits: Edit[]): void {
     settledView(view, 10_000);
     // create() correctness on the fully-parsed initial doc.
     assertEquivalent(
-      slots(view.state.field(tableBlockField)),
+      slots(view.state.field(tableBlockField).decorations),
       tableFullSlots(view.state.doc.toString(), view.state.selection)
     );
     assertTableByteAnchored(view.state);
@@ -194,21 +186,21 @@ function checkTableEquivalence(initial: string, edits: Edit[]): void {
       }
       const len = view.state.doc.length;
       // Pre-self-heal bounded assertion: when the post-edit tree is already
-      // complete, boundedUpdate ran during dispatch — check its output BEFORE
+      // complete, the bounded update ran during dispatch — check its output BEFORE
       // settling so a self-heal can't mask a bounded byte bug (Codex R2-2,
-      // cm-table-skeleton.test.ts). Whether or not the tree is synchronously
+      // cm-table-blocks.test.ts). Whether or not the tree is synchronously
       // available here is harness-dependent, so this stays conditional and the
       // guaranteed bounded-path pin lives in its own test below.
       if (syntaxTreeAvailable(view.state, len)) {
         assertEquivalent(
-          slots(view.state.field(tableBlockField)),
+          slots(view.state.field(tableBlockField).decorations),
           tableFullSlots(view.state.doc.toString(), view.state.selection)
         );
         assertTableByteAnchored(view.state);
       }
       settledView(view, 10_000); // publish → converge (also covers the G2 path)
       assertEquivalent(
-        slots(view.state.field(tableBlockField)),
+        slots(view.state.field(tableBlockField).decorations),
         tableFullSlots(view.state.doc.toString(), view.state.selection)
       );
       assertTableByteAnchored(view.state);
@@ -296,16 +288,16 @@ describe("tableBlockField byte-identity: bounded ≡ full", () => {
     it(c.name, () => checkTableEquivalence(c.initial, c.edits));
   }
 
-  // Guaranteed bounded-path pin (mirrors cm-table-skeleton.test.ts's no-self-heal
+  // Guaranteed bounded-path pin (mirrors cm-table-blocks.test.ts's no-self-heal
   // anchor): a small in-place edit on a complete tree keeps the frontier at doc end,
-  // so boundedUpdate ran during dispatch. REQUIRE the frontier to be unstarved — rather
+  // so the bounded update ran during dispatch. REQUIRE the frontier to be unstarved — rather
   // than tolerate a starved one as the matrix's conditional guard does — and check the
   // field's output plus its byte-anchor BEFORE any settling, so a broken bounded reuse
   // can't be masked by a self-heal. This is the case the matrix cannot guarantee runs.
   it("exercises the bounded path without self-heal masking (revert-check anchor)", () => {
     const doc = `${T}\n\nprose\n\n${T}`;
     withUnstarvedFrontier({
-      what: "boundedUpdate's pre-self-heal output and byte anchor",
+      what: "the bounded update's pre-self-heal output and byte anchor",
       mount: (parent) =>
         settledMount(
           { state: EditorState.create({ doc, extensions: tableExts() }), parent },
@@ -320,10 +312,10 @@ describe("tableBlockField byte-identity: bounded ≡ full", () => {
         // dispatch, so the bounded output this test exists to check never existed. Abandon
         // the attempt; an all-starved run throws rather than passing having measured nothing.
         requireUnstarvedFrontier();
-        // boundedUpdate's output, pre-self-heal, must equal the full walk AND stay
+        // The bounded update's output, pre-self-heal, must equal the full walk AND stay
         // anchored to the document bytes.
         assertEquivalent(
-          slots(view.state.field(tableBlockField)),
+          slots(view.state.field(tableBlockField).decorations),
           tableFullSlots(view.state.doc.toString(), view.state.selection)
         );
         assertTableByteAnchored(view.state);
@@ -471,7 +463,7 @@ describe("frontmatterBlockField byte-identity: bounded ≡ full", () => {
 //
 //   • TABLE — EOL-SENSITIVE, and this is the case that earns the CRLF fixture.
 //     The widget slice is DELIBERATELY LF-normalised at capture
-//     (table-skeleton.ts: `sliceDoc(...).replace(/\r\n?/g, "\n")`, so a cell's
+//     (table-field.ts: `sliceDoc(...).replace(/\r\n?/g, "\n")`, so a cell's
 //     `raw` never carries an embedded `\r` the DOM would render as stray
 //     whitespace), so CR is not expected to survive into `w.slice`. The
 //     load-bearing read is the OUTBOUND one: `serializeDocument(doc, eol)` over
@@ -521,7 +513,7 @@ describe("CRLF-seeded byte-identity: line-ending-aware widget anchors", () => {
     try {
       settledView(view, 10_000);
       const st = view.state;
-      const emitted = slots(st.field(tableBlockField));
+      const emitted = slots(st.field(tableBlockField).decorations);
       expect(emitted.length).toBe(1); // the table renders (guards against vacuity)
       const s = emitted[0];
       const w = s.widget as TableBlockWidget;

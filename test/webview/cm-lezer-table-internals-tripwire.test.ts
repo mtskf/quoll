@@ -85,14 +85,22 @@ describe("the fenced-code field keeps its own narrower guard", () => {
     "utf8"
   );
 
-  it("does not import the shared guard", () => {
-    // ⚠️ Assert the IMPORT FORM, not the bare path. `fenced-code-collapse.ts:434` already
-    // contains the literal `../structural-guard.js` inside a COMMENT ("the fields that
-    // import ../structural-guard.js"), so `not.toContain("structural-guard.js")` reds on a
-    // correct file. That is the mirror image of the vacuous-grep trap in docs/LEARNING.md
-    // (a comment literal satisfying a source contract) — here a comment literal VIOLATES
-    // one. Verified against the shipped file, 2026-09-05.
-    expect(fencedSrc).not.toMatch(/from "\.\.\/structural-guard\.js"/);
+  it("imports only the shared frontier term, never the shared structural guard", () => {
+    // The fenced field composes the shared frontier predicate (`frontierIncomplete`) with
+    // its OWN structural predicate (`fencedCollapseSpec.docChangePlan`), so its one import
+    // from the shared guard must name `frontierIncomplete` alone: importing
+    // `touchesStructuralReparse` or `requiresFullBoundedRebuild` would put its in-fence hot
+    // path behind the wider shared STRUCTURAL.
+    // ⚠️ Assert the IMPORT FORM, not the bare path: the file also carries the literal
+    // `../structural-guard.js` inside a COMMENT, so a bare-path match reads a comment. That
+    // is the mirror image of the vacuous-grep trap in docs/LEARNING.md (a comment literal
+    // satisfying a source contract).
+    const imports = [
+      ...fencedSrc.matchAll(
+        /import\s*(?:type\s*)?\{([^}]*)\}\s*from "\.\.\/structural-guard\.js"/g
+      ),
+    ].map((m) => m[1].trim());
+    expect(imports).toEqual(["frontierIncomplete"]);
   });
 
   it("keeps an ATX / Setext / underscore-free regex, unlike the shared one", () => {

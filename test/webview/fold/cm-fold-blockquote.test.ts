@@ -5,23 +5,28 @@
 // mounts — so this pins the delivered contract, and also DETECTS a lang-markdown
 // upgrade that re-enables a subtracted chevron (see plan Constraints).
 import { codeFolding, foldable, syntaxTree } from "@codemirror/language";
-import { EditorState } from "@codemirror/state";
+import { EditorState, type Extension } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
 import { quollMarkdownLanguage } from "../../../src/webview/cm/markdown.js";
+import { tableBlockField } from "../../../src/webview/cm/table/table-field.js";
 import { settledState } from "../helpers/settled-state.js";
 
 const lang = quollMarkdownLanguage();
 
-function stateFor(doc: string): EditorState {
-  return EditorState.create({ doc, extensions: [lang, codeFolding()] });
+function stateFor(doc: string, extra: readonly Extension[] = []): EditorState {
+  return EditorState.create({ doc, extensions: [lang, codeFolding(), ...extra] });
 }
 
 // Query the fold over a SETTLED parse: `foldable()` resolves in the language field's
 // tree snapshot, which a bare `ensureSyntaxTree` leaves truncated — see
 // ../helpers/settled-state.ts. The truncation this closes is pinned deterministically
 // by the "reads a settled parse" describe at the bottom of this file.
-function foldableAt(doc: string, at: number): { from: number; to: number } | null {
-  const state = settledState(stateFor(doc));
+function foldableAt(
+  doc: string,
+  at: number,
+  extra: readonly Extension[] = []
+): { from: number; to: number } | null {
+  const state = settledState(stateFor(doc, extra));
   const line = state.doc.lineAt(at);
   return foldable(state, line.from, line.to);
 }
@@ -81,24 +86,34 @@ describe("fold ranges subtract Blockquote, Paragraph, code blocks, and tables", 
 // (the marker line start), so the widget SWALLOWS the `-` marker and the ListItem
 // chevron visually lands on the table. The ListItem foldNodeProp override in
 // cm/markdown.ts suppresses the fold ONLY for this shape — the item's first content
-// child is a Table starting on the marker line — while every genuine list fold
-// (table on continuation lines, plain multi-line body) is preserved.
+// child is a Table starting on the marker line AND tableBlockField holds a widget record
+// there — while every genuine list fold (table on continuation lines, plain multi-line
+// body, a table with no widget) is preserved. The suppression reads the field, so the
+// widget-backed fixtures register it (`withTable`); a state without the field has no
+// widget and keeps the fold.
 describe("a list item with a table on its marker line is NOT foldable", () => {
   const tight = "- | a | b |\n  | - | - |\n  | 1 | 2 |\n\nafter\n";
+  const withTable = [tableBlockField];
 
   it("the marker line yields NO foldable range (widget swallows the marker)", () => {
-    expect(foldableAt(tight, 0)).toBeNull();
+    expect(foldableAt(tight, 0, withTable)).toBeNull();
+  });
+
+  it("without tableBlockField registered the marker line STILL folds (no widget)", () => {
+    expect(foldableAt(tight, 0)).not.toBeNull();
   });
 
   it("an ordered-list variant is suppressed the same way", () => {
-    expect(foldableAt("1. | a | b |\n   | - | - |\n   | 1 | 2 |\n\nafter\n", 0)).toBeNull();
+    expect(
+      foldableAt("1. | a | b |\n   | - | - |\n   | 1 | 2 |\n\nafter\n", 0, withTable)
+    ).toBeNull();
   });
 
   it("a table on a CONTINUATION line still folds (marker line carries text)", () => {
     // Regression guard: the suppression is scoped to the marker line. A table
     // that starts below the marker keeps the genuine list fold on `- intro:`.
     const doc = "- intro:\n\n  | a | b |\n  | - | - |\n  | 1 | 2 |\n";
-    expect(foldableAt(doc, 0)).not.toBeNull();
+    expect(foldableAt(doc, 0, withTable)).not.toBeNull();
   });
 
   it("a plain multi-line list item still folds", () => {
@@ -114,22 +129,22 @@ describe("a list item with a table on its marker line is NOT foldable", () => {
     // keep the list fold (the emit guard in listItemFold); the blockquote-ancestor
     // rule now wins first, so the visible `> - | a | b |` line shows no chevron.
     const doc = "> - | a | b |\n>   | - | - |\n>   | 1 | 2 |\n\nafter\n";
-    expect(foldableAt(doc, doc.indexOf("- | a | b |"))).toBeNull();
+    expect(foldableAt(doc, doc.indexOf("- | a | b |"), withTable)).toBeNull();
   });
 
   it("an ordinary (indented) tight table still suppresses the fold (widget emitted)", () => {
     // Companion to the guard above: a 2-space-indented list-continuation table
     // DOES parse + emit a widget, so the marker-line suppression still fires.
-    expect(foldableAt("- | a | b |\n  | - | - |\n  | 1 | 2 |\n\nafter\n", 0)).toBeNull();
+    expect(foldableAt("- | a | b |\n  | - | - |\n  | 1 | 2 |\n\nafter\n", 0, withTable)).toBeNull();
   });
 
   it("a marker-line table inside leading frontmatter STILL folds (widget suppressed by fmEnd)", () => {
     // Codex Conf-74: Lezer parses the fence body as a ListItem with a marker-line
     // Table whose slice parses, but tableBlockField skips the widget because the
-    // table sits inside leading frontmatter (m.from < fmEnd) — so the list fold on
+    // table sits inside leading frontmatter (node.from < fmEnd) — so the list fold on
     // the revealed raw source must be KEPT, the same lockstep the emit guard owns.
     const doc = "---\n- | a | b |\n  | - | - |\n  | 1 | 2 |\n---\n\nafter\n";
-    expect(foldableAt(doc, doc.indexOf("- | a | b |"))).not.toBeNull();
+    expect(foldableAt(doc, doc.indexOf("- | a | b |"), withTable)).not.toBeNull();
   });
 });
 

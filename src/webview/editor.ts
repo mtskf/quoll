@@ -74,7 +74,7 @@ import {
   splitToCmText,
 } from "./cm/seed.js";
 import { quollSwitchEditor } from "./cm/switch-editor.js";
-import { tableBlockField, tableSkeletonField } from "./cm/table/index.js";
+import { tableBlockField } from "./cm/table/index.js";
 import { quollTaskCheckboxKeymap } from "./cm/task-checkbox/task-checkbox-command.js";
 import {
   quollBlockStyleTheme,
@@ -685,9 +685,6 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // invalidation policy (always a top-level re-walk — see the field header).
         // Display-only. Publishes to neither zone facet, for the reason given above.
         blockquoteCollapseField,
-        // Bounded Table-node skeleton — precedes tableBlockField so buildAll
-        // reads it via state.field() instead of a per-keystroke full walk.
-        tableSkeletonField,
         // C6b: block widget for GFM tables. Publishes its range to
         // quollBlockReplaceZones so quollSyntaxReveal above drops inline
         // marks inside the widget; CodeMirror requires block widgets

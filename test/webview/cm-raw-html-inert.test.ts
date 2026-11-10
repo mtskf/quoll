@@ -34,7 +34,7 @@ const RAW_HTML: readonly string[] = [
 // reveal-on-caret" describe in test/webview/image/cm-image-field.test.ts).
 function imageWidgetCount(state: EditorState): number {
   let n = 0;
-  const cur = state.field(imageBlockField).iter();
+  const cur = state.field(imageBlockField).decorations.iter();
   while (cur.value) {
     if ((cur.value.spec as { widget?: unknown }).widget instanceof ImageBlockWidget) {
       n++;
@@ -153,7 +153,7 @@ describe("C8 enrollment under the full widget set (combined doc, all block field
   it("the table field builds a widget over the combined doc", () => {
     const { view, parent } = combinedView();
     try {
-      expect(view.state.field(tableBlockField).size).toBeGreaterThan(0);
+      expect(view.state.field(tableBlockField).decorations.size).toBeGreaterThan(0);
     } finally {
       view.destroy();
       parent.remove();
