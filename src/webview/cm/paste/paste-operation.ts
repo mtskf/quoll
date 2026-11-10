@@ -121,6 +121,13 @@ export function createPasteOperationCoordinator(options: {
     }
     view.dispatch(tr);
   }
+  function clearMetadataSafely(view: EditorView, id: string) {
+    try {
+      clearMetadata(view, id);
+    } catch (err) {
+      console.error("[quoll] failed to clear paste metadata", { err, requestId: id });
+    }
+  }
   function release(id: string) {
     const operation = operations.get(id);
     operations.delete(id);
@@ -133,7 +140,7 @@ export function createPasteOperationCoordinator(options: {
     for (const [id, operation] of operations) {
       release(id);
       if (clearState) {
-        clearMetadata(operation.view, id);
+        clearMetadataSafely(operation.view, id);
       }
       for (const path of operation.slots) {
         if (typeof path === "string") {
@@ -162,7 +169,7 @@ export function createPasteOperationCoordinator(options: {
   }
   function fail(view: EditorView, id: string) {
     const operation = release(id);
-    clearMetadata(view, id);
+    clearMetadataSafely(view, id);
     for (const path of operation?.slots ?? []) {
       if (typeof path === "string") {
         options.onUnlinkedPath?.(path);
@@ -217,8 +224,9 @@ export function createPasteOperationCoordinator(options: {
             selectionMoved: false,
           }),
         });
-      } catch {
-        clearMetadata(view, id);
+      } catch (err) {
+        console.error("[quoll] paste capture failed", { err, requestId: id });
+        clearMetadataSafely(view, id);
         options.onFailure();
         return null;
       }
@@ -273,7 +281,7 @@ export function createPasteOperationCoordinator(options: {
           }
         }
         release(id);
-        clearMetadata(view, id);
+        clearMetadataSafely(view, id);
         return;
       }
       try {
@@ -298,15 +306,16 @@ export function createPasteOperationCoordinator(options: {
         }
         view.dispatch(tr);
         release(id);
-        clearMetadata(view, id);
+        clearMetadataSafely(view, id);
         if (slots.some((path) => path === null)) {
           options.onFailure();
         }
-      } catch {
+      } catch (err) {
+        console.error("[quoll] paste completion failed", { err, requestId: id });
         if (view.state !== state) {
           // Adoption is terminal even when dispatch did not finish successfully.
           release(id);
-          clearMetadata(view, id);
+          clearMetadataSafely(view, id);
           options.onFailure();
           return;
         }

@@ -384,14 +384,52 @@ it("registration dispatch throw starts no I/O", () => {
   const coordinator = createPasteOperationCoordinator({ onFailure: failure, startResources });
   const view = new EditorView({ extensions: [coordinator.extension] });
   try {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const cause = new Error("dispatch failed");
     vi.spyOn(view, "dispatch").mockImplementation(() => {
-      throw new Error("dispatch failed");
+      throw cause;
     });
     expect(coordinator.capture(view, { from: 0, to: 0, render: () => "x" })).toBeNull();
     expect(view.state.doc.toString()).toBe("");
     expect(view.state.field(pendingPasteOperations)).toEqual([]);
     expect(startResources).not.toHaveBeenCalled();
     expect(failure).toHaveBeenCalledOnce();
+    expect(error).toHaveBeenCalledWith("[quoll] paste capture failed", {
+      err: cause,
+      requestId: "paste-1",
+    });
+  } finally {
+    view.destroy();
+    vi.restoreAllMocks();
+  }
+});
+
+it.each([
+  false,
+  true,
+])("lost operation releases paths and defers failure (dispose: %s)", async (dispose) => {
+  const onFailure = vi.fn();
+  const onUnlinkedPath = vi.fn();
+  const release = vi.fn();
+  const coordinator = createPasteOperationCoordinator({
+    onFailure,
+    onUnlinkedPath,
+    startResources: () => release,
+  });
+  const view = new EditorView({ doc: "0123456789", extensions: [coordinator.extension] });
+  try {
+    const id = coordinator.capture(view, { from: 5, to: 9, render: () => "x" }, 2)!;
+    coordinator.settle(id, 0, "./a.png");
+    view.dispatch({ changes: { from: 6, to: 7, insert: "z" } });
+    expect(release).toHaveBeenCalledOnce();
+    expect(onUnlinkedPath).toHaveBeenCalledExactlyOnceWith("./a.png");
+    expect(onFailure).not.toHaveBeenCalled();
+    expect(coordinator.has(id)).toBe(false);
+    if (dispose) {
+      coordinator.dispose();
+    }
+    await Promise.resolve();
+    expect(onFailure).toHaveBeenCalledTimes(dispose ? 0 : 1);
   } finally {
     view.destroy();
   }
@@ -809,6 +847,83 @@ it("throwing live render terminates once and reports unlinked path", () => {
   } finally {
     view.destroy();
     vi.useRealTimers();
+  }
+});
+
+it("completion logs its cause and reports paths when metadata cleanup throws", () => {
+  const onFailure = vi.fn();
+  const onUnlinkedPath = vi.fn();
+  const cause = new Error("render failed");
+  const cleanupCause = new Error("cleanup failed");
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  const coordinator = createPasteOperationCoordinator({ onFailure, onUnlinkedPath });
+  const view = new EditorView({ doc: "target", extensions: [coordinator.extension] });
+  try {
+    const id = coordinator.capture(
+      view,
+      {
+        from: 0,
+        to: 6,
+        render: () => {
+          throw cause;
+        },
+      },
+      1
+    )!;
+    coordinator.settle(id, 0, "./a.png");
+    vi.spyOn(view, "dispatch").mockImplementation(() => {
+      throw cleanupCause;
+    });
+    expect(() => coordinator.complete(id)).not.toThrow();
+    expect(error).toHaveBeenCalledWith("[quoll] paste completion failed", {
+      err: cause,
+      requestId: id,
+    });
+    expect(error).toHaveBeenCalledWith("[quoll] failed to clear paste metadata", {
+      err: cleanupCause,
+      requestId: id,
+    });
+    expect(onUnlinkedPath).toHaveBeenCalledExactlyOnceWith("./a.png");
+    expect(onFailure).toHaveBeenCalledOnce();
+  } finally {
+    view.destroy();
+    vi.restoreAllMocks();
+  }
+});
+
+it("dispose reports every unlinked path when one metadata cleanup throws", () => {
+  const onUnlinkedPath = vi.fn();
+  const release = vi.fn();
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  const coordinator = createPasteOperationCoordinator({
+    onFailure: vi.fn(),
+    onUnlinkedPath,
+    startResources: () => release,
+  });
+  const view = new EditorView({ doc: "0123456789", extensions: [coordinator.extension] });
+  try {
+    const a = coordinator.capture(view, { from: 1, to: 2, render: () => "a" }, 1)!;
+    const b = coordinator.capture(view, { from: 8, to: 9, render: () => "b" }, 1)!;
+    coordinator.settle(a, 0, "./a.png");
+    coordinator.settle(b, 0, "./b.png");
+    const cleanupCause = new Error("cleanup failed");
+    const dispatch = view.dispatch.bind(view);
+    vi.spyOn(view, "dispatch")
+      .mockImplementationOnce(() => {
+        throw cleanupCause;
+      })
+      .mockImplementation((...args) => dispatch(...args));
+    expect(() => coordinator.dispose()).not.toThrow();
+    expect(error).toHaveBeenCalledWith("[quoll] failed to clear paste metadata", {
+      err: cleanupCause,
+      requestId: a,
+    });
+    expect(release).toHaveBeenCalledTimes(2);
+    expect(onUnlinkedPath.mock.calls).toEqual([["./a.png"], ["./b.png"]]);
+    expect(view.state.field(pendingPasteOperations).map((target) => target.id)).toEqual([a]);
+  } finally {
+    view.destroy();
+    vi.restoreAllMocks();
   }
 });
 

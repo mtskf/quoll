@@ -109,6 +109,43 @@ it("transport settles callbacks without inserting", async () => {
   expect(settled).toHaveBeenCalledWith(0, "assets/a.png");
   expect(view.state.doc.toString()).toBe("hello");
 });
+it("cancel prevents a queued reader callback and rejects the host reply", () => {
+  let reader: StubFileReader | undefined;
+  stubFileReader((started) => {
+    reader = started;
+  });
+  const post = vi.fn<(message: WebviewToHost) => void>();
+  const settled = vi.fn();
+  const transport = createImageFileTransport({ post });
+  const cancel = transport.start([pngFile()], settled);
+  expect(reader).toBeDefined();
+  reader!.result = "data:image/png;base64,eA==";
+  const onload = reader!.onload!;
+  onload();
+  const requestId = imageWrites(post)[0].requestId;
+  cancel();
+  onload();
+  expect(imageWrites(post)).toHaveLength(1);
+  expect(settled).not.toHaveBeenCalled();
+  expect(transport.resolve(requestId, "assets/a.png")).toBe(false);
+});
+
+it("readAsDataURL throw logs the cause and settles the slot", () => {
+  const cause = new Error("reader failed to start");
+  stubFileReader(() => {
+    throw cause;
+  });
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  const post = vi.fn<(message: WebviewToHost) => void>();
+  const settled = vi.fn();
+  createImageFileTransport({ post }).start([pngFile()], settled);
+  expect(error).toHaveBeenCalledWith("[quoll] failed to start reading pasted image", {
+    err: cause,
+    requestId: expect.any(String),
+  });
+  expect(settled).toHaveBeenCalledExactlyOnceWith(0, null);
+  expect(imageWrites(post)).toEqual([]);
+});
 it("reverse replies preserve clipboard order in one replacement", async () => {
   const { view, paste, post } = mount("old");
   view.dispatch({ selection: { anchor: 0, head: 3 } });

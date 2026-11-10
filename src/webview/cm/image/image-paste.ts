@@ -78,6 +78,9 @@ export function createImageFileTransport(opts: { post: (message: WebviewToHost) 
     };
     const reader = new FileReader();
     reader.onload = () => {
+      if (!pending.has(requestId)) {
+        return;
+      }
       const result = reader.result;
       if (typeof result !== "string") {
         // Defensive browser-contract failure; log metadata without clipboard bytes.
@@ -114,7 +117,8 @@ export function createImageFileTransport(opts: { post: (message: WebviewToHost) 
     reader.onabort = failed;
     try {
       reader.readAsDataURL(file);
-    } catch {
+    } catch (err) {
+      console.error("[quoll] failed to start reading pasted image", { err, requestId });
       failed();
     }
     return () => {
