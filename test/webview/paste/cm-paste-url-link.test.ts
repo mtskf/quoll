@@ -1,11 +1,16 @@
 // @vitest-environment happy-dom
+
 import { history, undo } from "@codemirror/commands";
 import { EditorSelection, EditorState } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
-
 import { quollMarkdownLanguage } from "../../../src/webview/cm/markdown.js";
-import { detectPasteLinkUrl, pasteUrlOverSelection } from "../../../src/webview/cm/paste/index.js";
+import { createClipboardPaste } from "../../../src/webview/cm/paste/clipboard-paste.js";
+import { detectPasteLinkUrl } from "../../../src/webview/cm/paste/index.js";
+import {
+  decideUrlPaste,
+  selectionIsPlainText,
+} from "../../../src/webview/cm/paste/url-link-paste.js";
 import { settledMount } from "../helpers/settled-view.js";
 
 describe("detectPasteLinkUrl — URL detection boundary", () => {
@@ -80,7 +85,8 @@ function mount(doc: string, anchor: number, head: number, canWrite = true): Edit
         quollMarkdownLanguage(),
         EditorState.readOnly.of(!canWrite),
         history(),
-        pasteUrlOverSelection({ canWrite: () => canWrite }),
+        createClipboardPaste({ canWrite: () => canWrite, post: () => {}, onFailure: () => {} })
+          .extension,
       ],
     }),
   });
@@ -95,7 +101,7 @@ function firePaste(view: EditorView, text: string): Event {
   return event;
 }
 
-describe("pasteUrlOverSelection — handler", () => {
+describe("clipboard paste — URL over selection", () => {
   it("wraps a single-line selection as a link and consumes the event", () => {
     const view = mount("select me", 0, "select".length); // select "select"
     const event = firePaste(view, "https://example.com");
@@ -179,7 +185,7 @@ describe("pasteUrlOverSelection — handler", () => {
 // Syntax-context guard (ported from the built-in pasteURLAsLink): a URL is NEVER
 // wrapped into a non-plain-text construct. Wrapping `](url)` into inline/fenced
 // code, an existing link, etc. would corrupt it, so the handler defers.
-describe("pasteUrlOverSelection — syntax-context guard", () => {
+describe("clipboard paste — URL syntax-context guard", () => {
   it("defers when the selection is inside an inline code span", () => {
     const view = mount("`code`", 1, 5); // select "code" between the backticks
     firePaste(view, "https://example.com");
@@ -215,3 +221,48 @@ describe("pasteUrlOverSelection — syntax-context guard", () => {
 // deterministically (a probe test passed identically with and without the fix).
 // The fix is a defensive robustness improvement over the ported built-in; the
 // tree-available guard behaviour is covered by the code/link defer tests above.
+
+it("URL decision preserves selected label", async () => {
+  const view = await settledMount({
+    doc: "before label after",
+    selection: { anchor: 7, head: 12 },
+    extensions: [quollMarkdownLanguage()],
+  });
+  try {
+    const decision = decideUrlPaste(view.state, "https://example.com/a(b)");
+    expect(decision).not.toBeNull();
+    expect({ from: decision!.from, to: decision!.to }).toEqual({ from: 7, to: 12 });
+    expect(decision!.render(view.state, 7, 12)).toBe("[label](<https://example.com/a(b)>)");
+    expect(view.state.doc.toString()).toBe("before label after");
+  } finally {
+    view.destroy();
+  }
+});
+
+it("URL syntax guard uses supplied state and owned range", () => {
+  const state = EditorState.create({
+    doc: "label `code`",
+    selection: { anchor: 7, head: 11 },
+    extensions: [quollMarkdownLanguage()],
+  });
+  expect(selectionIsPlainText(state, 0, 5)).toBe(true);
+  expect(selectionIsPlainText(state, 7, 11)).toBe(false);
+});
+
+it.each([
+  "multiline",
+  "unclassified",
+])("URL live guard falls back for multiline or unclassified range (%s)", (kind) => {
+  const initial = EditorState.create({
+    doc: "label",
+    selection: { anchor: 0, head: 5 },
+    extensions: [quollMarkdownLanguage()],
+  });
+  const decision = decideUrlPaste(initial, "https://example.com");
+  expect(decision).not.toBeNull();
+  const live = EditorState.create({
+    doc: kind === "multiline" ? "label\nmore" : "label",
+    extensions: kind === "multiline" ? [quollMarkdownLanguage()] : [],
+  });
+  expect(decision?.render(live, 0, live.doc.length)).toBe("https://example.com");
+});

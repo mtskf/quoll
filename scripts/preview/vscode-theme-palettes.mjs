@@ -64,13 +64,10 @@
 // editor-findMatchBackground, editor-findMatchHighlightBackground,
 // editor-selectionHighlightBackground) are unstubbed for every themeKind today
 // and stay that way. Each has a working var(--x, fallback) at its use site, with
-// two chains worth knowing about:
-//   • button-hoverBackground — reached only through
-//     `var(--vscode-button-secondaryHoverBackground, var(--vscode-button-hoverBackground))`
-//     (cm/theme.ts, `.cm-panel.cm-search .cm-button:hover`): a two-level chain whose
-//     terminal arm is itself unstubbed with no literal behind it, so that hover
-//     surface renders unset HERE but not in a real host (registry hcDark =
-//     button.background). A genuine harness divergence — cosmetic, dev-only.
+// one chain worth knowing about:
+//   • button-hoverBackground used to be a second chain without a literal terminal;
+//     it now ends in rgba(128, 128, 128, 0.3), so every unstubbed token has a
+//     working fallback.
 //   • toolbar-activeBackground — falls back to list-activeSelectionBackground
 //     (styles.css), which HC_DARK omits because the registry hcDark default is null,
 //     so it renders unset under hc-dark. But a real hc-dark host emits neither

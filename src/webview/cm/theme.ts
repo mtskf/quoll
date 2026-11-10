@@ -1410,7 +1410,7 @@ export const searchPanelThemeSpec = {
   },
   ".cm-panel.cm-search .cm-button:hover": {
     backgroundColor:
-      "var(--vscode-button-secondaryHoverBackground, var(--vscode-button-hoverBackground))",
+      "var(--vscode-button-secondaryHoverBackground, var(--vscode-button-hoverBackground, rgba(128, 128, 128, 0.3)))",
   },
   ".cm-panel.cm-search label": {
     fontSize: "var(--vscode-font-size)",

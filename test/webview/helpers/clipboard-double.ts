@@ -1,11 +1,9 @@
 // A `DataTransfer` stand-in for suites that drive real paste events.
 //
-// Shared rather than re-declared per suite because two handlers now read the SAME
-// membership predicate — `isIngestibleImageItem` (cm/image/image-paste.ts) decides
-// both what imagePaste ingests and what richHtmlPaste may defer to it. A double
-// that drifted between suites would let one of them pass on a clipboard shape the
-// other could never construct, which is the test-side version of exactly the bug
-// sharing that predicate removes.
+// Shared by suites that exercise the clipboard coordinator. `filesFromTransfer`
+// (cm/image/image-paste.ts) acquires Files via `getAsFile()`, and the coordinator
+// consumes them. Keeping one DataTransfer shape lets those suites construct the
+// same clipboard inputs.
 //
 // Shaped like the real thing in one way that matters: `items` carries a
 // `kind: "string"` entry for EVERY text flavour present, as a browser's
@@ -14,9 +12,8 @@
 
 /** One FILE entry. Omit `file` for a real File; state it explicitly as `null` OR
  *  `undefined` to model the item that matches on kind+type yet yields nothing.
- *  imagePaste's `if (file)` declines both spellings, so anything mirroring its
- *  acceptance has to decline both — and a handler that gets this wrong defers into
- *  a decline and lets CM's `doPaste("")` delete the selection. */
+ *  `filesFromTransfer` (cm/image/image-paste.ts) includes only items whose
+ *  `getAsFile()` returns a File. */
 export type FileItemSpec = { type: string; file?: File | null | undefined };
 
 export type ClipboardFlavours = {
@@ -26,18 +23,14 @@ export type ClipboardFlavours = {
   files?: FileItemSpec[];
 };
 
-/** A file item carrying a real File — the shape imagePaste ingests. */
+/** A file item carrying a real File. */
 export const IMAGE_FILE: FileItemSpec[] = [{ type: "image/png" }];
 
 /** Build the `clipboardData` / `dataTransfer` object for a synthetic paste or drop.
  *
  *  ⚠️ `getAsFile()` returns null for every `kind: "string"` item, per the DOM spec.
- *  That is also why `isIngestibleImageItem`'s `kind === "file"` test cannot be made
- *  independently non-vacuous from here: a SPEC-CONFORMANT non-file item already
- *  fails its `getAsFile()` condition, so dropping the `kind` test changes no
- *  observable behaviour. Making it observable would need a double that violates the
- *  spec, which would pin a clipboard the browser never produces. The `kind` test is
- *  a short-circuit matching the DOM contract, not a load-bearing condition. */
+ *  This double models that contract; string flavours are represented in `items`
+ *  alongside file items, as they are in a browser DataTransfer. */
 export function makeClipboardData(data: ClipboardFlavours): {
   getData: (type: string) => string;
   items: DataTransferItem[];
@@ -60,17 +53,19 @@ export function makeClipboardData(data: ClipboardFlavours): {
     type,
     getAsFile: () => null,
   }));
-  const fileItems = (data.files ?? []).map((spec) => ({
-    kind: "file" as const,
-    type: spec.type,
-    // `"file" in spec`, not `spec.file === undefined`: the latter cannot tell an
-    // omitted key from an explicit `file: undefined`, which is one of the two
-    // no-File shapes this helper exists to be able to construct.
-    // Non-empty content deliberately: imagePaste skips a zero-byte file (`file.size
-    // === 0`), so a `new File([""], …)` default would make every ingestion test
-    // pass the membership predicate and then silently do nothing.
-    getAsFile: () => ("file" in spec ? spec.file : new File(["x"], "f", { type: spec.type })),
-  }));
+  const fileItems = (data.files ?? []).map((spec) => {
+    const file = "file" in spec ? spec.file : new File(["x"], "f", { type: spec.type });
+    return {
+      kind: "file" as const,
+      type: spec.type,
+      // `"file" in spec`, not `spec.file === undefined`: the latter cannot tell an
+      // omitted key from an explicit `file: undefined`, which is one of the two
+      // no-File shapes this helper exists to be able to construct.
+      // Non-empty content is the default so the File carries bytes for the
+      // FileReader path. Empty Files are forwarded to the host too.
+      getAsFile: () => file,
+    };
+  });
 
   const files = fileItems.map((item) => item.getAsFile()).filter((f): f is File => !!f);
   return {
@@ -87,7 +82,7 @@ export function makeClipboardData(data: ClipboardFlavours): {
     items: [...stringItems, ...fileItems] as unknown as DataTransferItem[],
     files,
     // A real DataTransfer reports "Files" alongside the text flavours whenever it
-    // carries any file entry — the list imagePaste's dragover guard reads.
+    // carries any file entry — the list the image drop extension's dragover guard reads.
     types: [...store.keys(), ...(files.length > 0 ? ["Files"] : [])],
   };
 }

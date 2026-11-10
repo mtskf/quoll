@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
+
+import { EditorState, StateEffect } from "@codemirror/state";
 import { EditorView, runScopeHandlers } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
 import {
   createHostSessionCore,
   type HostSessionEvent,
@@ -14,8 +15,9 @@ import {
   PROTOCOL_VERSION,
 } from "../../src/shared/protocol.js";
 import { EDITOR_PREF_CSS_VARS, editorPrefToCssValue } from "../../src/webview/cm/editor-prefs.js";
-import { addPendingAnchor } from "../../src/webview/cm/image/image-paste.js";
 import { proseLintEnabled } from "../../src/webview/cm/lint/index.js";
+import { pendingPasteOperations } from "../../src/webview/cm/paste/paste-operation.js";
+import { firePasteAt, IMAGE_FILE } from "./helpers/clipboard-double.js";
 
 // shell.ts integration tests (post C3 React-free shell). Replaces the
 // React-era app.test.ts + persistence.test.ts. The shell mounts as a
@@ -2382,53 +2384,179 @@ describe("shell — HostToWebview exhaustiveness guard", () => {
 });
 
 describe("shell — image-write-result routing", () => {
-  // The anchors are seeded with addPendingAnchor rather than a synthesized
-  // paste: the paste path is already pinned by
-  // test/webview/image/cm-image-paste.test.ts, and driving it here would need a
-  // FileReader stub whose failure modes have nothing to do with the route under
-  // test.
-  const seedAnchor = (view: EditorView, requestId: string, anchor: number): void => {
-    view.dispatch({ effects: addPendingAnchor.of({ requestId, anchor }) });
-  };
-
-  it("routes ok:true to an insert at the matching requestId's anchor", async () => {
+  async function requestAt(view: EditorView, anchor: number) {
+    view.dispatch({ selection: { anchor } });
+    const before = postMessage.mock.calls.length;
+    firePasteAt(view.contentDOM, { files: IMAGE_FILE });
+    await vi.waitFor(() =>
+      expect(
+        postMessage.mock.calls
+          .slice(before)
+          .some(([message]) => (message as { type: string }).type === "image-write")
+      ).toBe(true)
+    );
+    return (
+      postMessage.mock.calls
+        .slice(before)
+        .map(([message]) => message)
+        .find((message) => (message as { type: string }).type === "image-write") as {
+        requestId: string;
+      }
+    ).requestId;
+  }
+  it("filter-vetoed paste shows failure notice with unchanged document", async () => {
     await mount();
-    deliver(buildDocument({ docVersion: 1, content: "alpha\n" }));
+    deliver(buildDocument({ content: "keep" }));
     const view = mountedView();
-    // Two pending anchors so the requestId is load-bearing: passing the wrong id
-    // (or ignoring it) resolves the wrong anchor and the insert lands at 0.
-    seedAnchor(view, "req-a", 0);
-    seedAnchor(view, "req-b", 6);
-
+    view.dispatch({ selection: { anchor: 0, head: 4 } });
+    firePasteAt(view.contentDOM, { text: "caption", files: IMAGE_FILE });
+    await vi.waitFor(() =>
+      expect(
+        postMessage.mock.calls.some(
+          ([message]) => (message as { type: string }).type === "image-write"
+        )
+      ).toBe(true)
+    );
+    const request = postMessage.mock.calls
+      .map(([message]) => message)
+      .find((message) => (message as { type: string }).type === "image-write") as {
+      requestId: string;
+    };
+    expect(view.state.field(pendingPasteOperations)).toHaveLength(1);
+    view.dispatch({
+      effects: StateEffect.appendConfig.of(EditorState.transactionFilter.of(() => [])),
+    });
+    const selection = view.state.selection;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     deliver({
       protocol: PROTOCOL_VERSION,
       type: "image-write-result",
-      requestId: "req-b",
+      requestId: request.requestId,
+      ok: true,
+      relativePath: "./assets/unlinked.png",
+    });
+    expect(view.state.doc.toString()).toBe("keep");
+    expect(view.state.selection.eq(selection)).toBe(true);
+    expect(view.state.field(pendingPasteOperations)).toEqual([]);
+    expect(warn).toHaveBeenCalledWith("[quoll] pasted image written but not linked", {
+      relativePath: "./assets/unlinked.png",
+    });
+    const notice = container?.querySelector(".quoll-notice-paste-failed");
+    expect(notice).not.toBeNull();
+    expect(notice?.textContent).toContain("Paste could not be completed");
+    deliver({
+      protocol: PROTOCOL_VERSION,
+      type: "image-write-result",
+      requestId: request.requestId,
+      ok: true,
+      relativePath: "./assets/unlinked.png",
+    });
+    expect(view.state.doc.toString()).toBe("keep");
+    expect(container?.querySelectorAll(".quoll-resync-notice")).toHaveLength(1);
+  });
+  it("stronger notice survives declined paste notice", async () => {
+    await mount();
+    vi.useFakeTimers();
+    deliver(buildDocument({ content: "keep" }));
+    const view = mountedView();
+    view.dispatch({ changes: { from: 4, insert: "x" } });
+    vi.advanceTimersByTime(300);
+    deliver(buildDocument({ content: "keep", docVersion: 1 }));
+    const stronger = container?.querySelector(".quoll-notice-unsaved");
+    expect(stronger).not.toBeNull();
+    const text = stronger?.textContent;
+    const before = view.state.doc.toString();
+    const requestId = await requestAt(view, 0);
+    view.dispatch({
+      effects: StateEffect.appendConfig.of(EditorState.transactionFilter.of(() => [])),
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    deliver({
+      protocol: PROTOCOL_VERSION,
+      type: "image-write-result",
+      requestId,
+      ok: true,
+      relativePath: "./assets/unlinked.png",
+    });
+    expect(view.state.doc.toString()).toBe(before);
+    expect(view.state.field(pendingPasteOperations)).toEqual([]);
+    expect(container?.querySelector(".quoll-resync-notice")).toBe(stronger);
+    expect(stronger?.textContent).toBe(text);
+    expect(container?.querySelector(".quoll-notice-paste-failed")).toBeNull();
+    (container?.querySelector(".quoll-resync-notice-dismiss") as HTMLButtonElement).click();
+    vi.advanceTimersByTime(31_000);
+    expect(container?.querySelector(".quoll-resync-notice")).toBeNull();
+    expect(view.state.doc.toString()).toBe(before);
+  });
+  it("production editor uses one paste owner", async () => {
+    await mount();
+    deliver(buildDocument({ content: "old" }));
+    const view = mountedView();
+    view.dispatch({ selection: { anchor: 0, head: 3 } });
+    let edits = 0;
+    view.dispatch({
+      effects: StateEffect.appendConfig.of(
+        EditorView.updateListener.of((update) => {
+          if (update.docChanged) {
+            edits++;
+          }
+        })
+      ),
+    });
+    firePasteAt(view.contentDOM, {
+      html: "<table><tr><th>A</th></tr><tr><td>B</td></tr></table>",
+      text: "wrong",
+      files: IMAGE_FILE,
+    });
+    expect(view.state.doc.toString()).toBe("old");
+    expect(view.state.field(pendingPasteOperations)).toHaveLength(1);
+    await vi.waitFor(() =>
+      expect(
+        postMessage.mock.calls.some(
+          ([message]) => (message as { type: string }).type === "image-write"
+        )
+      ).toBe(true)
+    );
+    const request = postMessage.mock.calls
+      .map(([message]) => message)
+      .find((message) => (message as { type: string }).type === "image-write") as {
+      requestId: string;
+    };
+    deliver({
+      protocol: PROTOCOL_VERSION,
+      type: "image-write-result",
+      requestId: request.requestId,
       ok: true,
       relativePath: "./assets/shot.png",
     });
-
-    expect(view.state.doc.toString()).toBe("alpha\n![](./assets/shot.png)\n");
+    expect(view.state.doc.toString()).toBe("| A |\n| --- |\n| B |\n![](./assets/shot.png)\n");
+    expect(edits).toBe(1);
+    expect(view.state.field(pendingPasteOperations)).toEqual([]);
   });
-
-  it("routes ok:false to a null path — nothing is inserted", async () => {
-    // The ternary `message.ok ? message.relativePath : null` is the whole arm.
-    // Inverted, ok:true would pass null (previous test goes red) and ok:false
-    // would pass `undefined` — which resolve() does NOT treat as a rejection
-    // (`relativePath === null`), so it would insert `![](undefined)` here.
+  it("routes ok:true to the matching pending operation", async () => {
     await mount();
-    deliver(buildDocument({ docVersion: 1, content: "alpha\n" }));
+    deliver(buildDocument({ content: "alpha\n" }));
     const view = mountedView();
-    seedAnchor(view, "req-a", 6);
-
+    await requestAt(view, 0);
+    const requestId = await requestAt(view, 6);
     deliver({
       protocol: PROTOCOL_VERSION,
       type: "image-write-result",
-      requestId: "req-a",
-      ok: false,
+      requestId,
+      ok: true,
+      relativePath: "./assets/shot.png",
     });
-
+    expect(view.state.doc.toString()).toBe("alpha\n![](./assets/shot.png)\n");
+    expect(view.state.field(pendingPasteOperations)).toHaveLength(1);
+  });
+  it("routes ok:false to a null path without inserting", async () => {
+    await mount();
+    deliver(buildDocument({ content: "alpha\n" }));
+    const view = mountedView();
+    const requestId = await requestAt(view, 6);
+    deliver({ protocol: PROTOCOL_VERSION, type: "image-write-result", requestId, ok: false });
     expect(view.state.doc.toString()).toBe("alpha\n");
+    expect(view.state.field(pendingPasteOperations)).toEqual([]);
   });
 });
 
