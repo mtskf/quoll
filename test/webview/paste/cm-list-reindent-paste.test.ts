@@ -1,10 +1,12 @@
 // @vitest-environment happy-dom
+
 import { markdown } from "@codemirror/lang-markdown";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
-
-import { listReindentPaste, reindentPastedList } from "../../../src/webview/cm/paste/index.js";
+import { createClipboardPaste } from "../../../src/webview/cm/paste/clipboard-paste.js";
+import { reindentPastedList } from "../../../src/webview/cm/paste/index.js";
+import { decideListPaste } from "../../../src/webview/cm/paste/list-reindent.js";
 
 describe("reindentPastedList — pure transform", () => {
   it("re-bases a top-level list fragment to the destination column (delta +2)", () => {
@@ -110,7 +112,8 @@ function mount(doc: string, canWrite = true) {
       extensions: [
         markdown(),
         EditorState.readOnly.of(!canWrite),
-        listReindentPaste({ canWrite: () => canWrite }),
+        createClipboardPaste({ canWrite: () => canWrite, post: () => {}, onFailure: () => {} })
+          .extension,
       ],
     }),
   });
@@ -133,7 +136,7 @@ function firePaste(view: EditorView, text: string): Event {
 // column 4, which only our transform produces) must be ABSENT. On ACCEPT we
 // preventDefault (CM core does not run), so exact-content assertions are safe.
 
-describe("listReindentPaste — handler", () => {
+describe("clipboard paste — list re-indent", () => {
   // Fixture note: the caret sits at the end of the blank interior line "  " of a
   // LOOSE item "b" (which has a following continuation "  more"), col 2. A blank
   // interior line resolves via `listItemAt` (a bare TRAILING blank line does not
@@ -257,4 +260,18 @@ describe("listReindentPaste — handler", () => {
     expect(view.state.doc.toString()).toBe(LOOSE);
     view.destroy();
   });
+});
+
+it("list decision owns indentation replacement range", () => {
+  const doc = "- a\n  - b\n  \n  more";
+  const state = EditorState.create({ doc, selection: { anchor: 12 }, extensions: [markdown()] });
+  const decision = decideListPaste(state, "- a\n  - b\n- c");
+  expect(decision).not.toBeNull();
+  expect({ from: decision!.from, to: decision!.to }).toEqual({ from: 10, to: 12 });
+  const insert = decision!.render(state, decision!.from, decision!.to);
+  expect(
+    state
+      .update({ changes: { from: decision!.from, to: decision!.to, insert } })
+      .state.doc.toString()
+  ).toBe("- a\n  - b\n  - a\n    - b\n  - c\n  more");
 });

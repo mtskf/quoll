@@ -1,6 +1,6 @@
-// Doubles shared by the suites that drive imagePaste through real paste events:
-// its own (image/cm-image-paste.test.ts) and the richHtmlPaste + imagePaste pair
-// (paste/cm-rich-html-image-paste.test.ts).
+// Doubles shared by the suites that drive the clipboard coordinator and image
+// transport through real paste events: image/cm-image-paste.test.ts and
+// paste/cm-rich-html-image-paste.test.ts.
 
 import type { ImageWriteMessage, WebviewToHost } from "../../../src/shared/protocol.js";
 

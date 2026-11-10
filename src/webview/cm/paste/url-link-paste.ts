@@ -1,26 +1,6 @@
-// CodeMirror paste handler: pasting a single plain http(s) URL while a non-empty
-// single-line selection exists wraps the selection as a Markdown link
-// `[selection](url)` (Notion / Obsidian behaviour). Every other paste defers —
-// the handler returns `false` (without preventDefault) so htmlTablePaste, the
-// image paste pipeline (image-paste.ts), and CM's default plain-text paste run.
-//
-// This REPLACES @codemirror/lang-markdown's built-in `pasteURLAsLink` (dropped
-// from quollMarkdownLanguage in markdown.ts). The built-in matched URLs by
-// PREFIX (`/^(https?:\/\/|mailto:|xmpp:|www\.)/`), so `https://x.com trailing`
-// over a selection was wrongly wrapped, and `xmpp:` / `www.` / `mailto:` schemes
-// outside Quoll's url-allowlist were accepted. Ours requires the clipboard text
-// to be EXACTLY one http(s) URL token and reuses the shared `isAllowedUrl`
-// hardening (C0/DEL, protocol-relative) so paste stays in lockstep with the
-// render/open sinks. It KEEPS the built-in's syntax-context guard
-// (`selectionIsPlainText`) so a URL is never wrapped into code / an existing
-// link / emphasis / raw HTML. The insert rides the normal dispatch →
-// updateListener → edit-sync → host write-lock → applyEdit settlement
-// pipeline (no raw write).
-
 import { markdownLanguage } from "@codemirror/lang-markdown";
 import { ensureSyntaxTree } from "@codemirror/language";
-import { type Extension, Prec } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import type { EditorState } from "@codemirror/state";
 
 import { type AllowlistedUrl, isAllowedUrl } from "../../../markdown/url-allowlist.js";
 
@@ -79,11 +59,11 @@ const GUARD_PARSE_BUDGET_MS = 50;
  * (defer) when the tree can't be produced within the budget, so an unclassified
  * selection is never wrapped.
  */
-function selectionIsPlainText(view: EditorView, from: number, to: number): boolean {
-  if (!markdownLanguage.isActiveAt(view.state, from, 1)) {
+export function selectionIsPlainText(state: EditorState, from: number, to: number): boolean {
+  if (!markdownLanguage.isActiveAt(state, from, 1)) {
     return false;
   }
-  const tree = ensureSyntaxTree(view.state, to, GUARD_PARSE_BUDGET_MS);
+  const tree = ensureSyntaxTree(state, to, GUARD_PARSE_BUDGET_MS);
   if (tree === null) {
     return false; // tree unavailable for the selection → can't verify → defer
   }
@@ -120,66 +100,24 @@ function linkDestination(url: string): string {
   return /[()]/.test(url) && !/[<>]/.test(url) ? `<${url}>` : url;
 }
 
-// TODO(dedupe): unify with the Cmd+K link-wrap helper from
-// feat/inline-formatting-shortcuts once merged.
-/**
- * Wrap the main selection as `[selection](url)` in ONE dispatch (a single undo
- * step). Two point-insertions bracket the selected text so the label is
- * preserved verbatim and CM maps the selection through the changes. The caller
- * guarantees a non-empty single-line main range in plain Markdown text.
- */
-function insertLinkOverSelection(view: EditorView, url: AllowlistedUrl): void {
-  const { from, to } = view.state.selection.main;
-  view.dispatch({
-    changes: [
-      { from, insert: "[" },
-      { from: to, insert: `](${linkDestination(url)})` },
-    ],
-    userEvent: "input.paste",
-    scrollIntoView: true,
-  });
-}
-
-export function pasteUrlOverSelection(opts: { canWrite: () => boolean }): Extension {
-  return Prec.high(
-    EditorView.domEventHandlers({
-      paste: (event, view) => {
-        const { main } = view.state.selection;
-        // No selection → nothing to wrap; defer to plain paste / other handlers.
-        if (main.empty) {
-          return false;
-        }
-        // Single-line only: a multi-line selection is a block operation, not a
-        // link label. Defer to plain paste.
-        const startLine = view.state.doc.lineAt(main.from).number;
-        const endLine = view.state.doc.lineAt(main.to).number;
-        if (startLine !== endLine) {
-          return false;
-        }
-        const text = event.clipboardData?.getData("text/plain");
-        if (!text) {
-          return false;
-        }
-        const url = detectPasteLinkUrl(text);
-        if (url === null) {
-          return false; // not a bare http(s) URL → normal paste
-        }
-        // Don't wrap inside code / an existing link / emphasis / raw HTML —
-        // mirrors the built-in pasteURLAsLink guard we replaced.
-        if (!selectionIsPlainText(view, main.from, main.to)) {
-          return false;
-        }
-        // preventDefault ONLY here, AFTER we commit to wrapping (mirrors
-        // htmlTablePaste): moving it earlier would swallow non-URL pastes.
-        event.preventDefault();
-        // Read-only: swallow silently with NO fallback insert. canWrite() is the
-        // same source that drives EditorState.readOnly, so they cannot diverge.
-        if (!opts.canWrite()) {
-          return true;
-        }
-        insertLinkOverSelection(view, url);
-        return true;
-      },
-    })
-  );
+/** Capture the URL and label range; rendering does not retain the view. */
+export function decideUrlPaste(state: EditorState, text: string) {
+  const { from, to, empty } = state.selection.main;
+  if (empty || state.doc.lineAt(from).number !== state.doc.lineAt(to).number) {
+    return null;
+  }
+  const url = detectPasteLinkUrl(text);
+  if (url === null || !selectionIsPlainText(state, from, to)) {
+    return null;
+  }
+  return {
+    from,
+    to,
+    url,
+    render: (live: EditorState, start: number, end: number) =>
+      live.doc.lineAt(start).number === live.doc.lineAt(end).number &&
+      selectionIsPlainText(live, start, end)
+        ? `[${live.doc.sliceString(start, end)}](${linkDestination(url)})`
+        : text,
+  };
 }

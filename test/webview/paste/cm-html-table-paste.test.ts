@@ -1,9 +1,12 @@
 // @vitest-environment happy-dom
+
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
+import { createClipboardPaste } from "../../../src/webview/cm/paste/clipboard-paste.js";
 
-import { htmlTablePaste, htmlTableToGfm } from "../../../src/webview/cm/paste/index.js";
+import { decideTablePaste } from "../../../src/webview/cm/paste/html-table-paste.js";
+import { htmlTableToGfm } from "../../../src/webview/cm/paste/index.js";
 
 describe("htmlTableToGfm — structure", () => {
   it("converts a thead + tbody table to GFM", () => {
@@ -361,7 +364,8 @@ function mount(doc: string, canWrite = true) {
       doc,
       extensions: [
         EditorState.readOnly.of(!canWrite),
-        htmlTablePaste({ canWrite: () => canWrite }),
+        createClipboardPaste({ canWrite: () => canWrite, post: () => {}, onFailure: () => {} })
+          .extension,
       ],
     }),
   });
@@ -384,7 +388,7 @@ function firePaste(view: EditorView, data: { html?: string; text?: string }): Ev
   return event;
 }
 
-describe("htmlTablePaste — handler", () => {
+describe("clipboard paste — table", () => {
   it("inserts a GFM table for an HTML-table paste and consumes the event", () => {
     const view = mount("");
     const event = firePaste(view, {
@@ -423,14 +427,13 @@ describe("htmlTablePaste — handler", () => {
     view.destroy();
   });
 
-  it("defers a fragment with prose alongside a table (preserves the prose)", () => {
+  it("preserves prose alongside a converted table", () => {
     const view = mount("");
     firePaste(view, {
       html: "<p>intro</p><table><tr><td>A</td><td>B</td></tr></table>",
       text: "intro\nA\tB",
     });
-    // Not converted: no delimiter row is inserted; the plain-text path keeps prose.
-    expect(view.state.doc.toString()).not.toContain("| --- |");
+    expect(view.state.doc.toString()).toBe("intro\n\n| A | B |\n| --- | --- |\n");
     view.destroy();
   });
 
@@ -459,4 +462,21 @@ describe("htmlTablePaste — handler", () => {
     expect(view.state.doc.toString()).toBe("");
     view.destroy();
   });
+});
+
+it("table decision preserves framing and surrounding prose", () => {
+  const state = EditorState.create({
+    doc: "beforeTARGETafter",
+    selection: { anchor: 6, head: 12 },
+  });
+  const decision = decideTablePaste(state, "<table><tr><td>A</td></tr></table>");
+  expect(decision).not.toBeNull();
+  const { from, to } = decision!;
+  expect({ from, to }).toEqual({ from: 6, to: 12 });
+  const insert = decision!.render(state, from, to);
+  expect(state.update({ changes: { from, to, insert } }).state.doc.toString()).toBe(
+    "before\n\n| A |\n| --- |\n\nafter"
+  );
+  const live = state.update({ changes: { from: 0, insert: "intro\n\n" } }).state;
+  expect(decision!.render(live, from + 7, to + 7)).toBe(insert);
 });

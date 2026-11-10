@@ -185,6 +185,8 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
     // threw, which CodeMirror does not promise to roll back. The two refusals
     // above are decided before any mutation, so their claim is proven.
     "format-failed": "Format Document failed. Review the document before continuing.",
+    "paste-failed":
+      "Paste could not be completed in full. Review the document before trying again.",
     "handoff-unsynced":
       "Quoll could not confirm that your latest edits were saved, so nothing was sent to the assistant. Try again — after your next edit if this repeats.",
   } as const;
@@ -207,6 +209,7 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
     "format-readonly": 0,
     "format-too-large": 0,
     "format-failed": 0,
+    "paste-failed": 0,
     "handoff-unsynced": 0,
   };
   let noticeKind: NoticeKind | null = null;
@@ -467,6 +470,9 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
     resourceBaseUri,
     getState: () => state,
     dispatch,
+    onPasteFailure: () => {
+      showNotice("paste-failed");
+    },
     onResyncStorm: showStormNotice,
     onLocalEditDiscarded: showDiscardNotice,
     onReadonlyHold: showHoldNotice,
