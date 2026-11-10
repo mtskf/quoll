@@ -9,7 +9,7 @@
 //
 // Precondition asserts are separate `expect`s from the behaviour assert, so a harness
 // failure is never read as "behaviour absent".
-import { ensureSyntaxTree, foldable, syntaxTree, syntaxTreeAvailable } from "@codemirror/language";
+import { ensureSyntaxTree, foldable, syntaxTree } from "@codemirror/language";
 import { EditorState, type Extension, type StateField } from "@codemirror/state";
 import { EditorView, type WidgetType } from "@codemirror/view";
 import { type Tree, TreeFragment } from "@lezer/common";
@@ -32,6 +32,7 @@ import {
 import { QuollWidget } from "../../src/webview/cm/widget-base.js";
 import { settledState } from "./helpers/settled-state.js";
 import { settledMount } from "./helpers/settled-view.js";
+import { withUnstarvedFrontierState } from "./helpers/unstarved-frontier.js";
 
 // One switch for both throwing seams. A mock only throws while `armed` is true, so the
 // fields' `create` (which already calls both seams) never throws at mount.
@@ -522,34 +523,43 @@ describe("structural blocks beyond the initial parse frontier", () => {
       "End.",
       "",
     ]);
-    const state = EditorState.create({
-      doc,
-      extensions: [quollMarkdownLanguage(), tableBlockField, imageBlockField],
+    // The post-edit reparse has a 20ms wall-clock budget, so the run goes through the
+    // starvation-retrying gate (no-bare-unstarved-gate.test.ts); each attempt rebuilds its
+    // states from scratch.
+    withUnstarvedFrontierState({
+      what: "the frontier-advance publication of the table and image blocks",
+      observe: (requireUnstarvedFrontier) => {
+        const state = EditorState.create({
+          doc,
+          extensions: [quollMarkdownLanguage(), tableBlockField, imageBlockField],
+        });
+        // Precondition: the init snapshot is partial and stops before both blocks.
+        expect(syntaxTree(state).length).toBeLessThan(doc.indexOf("| a |"));
+        expect(widgetSlots(state, TableBlockWidget)).toEqual([]);
+        expect(widgetSlots(state, ImageBlockWidget)).toEqual([]);
+
+        // Advance the parse CONTEXT to the end without republishing the snapshot.
+        expect(ensureSyntaxTree(state, state.doc.length, 10_000)).not.toBeNull();
+        expect(syntaxTree(state).length).toBeLessThan(state.doc.length);
+
+        // A single letter inside the first plain paragraph line, far above both blocks.
+        const tr = state.update({ changes: { from: 4, insert: "x" } });
+        // Preconditions: the post-edit snapshot is complete, and HEAD's admission test sends
+        // this transaction down the bounded path.
+        requireUnstarvedFrontier(tr.state);
+        expect(syntaxTree(tr.state).length).toBe(tr.state.doc.length);
+        expect(touchesStructuralReparse(tr)).toBe(false);
+
+        const text = tr.state.doc.toString();
+        expect(widgetSlots(tr.state, TableBlockWidget).map((s) => s.from)).toEqual([
+          text.indexOf("| a |"),
+        ]);
+        expect(widgetSlots(tr.state, ImageBlockWidget).map((s) => s.from)).toEqual([
+          text.indexOf("![alt]"),
+        ]);
+        return tr.state;
+      },
     });
-    // Precondition: the init snapshot is partial and stops before both blocks.
-    expect(syntaxTree(state).length).toBeLessThan(doc.indexOf("| a |"));
-    expect(widgetSlots(state, TableBlockWidget)).toEqual([]);
-    expect(widgetSlots(state, ImageBlockWidget)).toEqual([]);
-
-    // Advance the parse CONTEXT to the end without republishing the snapshot.
-    expect(ensureSyntaxTree(state, state.doc.length, 10_000)).not.toBeNull();
-    expect(syntaxTree(state).length).toBeLessThan(state.doc.length);
-
-    // A single letter inside the first plain paragraph line, far above both blocks.
-    const tr = state.update({ changes: { from: 4, insert: "x" } });
-    // Preconditions: the post-edit snapshot is complete, and HEAD's admission test sends
-    // this transaction down the bounded path.
-    expect(syntaxTree(tr.state).length).toBe(tr.state.doc.length);
-    expect(touchesStructuralReparse(tr)).toBe(false);
-    expect(syntaxTreeAvailable(tr.state, tr.state.doc.length)).toBe(true);
-
-    const text = tr.state.doc.toString();
-    expect(widgetSlots(tr.state, TableBlockWidget).map((s) => s.from)).toEqual([
-      text.indexOf("| a |"),
-    ]);
-    expect(widgetSlots(tr.state, ImageBlockWidget).map((s) => s.from)).toEqual([
-      text.indexOf("![alt]"),
-    ]);
   });
 });
 
@@ -563,25 +573,34 @@ function expectFrontierAdvancePublishes(
   read: (state: EditorState) => unknown[]
 ): void {
   const doc = beyondInitFrontier(tail);
-  const state = EditorState.create({ doc, extensions: [quollMarkdownLanguage(), ...extensions] });
-  expect(syntaxTree(state).length).toBeLessThan(doc.indexOf(needle)); // partial snapshot
-  expect(read(state)).toEqual([]);
-  expect(ensureSyntaxTree(state, state.doc.length, 10_000)).not.toBeNull();
-  expect(syntaxTree(state).length).toBeLessThan(state.doc.length); // snapshot/context split
-  const tr = state.update({ changes: { from: 4, insert: "x" } });
-  expect(syntaxTree(tr.state).length).toBe(tr.state.doc.length);
-  expect(touchesStructuralReparse(tr)).toBe(false);
-  expect(syntaxTreeAvailable(tr.state, tr.state.doc.length)).toBe(true);
-  const oracle = read(
-    settledState(
-      EditorState.create({
-        doc: tr.state.doc,
+  withUnstarvedFrontierState({
+    what: `the frontier-advance publication of ${needle}`,
+    observe: (requireUnstarvedFrontier) => {
+      const state = EditorState.create({
+        doc,
         extensions: [quollMarkdownLanguage(), ...extensions],
-      })
-    )
-  );
-  expect(oracle.length).toBeGreaterThan(0); // non-vacuity: the target exists when fully parsed
-  expect(read(tr.state)).toEqual(oracle);
+      });
+      expect(syntaxTree(state).length).toBeLessThan(doc.indexOf(needle)); // partial snapshot
+      expect(read(state)).toEqual([]);
+      expect(ensureSyntaxTree(state, state.doc.length, 10_000)).not.toBeNull();
+      expect(syntaxTree(state).length).toBeLessThan(state.doc.length); // snapshot/context split
+      const tr = state.update({ changes: { from: 4, insert: "x" } });
+      requireUnstarvedFrontier(tr.state);
+      expect(syntaxTree(tr.state).length).toBe(tr.state.doc.length);
+      expect(touchesStructuralReparse(tr)).toBe(false);
+      const oracle = read(
+        settledState(
+          EditorState.create({
+            doc: tr.state.doc,
+            extensions: [quollMarkdownLanguage(), ...extensions],
+          })
+        )
+      );
+      expect(oracle.length).toBeGreaterThan(0); // non-vacuity: the target exists when fully parsed
+      expect(read(tr.state)).toEqual(oracle);
+      return tr.state;
+    },
+  });
 }
 
 describe("bounded consumers beyond the initial parse frontier", () => {
