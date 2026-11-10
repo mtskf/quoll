@@ -11,8 +11,9 @@
 // selection-independent state: a DecorationSet holding one block decoration per block that
 // HAS a widget, whose range is the block range and whose `spec.structural` is the
 // consumer's POSITION-FREE payload. The set is the only place a block position lives, so a
-// shifted block keeps its payload object and only its range moves — a shift allocates what
-// a plain mapped DecorationSet would (a widget + a decoration), nothing more.
+// shifted block keeps its payload object and only its range moves — a shift allocates one
+// widget + one decoration (the widget only because `spec.widget` still takes `from`), and
+// never re-runs `build`.
 // `decorations` is the selection-filtered view of it: the SAME set object whenever no
 // record meets a selection line. Updates derive exclusively from the previous field value;
 // the field closure holds only the diagnostic latch. EditorState is persistent — two
@@ -25,8 +26,9 @@
 //    containment preconditions live at this one call site; reveal relies on alignment).
 //    fmEnd "moved" → full rebuild; see `frontmatterMoved`.
 // 2. Change range / tree identity / determinacy. On a doc change,
-//    `requiresFullBoundedRebuild` (../structural-guard.ts — the single home of every
-//    full-rebuild reason) → full; otherwise every prev record whose block is untouched and
+//    `requiresFullBoundedRebuild` (../structural-guard.ts — the home of the structural
+//    and frontier full-rebuild reasons; the frontmatter (Contract 1) and tree-identity
+//    reasons live in this file) → full; otherwise every prev record whose block is untouched and
 //    outside the span (changed ranges ±1 line) is reused — the SAME decoration when unmoved,
 //    else rebased through `makeRecord` with the SAME payload — and only the span is
 //    re-walked, each matched node processed at most once per rebuild (`visited`). Reused

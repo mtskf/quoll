@@ -306,13 +306,12 @@ describe("TableBlock readonly contract (type-only compile pin)", () => {
     // `slice` is the widget's eq() key (see the field doc in table-field.ts) — it must stay
     // readonly so a block can never be mutated after construction; the other fields carry
     // the same never-patched-after-build contract (the contract rebases a reused block by
-    // copying it, never by writing into it).
+    // keeping the same payload object and moving only its range, never by writing into it).
     //
     // `Readonly<T>` is homomorphic, so `AssertEqual<T, Readonly<T>>` holds only when EVERY
     // field of T is already readonly — including fields added later. Revert-check: drop
-    // `readonly` from any single field in table-field.ts (or structural-blocks.ts's
-    // `StructuralBlock`) and this assertion resolves to `false`, failing the `= true`
-    // assignment.
+    // `readonly` from any single field of `TableBlock` in table-field.ts and this
+    // assertion resolves to `false`, failing the `= true` assignment.
     const _check: AssertEqual<TableBlock, Readonly<TableBlock>> = true;
     expect(_check).toBe(true);
   });

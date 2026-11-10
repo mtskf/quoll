@@ -152,7 +152,8 @@ const armedRelease = new WeakMap<HTMLElement, AbortController>();
  *  grep cell-point.ts describes finds one claim to audit instead of three.
  *
  *  A cast, not a check, and what it asserts is traceable: `docFrom` reaches the
- *  constructor from `TableBlock.from` (table-field.ts), which is
+ *  constructor from the block's `from` (`BuiltBlock.from`, returned by table-field.ts
+ *  `buildTableBlock`), which is
  *  `state.doc.lineAt(nodeFrom).from` or that value remapped through
  *  `tr.changes.mapPos` (structural-blocks.ts) — CodeMirror document positions, so
  *  there is nothing further to validate, only to name.

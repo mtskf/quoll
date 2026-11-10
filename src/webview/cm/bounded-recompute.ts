@@ -64,8 +64,9 @@ export function intersects(intervals: readonly Interval[], from: number, to: num
 }
 
 /** True iff any range in `selection` overlaps the inclusive `[from, to]` line
- *  interval. `from`/`to` are line-aligned by the block fields' `buildAll`, so
- *  the closed interval catches caret-at-boundary cases half-open would miss.
+ *  interval. `from`/`to` are line-aligned by each structural block's `build`
+ *  (structural-blocks.ts `validRange`), so the closed interval catches
+ *  caret-at-boundary cases half-open would miss.
  *  A `SelectionRange` is structurally `{ from, to }`, so this is just
  *  `intersects` over the selection's ranges. */
 export function lineRangeOverlapsSelection(
