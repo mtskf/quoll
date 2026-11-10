@@ -12,6 +12,7 @@
 import { ensureSyntaxTree, foldable, syntaxTree, syntaxTreeAvailable } from "@codemirror/language";
 import { EditorState, type Extension, type StateField } from "@codemirror/state";
 import { EditorView, type WidgetType } from "@codemirror/view";
+import { type Tree, TreeFragment } from "@lezer/common";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { quollMarkdownLanguage } from "../../src/webview/cm/markdown.js";
 import {
@@ -769,5 +770,107 @@ describe("structural block reveal (toy spec)", () => {
     // A caret move that keeps the same line spans returns the field value itself.
     const same = left.update({ selection: { anchor: 1 } }).state;
     expect(same.field(t.field)).toBe(left.field(t.field));
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// Frontier pin: the upstream leaf-completeness behaviour the contract relies on (no
+// "settled" rule exists because of it). A partial @lezer/markdown tree holds a leaf block
+// whole or not at all; a block the parser has not reached is simply absent. If a future
+// parser cut a leaf block at `stoppedAt`, these rows go red.
+
+const productionParser = quollMarkdownLanguage().language.parser;
+
+function parseTo(doc: string, stop: number | null, fragments: readonly TreeFragment[] = []): Tree {
+  const parse = productionParser.startParse(doc, fragments);
+  if (stop !== null) {
+    parse.stopAt(stop);
+  }
+  for (;;) {
+    const tree = parse.advance();
+    if (tree !== null) {
+      return tree;
+    }
+  }
+}
+
+function nodeRanges(tree: Tree, name: string): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  tree.iterate({
+    enter: (node) => {
+      if (node.name === name) {
+        out.push([node.from, node.to]);
+      }
+    },
+  });
+  return out;
+}
+
+/** For every stop strictly inside the complete target, the partial tree either lacks the
+ *  target or holds it with its complete range. Returns the number of stops checked. */
+function expectLeafWholeOrAbsent(
+  doc: string,
+  name: string,
+  fragments: () => readonly TreeFragment[]
+): number {
+  const complete = nodeRanges(parseTo(doc, null), name);
+  expect(complete).toHaveLength(1); // non-vacuity: the complete target exists
+  const [from, to] = complete[0];
+  let checked = 0;
+  for (let p = from + 1; p < to; p++) {
+    const partial = nodeRanges(parseTo(doc, p, fragments()), name).filter(
+      ([f, t]) => f < to && t > from
+    );
+    if (partial.length > 0) {
+      expect(partial).toEqual([[from, to]]);
+    }
+    checked++;
+  }
+  expect(checked).toBeGreaterThan(0); // non-vacuity: at least one stop inside the target
+  return checked;
+}
+
+function expectIncremental(prev: string, edit: { from: number; insert: string }, name: string) {
+  const next = prev.slice(0, edit.from) + edit.insert + prev.slice(edit.from);
+  const prevTree = parseTo(prev, null);
+  const fragments = () =>
+    TreeFragment.applyChanges(TreeFragment.addTree(prevTree), [
+      { fromA: edit.from, toA: edit.from, fromB: edit.from, toB: edit.from + edit.insert.length },
+    ]);
+  expect(fragments().length).toBeGreaterThan(0); // non-vacuity: reusable fragments supplied
+  expectLeafWholeOrAbsent(next, name, fragments);
+}
+
+const PIN_PROSE = Array.from(
+  { length: 6 },
+  (_, i) => `Paragraph ${i} of plain prose before and after the target block.`
+);
+
+describe("frontier pin: a partial parse holds a leaf block whole or not at all", () => {
+  it("frontier pin table: fresh and incremental parses never cut a Table", () => {
+    const doc = [
+      ...PIN_PROSE.slice(0, 3).flatMap((l) => [l, ""]),
+      "| head a | head b | head c |",
+      "| --- | :-: | --: |",
+      ...Array.from({ length: 8 }, (_, i) => `| r${i}a | r${i}b | r${i}c |`),
+      "",
+      ...PIN_PROSE.slice(3).flatMap((l) => [l, ""]),
+    ].join("\n");
+    expectLeafWholeOrAbsent(doc, "Table", () => []);
+    expectIncremental(doc, { from: 4, insert: "x" }, "Table");
+    expectIncremental(doc, { from: doc.indexOf("r3b") + 1, insert: "x" }, "Table");
+  });
+
+  it("frontier pin image: fresh and incremental parses never cut an Image", () => {
+    const alt = Array.from({ length: 12 }, (_, i) => `word${i}`).join(" ");
+    const doc = [
+      ...PIN_PROSE.slice(0, 3).flatMap((l) => [l, ""]),
+      `![${alt}](https://example.com/picture.png "a title")`,
+      "",
+      ...PIN_PROSE.slice(3).flatMap((l) => [l, ""]),
+    ].join("\n");
+    expectLeafWholeOrAbsent(doc, "Image", () => []);
+    expectIncremental(doc, { from: 4, insert: "x" }, "Image");
+    expectIncremental(doc, { from: doc.indexOf("word5") + 2, insert: "x" }, "Image");
   });
 });
