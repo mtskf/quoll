@@ -2,6 +2,13 @@
 
 All notable changes to Quoll are documented here.
 
+## Unreleased
+
+### Fixed
+
+- Pasting text, tables, or rich content together with files now inserts the text and accepted image links together in one undoable step. Captions survive rejected files, and image links keep their clipboard order even when replies arrive out of order.
+- Undoing while a paste is waiting for images preserves Redo and prevents late image replies from changing the document. Moving the caret while waiting keeps the paste at its original target without moving you back.
+
 ## 0.1.86 — 2026-11-03
 
 ### Added
