@@ -484,9 +484,81 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     pendingCaret = null;
   };
 
+  // A committed local change → edit-sync. Called from `dispatchTransactions`,
+  // NOT an updateListener: CodeMirror commits the state before its DOM phase and
+  // wraps each listener in its own try/catch, so a DOM throw skips the listeners
+  // and a listener throw is logged and swallowed — both leave the committed edit
+  // unscheduled with no sign it never reached the host (SYNC-01). Any throw here
+  // becomes a send failure: the banner says nothing is being saved, and the
+  // next keystroke's local-edit-attempt below is the retry.
+  function noteLocalChange(): void {
+    try {
+      // Send-failure recovery: when the prior Edit could not be sent,
+      // the next user keystroke is their retry intent. Two ops in
+      // STRICT order before scheduling the debounced flush:
+      //   1. discardBuffer — the buffered bytes precede this keystroke; the
+      //      synchronous onReducerCommit → replayIfNeeded chain
+      //      that fires INSIDE the local-edit-attempt dispatch
+      //      below would otherwise post them again and the
+      //      banner would flicker. ORDER IS LOAD-BEARING — twice
+      //      over: that drain runs INSIDE this call, and
+      //      with a buffer in hand it could reach `showHeld`, which
+      //      dispatches a reseed on the view — right after the very
+      //      update that is delivering the user's keystroke. An
+      //      empty buffer keeps the drain out of that step.
+      //   2. dispatch(local-edit-attempt) — clears the gate via
+      //      the reducer; drain sees empty buffer (step 1) → no-op.
+      // Then onLocalChange's debounce reads FRESH getDoc() — which
+      // includes the keystroke that was just committed —
+      // and ships a retry on the next timer tick. The order
+      // regression is pinned by the "synchronous drain does NOT
+      // replay stale buffered bytes" test in editor.test.ts.
+      if (opts.getState().sendFailure !== null) {
+        sync.discardBuffer();
+        opts.dispatch({ type: "local-edit-attempt" });
+      }
+      sync.onLocalChange();
+    } catch (err) {
+      console.error("[quoll] a committed edit could not be scheduled for sending", err);
+      const detail = err instanceof Error ? err.message : String(err);
+      try {
+        opts.dispatch({
+          type: "send-failure",
+          message: `an edit could not be scheduled for sending: ${detail}`,
+        });
+      } catch (dispatchErr) {
+        console.error("[quoll] send-failure dispatch itself failed", dispatchErr);
+      }
+      // AFTER the send-failure dispatch: its drain finds the gate closed, so
+      // the retained bytes are not posted from inside this update. Without the
+      // hold, a same-lineage Document (an earlier Edit's ack) finds nothing
+      // un-acked, reseeds over the unsent change, and its reducer arm clears
+      // the banner — the edit vanishes unseen.
+      try {
+        sync.retainLocalChange();
+      } catch (retainErr) {
+        console.error("[quoll] retaining the unscheduled edit failed", retainErr);
+      }
+    }
+  }
+
   const viewCreateStart = QUOLL_PERF ? perfNow() : 0;
   const view: EditorView = new EditorView({
     parent: mount,
+    // `finally`, so a DOM-phase throw still hands the committed edit to
+    // edit-sync before it propagates to the dispatcher. Doc identity, not
+    // `docChanged`: a throw before the commit leaves the doc as it was, and
+    // there is then nothing to send.
+    dispatchTransactions(trs, v) {
+      const before = v.state.doc;
+      try {
+        v.update(trs);
+      } finally {
+        if (v.state.doc !== before && !seeding) {
+          noteLocalChange();
+        }
+      }
+    },
     state: EditorState.create({
       doc: "",
       extensions: [
@@ -503,7 +575,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // In-editor find & replace over the raw-Markdown text canonical
         // (@codemirror/search core module). `search({ top: true })` mounts the
         // panel at the top (VS Code-like). A replace is an ordinary transaction,
-        // so it rides the normal updateListener → edit-sync → host write-lock →
+        // so it rides the normal dispatchTransactions → edit-sync → host write-lock →
         // verified-write pipeline. In read-only
         // mode CM's replace commands return false and the panel omits its replace
         // UI (both guard on EditorState.readOnly, set when canWrite=false), so
@@ -900,33 +972,6 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         ]),
         EditorView.updateListener.of((u) => {
           const updateStart = QUOLL_PERF ? perfNow() : 0;
-          if (u.docChanged && !seeding) {
-            // Send-failure recovery: when the prior Edit could not be sent,
-            // the next user keystroke is their retry intent. Two ops in
-            // STRICT order before scheduling the debounced flush:
-            //   1. discardBuffer — the buffered bytes precede this keystroke; the
-            //      synchronous onReducerCommit → replayIfNeeded chain
-            //      that fires INSIDE the local-edit-attempt dispatch
-            //      below would otherwise post them again and the
-            //      banner would flicker. ORDER IS LOAD-BEARING — twice
-            //      over: that drain runs INSIDE this update listener, and
-            //      with a buffer in hand it could reach `showHeld`, which
-            //      dispatches a reseed on the view — from within the very
-            //      update that is delivering the user's keystroke. An
-            //      empty buffer keeps the drain out of that step.
-            //   2. dispatch(local-edit-attempt) — clears the gate via
-            //      the reducer; drain sees empty buffer (step 1) → no-op.
-            // Then onLocalChange's debounce reads FRESH getDoc() — which
-            // includes the keystroke that just fired this updateListener —
-            // and ships a retry on the next timer tick. The order
-            // regression is pinned by the "synchronous drain does NOT
-            // replay stale buffered bytes" test above.
-            if (opts.getState().sendFailure !== null) {
-              sync.discardBuffer();
-              opts.dispatch({ type: "local-edit-attempt" });
-            }
-            sync.onLocalChange();
-          }
           // Caret handoff: report the caret on any selection change (debounced —
           // see scheduleCaretReport). Suppressed during host seeds (`seeding` —
           // the reseed restores a selection, not a user move) and during
@@ -1043,8 +1088,8 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         });
       } finally {
         // try/finally: if dispatch throws, seeding must NOT stay stuck
-        // true — a stuck guard permanently suppresses the updateListener's
-        // echo-Edit detection.
+        // true — a stuck guard permanently suppresses noteLocalChange's
+        // hand-off of local edits to edit-sync.
         seeding = false;
       }
     }
@@ -1056,8 +1101,8 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     // that strips a folded heading's OWN marker can orphan its fold entirely (no
     // canonical range left to clamp to). Only meaningful when the reseed actually
     // changed the document (reseedChange !== null). This is a SEPARATE, display-only
-    // dispatch carrying NO `changes` — byte-identical round-trip, and a no-op for the
-    // updateListener's `docChanged`-gated edit-sync — so it behaves exactly like a
+    // dispatch carrying NO `changes` — byte-identical round-trip, and a no-op for
+    // dispatchTransactions' doc-identity-gated edit-sync — so it behaves exactly like a
     // user fold/unfold (hence NOT annotated as a hostDocumentReseed; it rewrites no
     // document bytes). addToHistory.of(false) keeps the clamp out of undo.
     // reconcileReseedFolds self-guards on a complete parse tree. The edited-span
