@@ -29,6 +29,7 @@
 import { syntaxTreeAvailable } from "@codemirror/language";
 import type { EditorState, Transaction } from "@codemirror/state";
 import type { Interval } from "./bounded-recompute.js";
+import { linkReferenceRisk } from "./link-reference-risk.js";
 
 /** SHAPE over-approximation for a structural reparse — the fenced field's proven
  *  `STRUCTURAL` regex (`fenced-code-collapse.ts`, the #63 precedent: fence delimiters,
@@ -48,6 +49,8 @@ import type { Interval } from "./bounded-recompute.js";
  *     finding, cm-structural-guard-exhaustive.test.ts). ⚠️ `STRUCTURAL` has NO `m` flag, so a
  *     line end MUST be spelled `(?:\n|$)` — writing `$` anchors to end-of-STRING and silently
  *     matches almost nothing.
+ *  Link references need more than a changed-line SHAPE alt: labels/destinations/titles
+ *  may reach later lines. The LINK-REFERENCE arm below scans their nonblank prefix.
  *  Every marker alternation's indent bound is `[ \t]*`, NOT CommonMark's top-level `{0,3}`:
  *  a line's legal marker indent is relative to its CONTAINER's content indent, and inside a
  *  nested list `    # h` IS a real heading — a line-in-isolation regex cannot see the
@@ -213,7 +216,7 @@ export function tableRowShapeChanged(oldText: string, newText: string): boolean 
  *  a FULL rebuild so a structural edit never leaves a stranded/missing chevron.
  *
  *  Mirrors the fenced field's guard (`touchesStructural` dual old/new line-expanded slice
- *  scan + `topLevelBoundaryRisk`'s newline/`>`/blank arms), FOLDED into one pass and with
+ *  scan + `topLevelBoundaryRisk`'s newline/`>`/blank/indent/reference arms), with
  *  NO `insideBlock` gate: unlike the fenced field, this guard does not scope a trigger
  *  against a consumer's own reused per-block record, so ANY top-level structural trigger
  *  ⇒ full rebuild regardless of whether a given consumer holds reusable records at all.
@@ -227,6 +230,14 @@ export function tableRowShapeChanged(oldText: string, newText: string): boolean 
  *     `<!DOCTYPE …>` declaration (a same-line, non-newline, non-shape edit that SHAPE and
  *     the other arms all miss); keying on the `>` being ADDED/REMOVED (not merely present)
  *     keeps it narrow (mirrors the fenced field's cycle-5 type-4 rationale).
+ *   - LINK-REFERENCE — a possible container-relative `[` leaf start occurs at/before
+ *     the changed line in its nonblank run on either side. Forming/dissolving a
+ *     definition ends/extends a leaf, changing lazy list continuation and far block
+ *     containment. Unlike a line-start SHAPE
+ *     alt, this covers edits in multi-line labels, destinations and titles (see
+ *     link-reference-risk.ts); NEWLINE-DELTA/BLANK-FLIP/INDENT cover boundary moves.
+ *     Ordinary line-start links, malformed prefixes and code over-trigger, costing
+ *     a full walk.
  *   - TABLE-DELIM — the changed line's TABLE SHAPE flips (`tableRowShapeChanged`). A HYBRID:
  *     PRESENCE on a line that is delimiter-shaped on either side (raw or `[ \t]`-stripped),
  *     because two of the parser's inputs there — `nextLine`'s `line.next` gate and
@@ -311,10 +322,14 @@ export function touchesStructuralReparse(tr: Transaction): boolean {
     }
     // Past this point the change is confined to ONE line on each side — neither the
     // inserted nor the deleted text contains a `\n` (NEWLINE-DELTA returned above) — so
-    // `fromA..toA` and `fromB..toB` each sit inside a single line. Every arm below is a
-    // per-line OLD-vs-NEW comparison and depends on that.
+    // `fromA..toA` and `fromB..toB` each sit inside a single line. The comparisons below
+    // depend on that; LINK-REFERENCE also reads the preceding nonblank lines.
     const oldLine = tr.startState.doc.lineAt(fromA);
     const newLine = tr.state.doc.lineAt(fromB);
+    if (linkReferenceRisk(tr.startState, fromA) || linkReferenceRisk(tr.state, fromB)) {
+      hit = true;
+      return;
+    }
     // TABLE-DELIM — the per-line facts lezer forms a `Table` from (see the mirrors above).
     // Completing or breaking a delimiter row, or changing a header's cell count, makes a
     // `Table` appear or vanish and can CLOSE an enclosing list — re-shaping block structure

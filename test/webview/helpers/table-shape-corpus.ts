@@ -24,6 +24,16 @@ export const SHAPE_CORPUS: readonly string[] = [
   // tables as a lazy continuation of a list item (the class the arm was added for)
   "- item one\n| a | b |\n|---|---|\n| c | d |\n\n- item two\n",
   "- x\n  head | only\n  ---|---\n  body | row\n- y\n",
+  // Link-reference formation/dissolution ends a lazy list continuation far above the quotes.
+  // Both spellings matter: ALPHABET has `:` but not `;`.
+  `- item\n\n  [a]: /url\nlazy\n\n${"  > q\n".repeat(12)}`,
+  `- item\n\n  [a]; /url\nlazy\n\n${"  > q\n".repeat(12)}`,
+  // Continuation edits can form/dissolve multi-line labels, destinations and titles.
+  `- item\n\n  [a\nb]: /url\nlazy\n\n${"  > q\n".repeat(12)}`,
+  `- item\n\n  [a]:\n  /url\nlazy\n\n${"  > q\n".repeat(12)}`,
+  `- item\n\n  [a]: /url\n  "title\nend"\nlazy\n\n${"  > q\n".repeat(12)}`,
+  // Frontmatter is raw Markdown to Lezer: its fence-shaped run has real block identity.
+  "---\ndescription: |\n  ```\n  metadata\n  ```\n---\n",
   // container shapes — indent, blockquote, ordered, nested
   "  | a | b |\n  |---|---|\n  | c | d |\n",
   "   | a | b |\n   |---|---|\n",
