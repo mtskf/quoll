@@ -10,10 +10,22 @@
 // Precondition asserts are separate `expect`s from the behaviour assert, so a harness
 // failure is never read as "behaviour absent".
 import { ensureSyntaxTree, foldable, syntaxTree, syntaxTreeAvailable } from "@codemirror/language";
-import { EditorState, type Extension } from "@codemirror/state";
+import { EditorState, type Extension, type StateField } from "@codemirror/state";
 import { EditorView, type WidgetType } from "@codemirror/view";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { touchesStructuralReparse } from "../../src/webview/cm/structural-guard.js";
+import { quollMarkdownLanguage } from "../../src/webview/cm/markdown.js";
+import {
+  recordAt,
+  type StructuralBlock,
+  type StructuralBlockSpec,
+  type StructuralBlockState,
+  structuralBlockWidgets,
+} from "../../src/webview/cm/structural-blocks.js";
+import {
+  requiresFullBoundedRebuild,
+  touchesStructuralReparse,
+} from "../../src/webview/cm/structural-guard.js";
+import { QuollWidget } from "../../src/webview/cm/widget-base.js";
 import { settledState } from "./helpers/settled-state.js";
 import { settledMount } from "./helpers/settled-view.js";
 
@@ -333,5 +345,234 @@ describe("structural blocks beyond the initial parse frontier", () => {
     expect(widgetSlots(tr.state, ImageBlockWidget).map((s) => s.from)).toEqual([
       text.indexOf("![alt]"),
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// Toy spec: the contract arms exercised directly through `structuralBlockWidgets`.
+// A toy block is a fenced code block snapped to whole lines.
+
+interface ToyBlock extends StructuralBlock {
+  readonly text: string;
+}
+
+class ToyWidget extends QuollWidget {
+  readonly widgetName = "ToyBlockWidget";
+  constructor(
+    readonly at: number,
+    readonly text: string
+  ) {
+    super();
+  }
+  protected render(): HTMLElement {
+    const el = document.createElement("div");
+    el.textContent = this.text;
+    return el;
+  }
+  protected sameAs(other: QuollWidget): boolean {
+    return other instanceof ToyWidget && other.at === this.at && other.text === this.text;
+  }
+}
+
+interface ToyOptions {
+  /** Runs after the default block is computed; may throw, transform or veto it. */
+  build?: (block: ToyBlock) => ToyBlock | null;
+  /** Runs before the widget is made; may throw. */
+  widget?: (block: ToyBlock) => void;
+}
+
+interface Toy {
+  field: StateField<StructuralBlockState<ToyBlock>>;
+  /** `block.from` of every hook call, in call order. */
+  calls: { build: number[]; widget: number[] };
+}
+
+function toy(opts: ToyOptions = {}): Toy {
+  const calls = { build: [] as number[], widget: [] as number[] };
+  const spec: StructuralBlockSpec<ToyBlock> = {
+    name: "toy",
+    node: "FencedCode",
+    build(state, node) {
+      const from = state.doc.lineAt(node.from).from;
+      const to = state.doc.lineAt(node.to).to;
+      calls.build.push(from);
+      const block: ToyBlock = { from, to, text: state.sliceDoc(from, to) };
+      return opts.build ? opts.build(block) : block;
+    },
+    widget(block) {
+      calls.widget.push(block.from);
+      opts.widget?.(block);
+      return new ToyWidget(block.from, block.text);
+    },
+  };
+  return { field: structuralBlockWidgets(spec), calls };
+}
+
+function toyState(doc: string, t: Toy, extra: Extension[] = []): EditorState {
+  const state = settledState(
+    EditorState.create({ doc, extensions: [quollMarkdownLanguage(), t.field, ...extra] })
+  );
+  t.calls.build.length = 0;
+  t.calls.widget.length = 0;
+  return state;
+}
+
+function ranges(state: EditorState, t: Toy): Array<[number, number]> {
+  return state.field(t.field).records.map((r) => [r.block.from, r.block.to]);
+}
+
+/** The FencedCode node set of a fully-parsed state, line-snapped, in order. */
+function fencedRanges(state: EditorState): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  syntaxTree(state).iterate({
+    enter: (node) => {
+      if (node.name !== "FencedCode") {
+        return undefined;
+      }
+      out.push([state.doc.lineAt(node.from).from, state.doc.lineAt(node.to).to]);
+      return false;
+    },
+  });
+  return out;
+}
+
+function fence(body: string[]): string[] {
+  return ["```", ...body, "```"];
+}
+
+const TOY_DOC = [
+  "Intro paragraph.",
+  "",
+  ...fence(["alpha"]),
+  "",
+  "Middle paragraph.",
+  "",
+  ...fence(["beta BOOM"]),
+  "",
+  ...fence(["gamma"]),
+  "",
+  "Tail paragraph.",
+  "",
+  "Last line.",
+  "",
+].join("\n");
+
+describe("structural block contract (toy spec)", () => {
+  it("toy full: records are the spec's node set in order, and recordAt finds them", () => {
+    const t = toy();
+    const state = toyState(TOY_DOC, t);
+    const expected = fencedRanges(state);
+    expect(expected).toHaveLength(3); // precondition
+    expect(ranges(state, t)).toEqual(expected);
+    const records = state.field(t.field).records;
+    for (const r of records) {
+      expect(recordAt(records, r.block.from)).toBe(r);
+    }
+    expect(recordAt(records, 0)).toBeUndefined();
+    expect(recordAt(records, records[0].block.from + 1)).toBeUndefined();
+    expect(recordAt(records, records[2].block.to + 1)).toBeUndefined();
+    expect(recordAt([], 0)).toBeUndefined();
+    expect(widgetSlots(state, ToyWidget).map((s) => s.from)).toEqual(expected.map((e) => e[0]));
+  });
+
+  it("toy build throws: that block stays raw, its siblings render, one log per arm", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const t = toy({
+      build: (b) => {
+        if (b.text.includes("BOOM")) {
+          throw new Error("toy build");
+        }
+        return b;
+      },
+    });
+    const state = toyState(TOY_DOC, t);
+    const all = fencedRanges(state);
+    const boom = all[1];
+    expect(ranges(state, t)).toEqual([all[0], all[2]]);
+    expect(widgetSlots(state, ToyWidget).map((s) => s.from)).toEqual([all[0][0], all[2][0]]);
+    // A second failing build (full rebuild after a structural edit) logs nothing more.
+    const next = state.update({ changes: { from: 0, insert: "\n" } }).state;
+    expect(ranges(next, t).map((r) => r[0])).not.toContain(boom[0] + 1);
+    expect(hookLogCount(spy)).toBe(1);
+    expect(spy.mock.calls.find((c) => String(c[0]).startsWith(HOOK_LOG))?.[1]).toEqual({
+      name: "toy",
+      arm: "build",
+      errKind: "object",
+    });
+  });
+
+  it("toy widget throws: that block stays raw, its siblings render, one log per arm", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const t = toy({
+      widget: (b) => {
+        if (b.text.includes("BOOM")) {
+          throw new Error("toy widget");
+        }
+      },
+    });
+    const state = toyState(TOY_DOC, t);
+    const all = fencedRanges(state);
+    expect(ranges(state, t)).toEqual([all[0], all[2]]);
+    expect(widgetSlots(state, ToyWidget).map((s) => s.from)).toEqual([all[0][0], all[2][0]]);
+    state.update({ changes: { from: 0, insert: "\n" } });
+    expect(hookLogCount(spy)).toBe(1);
+    expect(spy.mock.calls.find((c) => String(c[0]).startsWith(HOOK_LOG))?.[1]).toEqual({
+      name: "toy",
+      arm: "widget",
+      errKind: "object",
+    });
+  });
+
+  it("toy ownership: frontmatter owns its blocks, invalid ranges are dropped, a body shift stays bounded", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const t = toy({
+      build: (b) => {
+        if (b.text.includes("NARROW")) {
+          return { ...b, from: b.from + 4 }; // does not contain its node
+        }
+        if (b.text.includes("EMPTY")) {
+          return { ...b, to: b.from }; // from >= to
+        }
+        return b;
+      },
+    });
+    const doc = [
+      "---",
+      "title: x",
+      "note: y",
+      ...fence(["inside"]),
+      "---",
+      "",
+      ...fence(["NARROW"]),
+      "",
+      ...fence(["EMPTY"]),
+      "",
+      ...fence(["after"]),
+      "",
+    ].join("\n");
+    const state = toyState(doc, t);
+    const after = doc.indexOf("```\nafter");
+    expect(ranges(state, t).map((r) => r[0])).toEqual([after]);
+    expect(hookLogCount(spy)).toBe(1);
+    expect(spy.mock.calls.find((c) => String(c[0]).startsWith(HOOK_LOG))?.[1]).toEqual({
+      name: "toy",
+      arm: "build",
+      errKind: "invalid-range",
+    });
+
+    // A rigid shift inside the frontmatter body: bounded, the block is rebased, not rebuilt.
+    const shiftTr = state.update({ changes: { from: doc.indexOf("x\n"), insert: "z" } });
+    expect(requiresFullBoundedRebuild(shiftTr)).toBe(false); // precondition
+    expect(ranges(shiftTr.state, t).map((r) => r[0])).toEqual([after + 1]);
+    expect(t.calls.build).not.toContain(after + 1);
+
+    // Deleting the closer dissolves the frontmatter: the inner block appears.
+    const closer = doc.indexOf("---\n\n");
+    const open = state.update({ changes: { from: closer, to: closer + 4 } }).state;
+    const inner = open.doc.toString().indexOf("```\ninside");
+    expect(ranges(open, t).map((r) => r[0])).toContain(inner);
+    // Re-adding it takes the block away again.
+    const closed = open.update({ changes: { from: closer, insert: "---\n" } }).state;
+    expect(ranges(closed, t).map((r) => r[0])).toEqual([after]);
   });
 });
