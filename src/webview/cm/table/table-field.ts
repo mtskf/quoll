@@ -7,8 +7,9 @@
 // A block is the node's whole-line range (`block: true` widgets must cover complete lines;
 // Lezer's Table range usually IS line-aligned, but doc-final-no-newline edges may not be),
 // plus a POSITION-FREE payload carrying everything the widget needs, stored as offsets from
-// the block start so a shifted block keeps the same payload object: `nodeOffset` (the Lezer node start, the base for per-cell offsets),
-// the per-node LF source slice (the widget's eq() key) and the parse. A `Table` node
+// the block start so a shifted block keeps the same payload object: `nodeOffset` (the Lezer
+// node start, the base for per-cell offsets), the per-node LF source slice (the widget's
+// eq() key) and the parse. A `Table` node
 // `parseTable` rejects — a blockquote-nested table whose continuation lines carry `>`
 // markers, or a cell-count mismatch — yields no block and stays raw source.
 //

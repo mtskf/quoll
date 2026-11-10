@@ -82,8 +82,11 @@ function firstContentChild(node: SyntaxNode): SyntaxNode | null {
 // Performance gate's fold row (.claude/docs/PERF.md), not by this argument.
 function tableEmitsBlockWidget(state: EditorState, from: number): boolean {
   const records = state.field(tableBlockField, false)?.records;
-  const r = records && recordAt(records, state.doc.lineAt(from).from);
-  return r !== undefined && r.from + r.block.nodeOffset === from;
+  if (records === undefined) {
+    return false;
+  }
+  const record = recordAt(records, state.doc.lineAt(from).from);
+  return record !== undefined && record.from + record.block.nodeOffset === from;
 }
 
 // True when `node` sits anywhere inside a Blockquote (a callout is a Blockquote
@@ -110,12 +113,12 @@ function insideBlockquote(node: SyntaxNode): boolean {
 // child is a GFM Table that starts on the marker line AND actually emits a block
 // widget. In that tight shape (`- | a | b |\n  | - | - |\n…`) the table's block
 // widget is line-snapped to the marker-line start (the table spec in
-// table/table-field.ts snaps the block `from` = lineAt(Table.from).from), so it SWALLOWS the `-`/`1.` marker and the
-// ListItem chevron would visually land on the table — a meaningless affordance.
-// Returning null suppresses that lone chevron. The emit guard is load-bearing: a
-// marker-line table that emits NO widget (inside leading frontmatter, a slice
-// parseTable rejects, or a build that threw) renders as raw source, so its list fold must be kept. An
-// item inside a blockquote never folds at all, whatever its body — that is the
+// table/table-field.ts snaps the block `from` = lineAt(Table.from).from), so it
+// SWALLOWS the `-`/`1.` marker and the ListItem chevron would visually land on the
+// table — a meaningless affordance. Returning null suppresses that lone chevron.
+// The emit guard is load-bearing: a marker-line table that emits NO widget (inside
+// leading frontmatter, a slice parseTable rejects, or a build that threw) renders
+// as raw source, so its list fold must be kept. An item inside a blockquote never folds at all, whatever its body — that is the
 // gate in `nonFoldableBlocks`, not a check here. Every other genuine list fold (a
 // table on a continuation line, a plain multi-line body) keeps the default range.
 // lang-markdown folds ListItem via its broad `type => …` Block foldNodeProp, and

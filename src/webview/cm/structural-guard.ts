@@ -263,7 +263,8 @@ export function tableRowShapeChanged(oldText: string, newText: string): boolean 
  *  PRESENCE test may be: pinning both sides of a comparison to `true` erases the flip it
  *  exists to detect, turning a cheap false positive into a missed rebuild.
  *  Performance numbers and consumer-specific costs: .claude/docs/PERF.md.
- *  Exported so the negative-assertion tests can call it directly (pinning that plain prose typing stays on the bounded hot path).
+ *  Exported so the negative-assertion tests can call it directly (pinning that plain
+ *  prose typing stays on the bounded hot path).
  *  Memoised per Transaction so every consumer shares one dual-slice scan per
  *  dispatch (one scan per dispatch under CM 6.6.x). */
 const structuralMemo = new WeakMap<Transaction, boolean>();
@@ -314,7 +315,7 @@ export function touchesStructuralReparse(tr: Transaction): boolean {
     // `Table` appear or vanish and can CLOSE an enclosing list — re-shaping block structure
     // OUTSIDE the changed run, which SHAPE and the other arms all miss. Keying on the DELTA
     // of pipe presence and cell count, rather than on the mere PRESENCE of a `|` on the
-    // line, is what keeps typing inside a table cell — the table spec's (`tableBlockField`) own primary
+    // line, is what keeps typing inside a table cell — `tableBlockField`'s own primary
     // scenario — on the bounded path; the delimiter ROW itself stays on presence.
     if (tableRowShapeChanged(oldLine.text, newLine.text)) {
       hit = true;
