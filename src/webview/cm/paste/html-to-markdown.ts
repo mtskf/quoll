@@ -51,11 +51,11 @@
 //       `blankAfterInvisible(skipTagsText(cell))` check (td/th/caption), NOT from
 //       `hasVisibleContent(el)` — whose `<hr>` clause would call an `<hr>`-only spacer
 //       cell rich. The one branch where "emit this" and "this is rich" differ.
-//     · `<strong>`/`<b>`/`<em>`/`<i>` set their flag in `emphasize`, which consults
-//       `blankAfterInvisible` on the emitted `inner` — HARD_BREAK folded to a space
-//       first, so neither a lone-joiner nor a joiner-plus-`<br>` span is bolded — but
-//       never calls `hasVisibleContent(el)`. `wrapEmphasis` additionally hoists
-//       spaces/`<br>` edges out of the markers.
+//     · `<strong>`/`<b>`/`<em>`/`<i>` only set a style mask on the atoms
+//       `collectInline` gathers; `serializeInlineRuns` (inline-runs.ts) sets the flag
+//       when it actually emits a marker. A visually empty unit — whitespace, a break,
+//       a lone joiner — is neutral there and never opens one, so neither a lone-joiner
+//       nor a joiner-plus-`<br>` span is bolded; `hasVisibleContent(el)` is not called.
 //    A block pushed with `syntax: false` — a paragraph, or the blocks a nested
 //    walk already recorded for itself — needs none of this: it cannot flip the
 //    flag, so its own "did anything render" test cannot defeat the caller's defer.
@@ -70,6 +70,7 @@ import { SKIP_TAGS, tableElementToGfm } from "./html-table-to-gfm.js";
 import {
   BOLD,
   CapExceeded,
+  HARD_BREAK,
   type InlineAtom,
   ITALIC,
   type StyleMask,
@@ -201,7 +202,7 @@ function collapseWs(text: string): string {
  *  as blank here so an otherwise-empty container holding only one cannot flip
  *  `emittedMarkdownSyntax`. THE single answer to "is this text visually empty" — routed
  *  through by every emptiness decision in this module: `hasVisibleContent`, the table
- *  per-cell and blockquote/list wrapper own-text richness checks, `emphasize`'s gate,
+ *  per-cell and blockquote/list wrapper own-text richness checks,
  *  the CODE/A/PRE/heading/blockquote/list-item residue guards, and the inline-run
  *  blank-text / non-`<li>` list-child checks — so none grows its own rule. */
 function blankAfterInvisible(text: string): boolean {
@@ -236,7 +237,7 @@ function blankAfterInvisible(text: string): boolean {
  *  Four callers: the `hasVisibleContent` emptiness predicate and the table PER-CELL
  *  richness check both feed it to `blankAfterInvisible` (so `<style>`/`<textarea>` text
  *  no reader sees never counts as visible), and the two branches that emit a body from
- *  `textContent` rather than `serializeInline` — `<pre>` (verbatim) and inline `<code>`
+ *  `textContent` rather than `collectInline` — `<pre>` (verbatim) and inline `<code>`
  *  (then `collapseWs`'d) — read through it so SKIP_TAGS text cannot leak into a fenced /
  *  inline-code body. */
 function skipTagsText(el: Element): string {
@@ -295,79 +296,6 @@ function inlineCode(text: string): string {
   return `${fence}${pad}${text}${pad}${fence}`;
 }
 
-/** Wrap `inner` in an emphasis `marker` (`**`/`*`) with edge whitespace HOISTED
- *  outside the markers: CommonMark flanking rules reject a delimiter run adjacent
- *  to whitespace, so `<strong>foo </strong>` must emit `**foo** ` — never
- *  `**foo **`, whose closing run is space-preceded and shows as literal `**`. The
- *  hoisted edge run is spaces (collapsed to single spaces by `collapseWs`) AND
- *  `<br>` hard-break tokens (`\` + `\n`), each taken as ONE unit so its escaping
- *  backslash is never separated from its newline: a whitespace-class match (`\s`)
- *  would consume only the `\n` and strand the `\` at the boundary, emitting a
- *  marker-escaping `**foo\**`. When the whole span is hoistable (spaces/`<br>`s
- *  only) the core is empty and `inner` is returned unwrapped — a `<br>`-only span
- *  like `<strong><br></strong>` yields a bare hard break, not an empty `**\\\n**`.
- *  Done with two linear index scans, NOT a regex: an `^edge*? core edge*$` pattern
- *  backtracks O(n²) on a long `<br>` run fenced by non-hoistable text on both
- *  sides. Wrapping is O(1)/uncounted — `inner`'s leaves were already counted. */
-function wrapEmphasis(inner: string, marker: string): string {
-  let start = 0;
-  while (start < inner.length) {
-    if (inner[start] === " ") {
-      start += 1;
-    } else if (inner[start] === "\\" && inner[start + 1] === "\n") {
-      start += 2; // a `<br>` hard-break token — hoisted whole
-    } else {
-      break;
-    }
-  }
-  let end = inner.length;
-  while (end > start) {
-    if (inner[end - 1] === " ") {
-      end -= 1;
-    } else if (inner[end - 1] === "\n" && inner[end - 2] === "\\") {
-      end -= 2;
-    } else {
-      break;
-    }
-  }
-  if (start >= end) {
-    return inner; // all-whitespace / `<br>`-only: nothing to wrap
-  }
-  return `${inner.slice(0, start)}${marker}${inner.slice(start, end)}${marker}${inner.slice(end)}`;
-}
-
-/** `wrapEmphasis`, recording on `ctx` whether markers were actually emitted.
- *  `wrapEmphasis` returns its input unchanged when the span is all-whitespace /
- *  `<br>`-only, and that degenerate case emits no syntax — so compare rather than
- *  assume. Wrapping and recording are one call so they cannot be given different
- *  inputs.
- *
- *  This is where emphasis consults the emptiness rule: emphasis does NOT route
- *  through `hasVisibleContent(el)`, but a VISUALLY EMPTY span must still not become
- *  `**…**` and flip the flag. `wrapEmphasis` already returns `inner` for a
- *  whitespace-/`<br>`-only span, but the emit path preserves joiners, so a lone-joiner
- *  span (`<strong>&#8205;</strong>`) — or a joiner-plus-`<br>` span, once the HARD_BREAK
- *  token is folded to a space (see the body) — reaches here with non-hoistable `inner`.
- *  `blankAfterInvisible` (the same full-strip predicate the containers use) rejects it,
- *  returning `inner` transparently — like a `<span>` — with no markers and no flag,
- *  while a joiner WITHIN visible text (`<strong>👨‍👩‍👧</strong>`) still bolds. */
-function emphasize(ctx: Ctx, inner: string, marker: string): string {
-  // Fold HARD_BREAK tokens to a space before the emptiness gate, the same
-  // whole-token fold the `<a>` label uses. A `<br>` contributes no bold content
-  // (like whitespace / the zero-width class), but its token's escaping `\` survives
-  // `blankAfterInvisible`'s full-strip + trim — so a span of only a joiner + `<br>`
-  // (`<strong>&#8205;<br></strong>`) would otherwise pass the gate and wrap the
-  // residual joiner into `**‍**`, flipping the flag.
-  if (blankAfterInvisible(inner.split(HARD_BREAK).join(" "))) {
-    return inner;
-  }
-  const wrapped = wrapEmphasis(inner, marker);
-  if (wrapped !== inner) {
-    ctx.emittedMarkdownSyntax = true;
-  }
-  return wrapped;
-}
-
 /** The inline-style declarations that cancel the emphasis a tag implies, keyed by
  *  the property each tag is about. `400` is the numeric spelling of `normal`;
  *  `font-style` has no numeric form, so it lists only the keyword. Deliberately NOT
@@ -399,148 +327,29 @@ function styleCancelsEmphasis(el: Element, prop: keyof typeof EMPHASIS_CANCELLED
   return EMPHASIS_CANCELLED_BY[prop].test(el.getAttribute("style") ?? "");
 }
 
-/** The hard-break token `serializeInline` emits for `<br>`: a backslash
- *  immediately followed by a newline. Declared here, above its emitting site, so
- *  that site, the `trimSegmentEdges` scan and the `<a>` label fold all read the
- *  same token and cannot drift apart.
- *
- *  ⚠️ ONE place matches the same two characters WITHOUT referencing this constant:
- *  `wrapEmphasis`, declared above it, whose edge-hoisting scans compare `"\\"` and
- *  `"\n"` index by index. Change the token here and you must change those scans
- *  too — the anti-drift guarantee this declaration site offers covers its three
- *  referencing sites only, by convention, not by anything the compiler enforces.
- *
- *  A `\n` in an inline fragment ALWAYS comes from a `<br>` and always carries its
- *  own leading backslash, so matching the two-character token is unambiguous.
- *  That holds because EVERY text node on the inline path goes through
- *  `collapseWs`, which turns each whitespace run into a single space. Note the
- *  reason is `collapseWs`, NOT "`<pre>` is handled elsewhere": only DIRECT
- *  children are block-tested, so a `<pre>` under an inline ancestor
- *  (`<em><span><pre>a\nb</pre></span></em>`) does reach `serializeInline` — its
- *  body simply arrives as a text node and loses its newlines like any other. Do
- *  not skip `collapseWs` anywhere on the inline path on the assumption that
- *  `<pre>` cannot appear there. */
-const HARD_BREAK = "\\\n";
-
-/** Serialise inline content (children of a block) to a Markdown fragment. Text is
- *  whitespace-collapsed + escaped; recognised inline elements wrap their
- *  serialised children; unknown inline elements recurse transparently. `depth`
- *  guards against call-stack exhaustion on pathological nesting. */
-function serializeInline(node: Node, depth: number, ctx: Ctx): string {
-  if (depth > MAX_DEPTH) {
-    throw new CapExceeded();
-  }
-  if (node.nodeType === TEXT_NODE) {
-    return count(ctx, escapeInline(collapseWs(node.textContent ?? "")));
-  }
-  if (node.nodeType !== ELEMENT_NODE) {
-    return "";
-  }
-  const el = node as Element;
-  const tag = el.tagName;
-  if (SKIP_TAGS.has(tag)) {
-    return "";
-  }
-  bump(ctx);
-  if (tag === "BR") {
-    return count(ctx, HARD_BREAK); // hard break (backslash form survives trimming)
-  }
-  if (tag === "CODE") {
-    // Inline <code> (a <code> child of <pre> is handled by the block path). An
-    // EMPTY one renders as the two-backtick `` — non-empty output from a container
-    // holding nothing. Body is read through `skipTagsText` so a `<style>`/`<textarea>`
-    // beside the code contributes nothing, then `collapseWs` (emit path) collapses it.
-    const body = collapseWs(skipTagsText(el));
-    // `blankAfterInvisible(body)` is the SUFFICIENT / PRIMARY gate; `!hasVisibleContent(el)`
-    // is a REDUNDANT twin — a proven subset, not empirically load-bearing — KEPT for
-    // CODE↔A consistency + defense-in-depth (should collapseWs ever leave a visible char in
-    // a body its source counted blank).
-    //  - `blankAfterInvisible(body)` (the residue) rejects everything that must return
-    //    "": a lone-joiner `<code>&#8205;</code>` (the emit-path collapseWs preserves
-    //    joiners, so `body` keeps it — full-strip, not `.trim()`, is what rejects it) AND
-    //    the `<hr>`-clause case (`<code> <hr> </code>` / `<code><hr>&#8205;</code>`) where
-    //    the predicate passes on its `<hr>` clause but the body has nothing to fence.
-    //  - `!hasVisibleContent(el)` cannot fire where the residue does not: whenever it is
-    //    true (blankAfterInvisible(skipTagsText) AND no `<hr>`), `body` is a collapseWs
-    //    subset of that same text, so blankAfterInvisible(body) already holds. A clean
-    //    subset proof — the twin can never be the sole gate that fires.
-    if (!hasVisibleContent(el) || blankAfterInvisible(body)) {
-      return "";
-    }
-    ctx.emittedMarkdownSyntax = true;
-    return count(ctx, inlineCode(body));
-  }
-  const inner = serializeChildrenInline(el, depth + 1, ctx); // leaves counted within
-  switch (tag) {
-    // A tag whose own style cancels it is transparent, exactly like an unknown
-    // inline element: no markers, no flag. See styleCancelsEmphasis.
-    case "STRONG":
-    case "B":
-      return styleCancelsEmphasis(el, "font-weight") ? inner : emphasize(ctx, inner, "**");
-    case "EM":
-    case "I":
-      return styleCancelsEmphasis(el, "font-style") ? inner : emphasize(ctx, inner, "*");
-    case "A": {
-      const href = el.getAttribute("href") ?? "";
-      // Link text on one line (a newline in the label would break the link). Fold
-      // the whole HARD_BREAK token, not just its `\n`: dropping the newline alone
-      // strands the escaping backslash mid-label (`[a\ b](…)`), and a backslash
-      // before a space is not a CommonMark escape — it renders literally. Same
-      // token-as-one-unit rule as trimSegmentEdges and wrapEmphasis. The second
-      // sweep has nothing left to find while the HARD_BREAK docblock's invariant
-      // holds (every inline `\n` arrives as part of the token); it stays as the
-      // unconditional guarantee that no newline can reach a link label.
-      const label = inner.split(HARD_BREAK).join(" ").replace(/\n/g, " ");
-      // Only the wrapping syntax is uncounted (O(1)); the label leaves are counted.
-      if (!isAllowedUrl(href)) {
-        return label; // rejected destination → bare label, no syntax emitted
-      }
-      // An EMPTY <a> renders as `[](url)` — a link the reader cannot see or click,
-      // and non-empty output from a container holding nothing. The commonest source
-      // is a marketing mail's tracking pixel (`<a href="…"><img src="p.gif"></a>`),
-      // which rides along beside otherwise plain text. Same treatment as the other
-      // empty containers: label only (here, the empty string), no syntax flag.
-      //
-      // `blankAfterInvisible(label)` is the SUFFICIENT / PRIMARY gate; `!hasVisibleContent(el)`
-      // is a REDUNDANT twin — KEPT for CODE↔A consistency + defense-in-depth, NOT empirically
-      // load-bearing.
-      //  - `blankAfterInvisible(label)` (the residue) rejects a link with nothing to show:
-      //    an empty `<a>` / tracking pixel (`<a href><img src="p.gif"></a>` → label ""), a
-      //    lone-joiner or whitespace-only label the emit path preserved, and the
-      //    `<hr>`-clause case (`<a href> <hr> </a>` / `<a href><hr>&#8205;</a>`). The SAME
-      //    full-strip rule, not `.trim()` — a joiner label that `.trim()` would leave
-      //    non-empty reads as blank here.
-      //  - `!hasVisibleContent(el)` cannot fire where the residue does not: `label` is a
-      //    different derivation (serializeChildrenInline, not `skipTagsText`), so there is
-      //    no byte-level subset proof as there is for CODE — but by case analysis, whenever
-      //    the twin is true (skipTagsText blank AND no `<hr>`), every inline leaf under it
-      //    serialises from that same blank source to DI/whitespace-only bytes, so the label
-      //    is blank too and the residue already holds. Belt-and-braces on the source, never
-      //    the sole gate that fires.
-      if (!hasVisibleContent(el) || blankAfterInvisible(label)) {
-        return label;
-      }
-      ctx.emittedMarkdownSyntax = true;
-      return `[${label}](${markdownDestination(href)})`;
-    }
-    default:
-      return inner; // span/font/unknown inline → transparent
-  }
-}
-
-function serializeChildrenInline(el: Element, depth: number, ctx: Ctx): string {
-  let out = "";
-  for (const child of Array.from(el.childNodes)) {
-    out += serializeInline(child, depth, ctx);
-  }
-  return out;
-}
+// The hard-break token (`HARD_BREAK`, backslash + newline) is exported by
+// inline-runs.ts, the one place that emits it: `collectInline` turns a `<br>` into a
+// break atom (counted as the token's length), and `serializeInlineRuns` renders it.
+// Edge trimming and the link-label fold happen on atoms there — a break unit at a
+// run edge is dropped, one in a label becomes a space — so no string scan here has
+// to keep the token's `\` and `\n` together. The remaining string-level readers
+// (heading, list-item and blockquote residue guards) fold the whole token.
+//
+// A `\n` in an inline fragment ALWAYS comes from a `<br>`, because EVERY text node
+// on the inline path goes through `collapseWs`, which turns each whitespace run into
+// a single space. Note the reason is `collapseWs`, NOT "`<pre>` is handled
+// elsewhere": only DIRECT children are block-tested, so a `<pre>` under an inline
+// ancestor (`<em><span><pre>a\nb</pre></span></em>`) does reach `collectInline` —
+// its body simply arrives as a text node and loses its newlines like any other. Do
+// not skip `collapseWs` anywhere on the inline path on the assumption that `<pre>`
+// cannot appear there.
 
 /** Collect inline content (children of a block) as styled atoms for
  *  `serializeInlineRuns`, appending to `out`. `style` is the emphasis inherited
- *  from the ancestors. The walk mirrors `serializeInline`: same depth / node caps,
- *  same SKIP_TAGS, same CODE and A emptiness gates, and the same leaf counting —
- *  except that a text leaf counts its collapsed UNESCAPED text (escaping happens
+ *  from the ancestors. Text is whitespace-collapsed (never escaped here), and
+ *  unknown inline elements recurse transparently. `depth` guards against
+ *  call-stack exhaustion on pathological nesting. Leaves are counted where they
+ *  are read — a text leaf counts its collapsed UNESCAPED text (escaping happens
  *  later, in the serializer; it at most doubles the text, and the final output
  *  length check stays authoritative). Emphasis tags only change the style mask:
  *  markers, their placement and the visually-empty case are the serializer's job. */
@@ -576,7 +385,23 @@ export function collectInline(
     return;
   }
   if (tag === "CODE") {
-    // Same gates as serializeInline's CODE arm (see the reasoning there).
+    // Inline <code> (a <code> child of <pre> is handled by the block path). An
+    // EMPTY one renders as the two-backtick `` — non-empty output from a container
+    // holding nothing. Body is read through `skipTagsText` so a `<style>`/`<textarea>`
+    // beside the code contributes nothing, then `collapseWs` (emit path) collapses it.
+    // `blankAfterInvisible(body)` is the SUFFICIENT / PRIMARY gate; `!hasVisibleContent(el)`
+    // is a REDUNDANT twin — a proven subset, not empirically load-bearing — KEPT for
+    // CODE↔A consistency + defense-in-depth (should collapseWs ever leave a visible char in
+    // a body its source counted blank).
+    //  - `blankAfterInvisible(body)` (the residue) rejects everything that must emit
+    //    nothing: a lone-joiner `<code>&#8205;</code>` (the emit-path collapseWs preserves
+    //    joiners, so `body` keeps it — full-strip, not `.trim()`, is what rejects it) AND
+    //    the `<hr>`-clause case (`<code> <hr> </code>` / `<code><hr>&#8205;</code>`) where
+    //    the predicate passes on its `<hr>` clause but the body has nothing to fence.
+    //  - `!hasVisibleContent(el)` cannot fire where the residue does not: whenever it is
+    //    true (blankAfterInvisible(skipTagsText) AND no `<hr>`), `body` is a collapseWs
+    //    subset of that same text, so blankAfterInvisible(body) already holds. A clean
+    //    subset proof — the twin can never be the sole gate that fires.
     const body = collapseWs(skipTagsText(el));
     if (!hasVisibleContent(el) || blankAfterInvisible(body)) {
       return;
@@ -607,8 +432,27 @@ export function collectInline(
       const label: InlineAtom[] = [];
       children(0, label);
       const href = el.getAttribute("href") ?? "";
-      // Same gates as serializeInline's A arm (see the reasoning there): a
-      // rejected destination, or a label with nothing to show, inlines the label.
+      // A rejected destination inlines the bare label (no syntax emitted), with the
+      // outer style OR-ed in.
+      //
+      // So does an EMPTY <a>: `[](url)` is a link the reader cannot see or click,
+      // and non-empty output from a container holding nothing. The commonest source
+      // is a marketing mail's tracking pixel (`<a href="…"><img src="p.gif"></a>`),
+      // which rides along beside otherwise plain text. Same treatment as the other
+      // empty containers: label only (here, nothing), no syntax flag.
+      //
+      // `blankAfterInvisible(labelText(label))` is the SUFFICIENT / PRIMARY gate;
+      // `!hasVisibleContent(el)` is a REDUNDANT twin — KEPT for CODE↔A consistency +
+      // defense-in-depth, NOT empirically load-bearing.
+      //  - The residue rejects a link with nothing to show: an empty `<a>` / tracking
+      //    pixel, a lone-joiner or whitespace-only label the emit path preserved, and
+      //    the `<hr>`-clause case (`<a href> <hr> </a>` / `<a href><hr>&#8205;</a>`). The
+      //    SAME full-strip rule, not `.trim()`.
+      //  - `!hasVisibleContent(el)` cannot fire where the residue does not: by case
+      //    analysis, whenever the twin is true (skipTagsText blank AND no `<hr>`), every
+      //    inline leaf under it collects from that same blank source to DI/whitespace-only
+      //    text, so the label is blank too. Belt-and-braces on the source, never the sole
+      //    gate that fires.
       if (!isAllowedUrl(href) || !hasVisibleContent(el) || blankAfterInvisible(labelText(label))) {
         for (const atom of label) {
           out.push({ ...atom, style: (atom.style | style) as StyleMask });
@@ -1032,40 +876,6 @@ function contributesNothing(node: Node): boolean {
   return SKIP_TAGS.has((node as Element).tagName);
 }
 
-/** Strip hard breaks and spaces from BOTH ends of a segment's serialised form,
- *  taking the `HARD_BREAK` token as one unit. A plain `trim()` removes the
- *  token's `\n` first and strands its `\`, so a segment that merely starts or
- *  ends with a `<br>` — the trailing break browsers append to close the last line
- *  of a contenteditable block, `<p>a<br></p>` — rendered a visible backslash.
- *  Interior breaks are untouched: a lone `<br>` between content stays a hard
- *  break. Two linear index scans, matching `wrapEmphasis`' approach. */
-function trimSegmentEdges(raw: string): string {
-  let start = 0;
-  let end = raw.length;
-  while (start < end) {
-    if (raw[start] === " ") {
-      start += 1;
-    } else if (raw.startsWith(HARD_BREAK, start)) {
-      start += HARD_BREAK.length;
-    } else {
-      break;
-    }
-  }
-  while (end > start) {
-    if (raw[end - 1] === " ") {
-      end -= 1;
-    } else if (
-      end - HARD_BREAK.length >= start &&
-      raw.startsWith(HARD_BREAK, end - HARD_BREAK.length)
-    ) {
-      end -= HARD_BREAK.length;
-    } else {
-      break;
-    }
-  }
-  return raw.slice(start, end);
-}
-
 /** Serialise sibling inline nodes into the blocks they represent and push each.
  *  Shared by the inline-run flush and the `<p>` branch so both split on `<br>`
  *  runs and both drop content-free segments. */
@@ -1174,12 +984,11 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
       // lone HARD_BREAK, whose `\` survives collapseWs+trim and used to be pushed
       // as `# \`. hasVisibleContent settles it on the source instead.
       if (hasVisibleContent(el)) {
-        // Fold the HARD_BREAK token to a space BEFORE collapsing — a heading is
-        // single-line, and collapseWs alone eats the token's `\n` but strands its
-        // escaping `\` (`<h1>a<br></h1>` → `# a\`). Same whole-token fold the `<a>`
-        // label uses.
+        // A heading is single-line: "heading" mode folds each break atom to a space
+        // (`<h1>a<br>b</h1>` → `# a b`); collapseWs then merges it with any
+        // neighbouring space.
         const text = collapseWs(
-          serializeChildrenInline(el, depth, ctx).split(HARD_BREAK).join(" ")
+          inlineMarkdown(Array.from(el.childNodes), depth, ctx, "heading")
         ).trim();
         // Residue guard, the SAME full-strip rule as the predicate: `text` can still
         // be empty when every child was a SKIP_TAGS subtree (`<h1><style>…</style></h1>`)
@@ -1219,7 +1028,7 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
       }
     } else if (tag === "PRE") {
       flushInline();
-      // <pre> body is a non-inline leaf (verbatim, never through serializeInline)
+      // <pre> body is a non-inline leaf (verbatim, never through collectInline)
       // → count it explicitly.
       // Two SEPARATE concerns, deliberately answered differently:
       //  - the richness DECISION is hasVisibleContent, shared with every other

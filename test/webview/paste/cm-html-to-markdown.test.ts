@@ -1349,3 +1349,17 @@ describe("inline style runs (PASTE-01b)", () => {
     expect(convert("<p><b>a.</b> </p>")).toBe("**a.**");
   });
 });
+
+describe("heading style runs (PASTE-01b)", () => {
+  it("merges adjacent emphasis in a heading", () => {
+    expect(convert("<h1><b>A</b><b>B</b></h1>")).toBe("# **AB**");
+  });
+
+  it("moves edge punctuation outside a heading's run", () => {
+    expect(convert("<h2><b>Note:</b>text</h2>")).toBe("## **Note**:text");
+  });
+
+  it("folds a hard break in a heading to a space", () => {
+    expect(convert("<h1>a<br>b</h1>")).toBe("# a b");
+  });
+});
