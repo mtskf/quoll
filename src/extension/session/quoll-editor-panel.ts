@@ -751,8 +751,9 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
 
     // Active-edge tracking for the host commands' forward target.
     // PR6 (#179) moved the status-bar + caret-apply active edge into
-    // createCaretHandoffWiring (above); this small listener owns ONLY the panel
-    // post — set while this panel is the active editor, clear otherwise. Both
+    // createCaretHandoffWiring (above); this small listener owns ONLY the
+    // active-panel latches (the host-command panel post and the switch poster)
+    // — set while this panel is the active editor, clear otherwise. Both
     // ops are idempotent (set overwrites the global; clear is identity-guarded),
     // so no inactive→active edge detection is needed. Kept separate from the
     // caret wiring so command forwarding stays single-responsibility.
