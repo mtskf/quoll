@@ -108,3 +108,34 @@ describe("nested emission", () => {
     expect(md([t("a", I), t("a ", B | I), t("a", B)])).toBe("*a**a*** **a**");
   });
 });
+
+describe("flanking repair", () => {
+  it("demotes a closing colon out of the run (Note:)", () => {
+    expect(md([t("Note:", B), t("text", 0)])).toBe("**Note**:text");
+  });
+
+  it("demotes both parentheses when both sides fail", () => {
+    expect(md([t("x", 0), t("(a)", B), t("b", 0)])).toBe("x(**a**)b");
+  });
+
+  it("demotes CJK brackets (「重要」)", () => {
+    expect(md([t("これは", 0), t("「重要」", B), t("です", 0)])).toBe("これは「**重要**」です");
+  });
+
+  it("demotes only the failing side", () => {
+    expect(md([t("(a)", B), t("b", 0)])).toBe("**(a**)b");
+  });
+
+  it("treats an astral neighbour as a word character", () => {
+    expect(md([t("a.", B), t("😀", 0)])).toBe("**a**.😀");
+    expect(md([t("😀", 0), t("(a)", B)])).toBe("😀(**a)**");
+  });
+
+  it("classifies a closer-plus-opener marker run as one group", () => {
+    expect(md([t("a", B), t("a", B | I), t("(a)", I)])).toBe("**a*a***(*a)*");
+  });
+
+  it("leaves a flanking closer before a trimmed edge alone", () => {
+    expect(md([t("a.", B), t(" ", 0)], true)).toBe("**a.**");
+  });
+});

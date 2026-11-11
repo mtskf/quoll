@@ -197,6 +197,23 @@ function extent(styles: readonly StyleMask[], from: number, s: StyleMask): numbe
   return i - from;
 }
 
+/** One maximal run of consecutive emitted `*` delimiters, all emitted at ONE unit
+ *  boundary: between unit `at - 1` and unit `at` (`at === units.length` for the
+ *  final closes). Provenance for the repair loop. */
+interface MarkerGroup {
+  from: number;
+  to: number;
+  at: number;
+  hasOpen: boolean;
+  hasClose: boolean;
+}
+
+interface Emission {
+  markdown: string;
+  emittedSyntax: boolean;
+  groups: MarkerGroup[];
+}
+
 /** Emit markers with an open-stack. At each unit, close from the top of the stack
  *  down to the deepest open style the unit does not carry, then open the styles it
  *  is missing, the one that runs furthest outermost (so `***A**B***C**`, not a
@@ -204,13 +221,28 @@ function extent(styles: readonly StyleMask[], from: number, s: StyleMask): numbe
  *  right before whitespace is not left-flanking, so it is emitted with whatever is
  *  still open and its missing styles open at the next non-neutral unit
  *  (`**a*a*** *a*`, not `**a*a**** a*`). */
-function emit(units: readonly Unit[], styles: readonly StyleMask[], opts: InlineRunOptions) {
+function emit(
+  units: readonly Unit[],
+  styles: readonly StyleMask[],
+  opts: InlineRunOptions
+): Emission {
   let out = "";
   const stack: StyleMask[] = [];
+  const groups: MarkerGroup[] = [];
   let emittedSyntax = false;
-  const closeTo = (depth: number): void => {
-    while (stack.length > depth) {
+  const boundary = (at: number, closeDepth: number, opens: readonly StyleMask[]): void => {
+    const from = out.length;
+    const hasClose = stack.length > closeDepth;
+    while (stack.length > closeDepth) {
       out += MARKER[stack.pop() as StyleMask];
+    }
+    for (const s of opens) {
+      out += MARKER[s];
+      stack.push(s);
+    }
+    if (out.length > from) {
+      emittedSyntax = true;
+      groups.push({ from, to: out.length, at, hasOpen: opens.length > 0, hasClose });
     }
   };
   units.forEach((u, i) => {
@@ -219,26 +251,168 @@ function emit(units: readonly Unit[], styles: readonly StyleMask[], opts: Inline
     }
     const target = styles[i];
     const deepest = stack.findIndex((s) => !(target & s));
-    if (deepest >= 0) {
-      closeTo(deepest);
-    }
-    if (!isNeutral(u)) {
-      const missing = STYLES.filter((s) => target & s && !stack.includes(s)).sort(
-        (a, b) => extent(styles, i, b) - extent(styles, i, a)
-      );
-      for (const s of missing) {
-        out += MARKER[s];
-        stack.push(s);
-        emittedSyntax = true;
-      }
-    }
+    const closeDepth = deepest >= 0 ? deepest : stack.length;
+    const kept = stack.slice(0, closeDepth);
+    const opens = isNeutral(u)
+      ? []
+      : STYLES.filter((s) => target & s && !kept.includes(s)).sort(
+          (a, b) => extent(styles, i, b) - extent(styles, i, a)
+        );
+    boundary(i, closeDepth, opens);
     out += render(u, opts);
   });
-  closeTo(0);
-  return { markdown: out, emittedSyntax };
+  boundary(units.length, 0, []);
+  return { markdown: out, emittedSyntax, groups };
 }
 
-/** Serialise styled inline atoms to Markdown. Pure: no DOM, no logging. */
+// ---------------------------------------------------------------------------
+// Flanking classification — what `@lezer/markdown` 1.6.4 computes, not the spec.
+//
+// Mirrors `Emphasis()` in @lezer/markdown 1.6.4 (dist/index.js ~1453): the
+// parser scans the WHOLE run of `*` before classifying it, so a closer
+// immediately followed by an opener is one delimiter run with one pair of
+// neighbours. The neighbours are single UTF-16 code units (`cx.slice(start - 1,
+// start)`), whitespace is JS `\s` or the string edge, and punctuation is
+// `/[\p{S}|\p{P}]/u` on that one unit — so a surrogate half is neither, and
+// every astral code point is a word character. src/webview/cm/inline/inline-ir.ts
+// deliberately models the SPEC (whole code points, Unicode Zs whitespace) for
+// rendering; it is not shared, because what matters here is how the editor's own
+// parser will re-read the bytes. Pinned to 1.6.4 only: a Lezer bump that changes
+// the classification is caught by the re-parse oracle tests.
+//
+// Not modelled: the rule of three in Lezer's `resolveMarkers` (~1720), a MATCHING
+// rule rather than a flanking one. Lezer's resolveMarkers recomputes closeSize
+// from the spliced leftover delimiter (dist/index.js ~1706-1720), so the
+// emitter's run shapes never hit a rule-of-3 block; there is no repair branch for
+// it. The nested-emission invariant and the re-parse oracle corpus are the checks
+// on that omission.
+// ---------------------------------------------------------------------------
+
+const LEZER_PUNCTUATION = /[\p{S}|\p{P}]/u;
+
+function isSpaceOrEdge(ch: string): boolean {
+  return ch === "" || /\s/.test(ch);
+}
+
+/** Does `group` fail to flank on a side it needs? Returns which side holds the
+ *  punctuation that breaks it: `"before"` for a closer that is not right-flanking
+ *  (punctuation before, word after), `"after"` for an opener that is not
+ *  left-flanking (punctuation after, word before), or null when it flanks. */
+function failingSide(out: string, g: MarkerGroup): "before" | "after" | null {
+  const before = out.slice(g.from - 1, g.from);
+  const after = out.slice(g.to, g.to + 1);
+  const sBefore = isSpaceOrEdge(before);
+  const sAfter = isSpaceOrEdge(after);
+  const pBefore = LEZER_PUNCTUATION.test(before);
+  const pAfter = LEZER_PUNCTUATION.test(after);
+  const leftFlanking = !sAfter && (!pAfter || sBefore || pBefore);
+  const rightFlanking = !sBefore && (!pBefore || sAfter || pAfter);
+  if (g.hasClose && !rightFlanking) {
+    return "before";
+  }
+  if (g.hasOpen && !leftFlanking) {
+    return "after";
+  }
+  return null;
+}
+
+/** A word character in the Lezer sense: neither whitespace nor punctuation, per
+ *  UTF-16 code unit (so a surrogate half counts as a word character). */
+function hasWordChar(text: string): boolean {
+  for (let i = 0; i < text.length; i++) {
+    const unit = text[i];
+    if (!/\s/.test(unit) && !LEZER_PUNCTUATION.test(unit)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Repair (b), punctuation demotion: the punctuation next to the failing group is
+ *  the edge char of a non-neutral text unit. Split that char into its own NEUTRAL
+ *  unit — it then takes the intersection style of rule 2 and the markers move past
+ *  it — but only while the unit's run (the contiguous units of the same effective
+ *  style) keeps a non-punctuation, non-neutral char, so a run is never demoted down
+ *  to nothing. A demoted unit is neutral and so is never demoted again. */
+function demotePunctuation(
+  units: readonly Unit[],
+  styles: readonly StyleMask[],
+  idx: number,
+  edge: "start" | "end"
+): Unit[] | null {
+  const u = units[idx];
+  if (u === undefined || u.kind !== "text" || u.neutral) {
+    return null;
+  }
+  const ch = edge === "end" ? u.text[u.text.length - 1] : u.text[0];
+  if (!LEZER_PUNCTUATION.test(ch)) {
+    return null;
+  }
+  const rest = edge === "end" ? u.text.slice(0, -1) : u.text.slice(1);
+  const keeps = (j: number): boolean => {
+    if (j === idx) {
+      return hasWordChar(rest);
+    }
+    const v = units[j];
+    if (isNeutral(v)) {
+      return false;
+    }
+    return v.kind !== "text" || hasWordChar(v.text);
+  };
+  let lo = idx;
+  while (lo > 0 && styles[lo - 1] === styles[idx]) {
+    lo--;
+  }
+  let hi = idx;
+  while (hi < units.length - 1 && styles[hi + 1] === styles[idx]) {
+    hi++;
+  }
+  let kept = false;
+  for (let j = lo; j <= hi && !kept; j++) {
+    kept = keeps(j);
+  }
+  if (!kept) {
+    return null;
+  }
+  const demoted: Unit = { kind: "text", text: ch, style: u.style, neutral: true };
+  const remaining: Unit[] = rest === "" ? [] : [{ ...u, text: rest }];
+  const replacement = edge === "end" ? [...remaining, demoted] : [demoted, ...remaining];
+  return [...units.slice(0, idx), ...replacement, ...units.slice(idx + 1)];
+}
+
+/** Apply the first applicable repair to the first failing group that has one, in
+ *  output order. A failing group no branch can repair is skipped unchanged (never
+ *  retried). Null when nothing applies — the fixpoint. */
+function repairOnce(
+  units: readonly Unit[],
+  styles: readonly StyleMask[],
+  emission: Emission
+): Unit[] | null {
+  for (const g of emission.groups) {
+    const side = failingSide(emission.markdown, g);
+    if (side === null) {
+      continue;
+    }
+    const punctIdx = side === "before" ? g.at - 1 : g.at;
+    const repaired = demotePunctuation(
+      units,
+      styles,
+      punctIdx,
+      side === "before" ? "end" : "start"
+    );
+    if (repaired !== null) {
+      return repaired;
+    }
+  }
+  return null;
+}
+
+/** Serialise styled inline atoms to Markdown. Pure: no DOM, no logging.
+ *
+ *  Serialise, find the first marker group that does not flank on the side it
+ *  needs, repair it at unit level, and re-serialise from the units, until no
+ *  group can be repaired. Each repair permanently changes one char, so the loop
+ *  terminates. */
 export function serializeInlineRuns(
   atoms: readonly InlineAtom[],
   opts: InlineRunOptions
@@ -247,5 +421,13 @@ export function serializeInlineRuns(
   if (opts.trimEdges) {
     units = trimUnits(units);
   }
-  return emit(units, effectiveStyles(units), opts);
+  for (;;) {
+    const styles = effectiveStyles(units);
+    const emission = emit(units, styles, opts);
+    const repaired = repairOnce(units, styles, emission);
+    if (repaired === null) {
+      return { markdown: emission.markdown, emittedSyntax: emission.emittedSyntax };
+    }
+    units = repaired;
+  }
 }
