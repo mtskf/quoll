@@ -50,9 +50,9 @@ import { type EditorState, Prec } from "@codemirror/state";
 import { keymap } from "@codemirror/view";
 import type { MarkdownExtension, MarkdownParser } from "@lezer/markdown";
 import { highlightMarkExtension } from "../../markdown/highlight-mark.js";
-import { parseTable } from "../../markdown/table/index.js";
 import { codeHighlightExtension } from "./fenced-code/fenced-code-highlight-languages.js";
-import { leadingFrontmatterEnd } from "./frontmatter/detect.js";
+import { recordAt } from "./structural-blocks.js";
+import { tableBlockField } from "./table/table-field.js";
 
 // SyntaxNode without a direct @lezer/common import (a direct dep as of PR #66;
 // derived rather than imported to avoid widening the direct-dep import surface).
@@ -71,29 +71,23 @@ function firstContentChild(node: SyntaxNode): SyntaxNode | null {
   return first?.type.name === "ListMark" ? first.nextSibling : first;
 }
 
-// True when a `Table` node would render as a block widget — mirroring EVERY
-// non-emission gate tableBlockField applies (table-field.ts `buildAll`), so fold-
-// suppression and widget-emission stay in lockstep:
-//   1. Leading frontmatter — the frontmatter block owns [0, fmEnd] and buildAll
-//      emits no competing table widget inside it (`m.from < fmEnd`). A marker-line
-//      table inside a frontmatter fence parses, but renders as raw source with no
-//      widget (Codex Conf-74).
-//   2. parseTable rejects the per-node slice — a malformed slice (cell-count
-//      mismatch), which renders as raw source (Codex Conf-84). A blockquote-nested
-//      table is rejected the same way, but never gets here: the blockquote gate in
-//      `nonFoldableBlocks` answers for a quoted ListItem before listItemFold runs.
-// (buildAll's third gate, a degenerate zero-width block range, is unreachable for a
-// ListItem's first-content Table, which always spans at least the marker line.)
-function tableEmitsBlockWidget(state: EditorState, from: number, to: number): boolean {
-  if (from < leadingFrontmatterEnd(state)) {
+// True when the `Table` node starting at `from` renders as a block widget: the table
+// field's record set (../structural-blocks.ts) holds a record at its block start whose
+// node starts there. Reading the field rather than re-deriving its gates keeps
+// fold-suppression and widget emission in lockstep by construction — a table inside
+// leading frontmatter, one `parseTable` rejects, or one whose build threw has no record,
+// so its list fold stays; a state without the field has no widget at all. `recordAt` is a
+// chunk scan of the set, O(N/250) per fold query (see `recordAt` in structural-blocks.ts;
+// a linear `.some()` would make a list of N table-bearing items O(N²)); the whole-document
+// cost is accepted by the Performance gate's fold row (.claude/docs/PERF.md), not by this
+// argument.
+function tableEmitsBlockWidget(state: EditorState, from: number): boolean {
+  const records = state.field(tableBlockField, false)?.records;
+  if (records === undefined) {
     return false;
   }
-  // Deliberately byte-identical to table-skeleton.ts's `buildModel` — this gate
-  // and that capture path must agree on the slice they hand `parseTable`. That
-  // includes the `replace`, which matches nothing today; `buildModel` carries
-  // the why (the CM interior is LF-only by construction).
-  const slice = state.sliceDoc(from, to).replace(/\r\n?/g, "\n");
-  return parseTable(slice, 0, slice.length) !== null;
+  const record = recordAt(records, state.doc.lineAt(from).from);
+  return record !== undefined && record.from + record.block.nodeOffset === from;
 }
 
 // True when `node` sits anywhere inside a Blockquote (a callout is a Blockquote
@@ -119,13 +113,13 @@ function insideBlockquote(node: SyntaxNode): boolean {
 // of the item's first line to the item end) EXCEPT when the item's first content
 // child is a GFM Table that starts on the marker line AND actually emits a block
 // widget. In that tight shape (`- | a | b |\n  | - | - |\n…`) the table's block
-// widget is line-snapped to the marker-line start (table-skeleton.ts snaps
-// blockFrom = lineAt(Table.from).from), so it SWALLOWS the `-`/`1.` marker and the
-// ListItem chevron would visually land on the table — a meaningless affordance.
-// Returning null suppresses that lone chevron. The emit guard is load-bearing: a
-// marker-line table that emits NO widget (inside leading frontmatter, or a slice
-// parseTable rejects) renders as raw source, so its list fold must be kept. An
-// item inside a blockquote never folds at all, whatever its body — that is the
+// widget is line-snapped to the marker-line start (the table spec in
+// table/table-field.ts snaps the block `from` = lineAt(Table.from).from), so it
+// SWALLOWS the `-`/`1.` marker and the ListItem chevron would visually land on the
+// table — a meaningless affordance. Returning null suppresses that lone chevron.
+// The emit guard is load-bearing: a marker-line table that emits NO widget (inside
+// leading frontmatter, a slice parseTable rejects, or a build that threw) renders
+// as raw source, so its list fold must be kept. An item inside a blockquote never folds at all, whatever its body — that is the
 // gate in `nonFoldableBlocks`, not a check here. Every other genuine list fold (a
 // table on a continuation line, a plain multi-line body) keeps the default range.
 // lang-markdown folds ListItem via its broad `type => …` Block foldNodeProp, and
@@ -137,7 +131,7 @@ function listItemFold(node: SyntaxNode, state: EditorState): FoldRange | null {
   if (
     content?.type.name === "Table" &&
     state.doc.lineAt(content.from).from === state.doc.lineAt(node.from).from &&
-    tableEmitsBlockWidget(state, content.from, content.to)
+    tableEmitsBlockWidget(state, content.from)
   ) {
     return null;
   }

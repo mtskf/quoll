@@ -1,6 +1,6 @@
-// The ONE Lezer `Table`-node walk used by table-skeleton.ts's `tableSkeletonField`
-// to collect document-ordered Table ranges. Table detection, descendant-skip, and
-// range semantics live in exactly one place so they can never drift.
+// A Lezer `Table`-node walk collecting document-ordered Table ranges, for the
+// lint rule lint/rules/table-column-count.ts. The table block widgets do not use it:
+// their walk is the structural block contract's (../structural-blocks.ts).
 // Pure: a lazy reader of the passed tree, no field/state dependency, so nothing in
 // the table dir forms an import cycle around it. Typed via
 // `ReturnType<typeof syntaxTree>` to avoid a direct `@lezer/common` import

@@ -24,6 +24,25 @@ const postMessage = vi.fn();
 const editPosts = () =>
   postMessage.mock.calls.map((c) => c[0]).filter((m) => (m as { type?: string })?.type === "edit");
 
+// The specifier the table block field imports `parseTable` from: a pass-through that
+// throws for the "BOOM" table only while `tableSeam.armed` is true, so mount succeeds.
+const tableSeam = vi.hoisted(() => ({ armed: false, armedCalls: 0 }));
+vi.mock("../../src/markdown/table/index.js", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../../src/markdown/table/index.js")>();
+  return {
+    ...real,
+    parseTable: (source: string, from: number, to: number) => {
+      if (tableSeam.armed) {
+        tableSeam.armedCalls++;
+        if (source.includes("BOOM")) {
+          throw new Error("parseTable armed to throw");
+        }
+      }
+      return real.parseTable(source, from, to);
+    },
+  };
+});
+
 vi.mock("../../src/webview/host.js", () => ({
   getHost: () => ({ postMessage }),
   subscribeToHost: () => () => {},
@@ -62,6 +81,8 @@ afterEach(() => {
   }
   vi.useRealTimers();
   vi.restoreAllMocks();
+  tableSeam.armed = false;
+  tableSeam.armedCalls = 0;
 });
 
 function mount(opts: { onDispatch?: (action: Action) => void } = {}): {
@@ -131,6 +152,35 @@ it("a throwing widget render leaves the session fully settled", () => {
   expect(editPosts().at(-1)?.baseDocVersion).toBe(8);
 });
 
+it("structural build failure keeps sync: a throwing parseTable never stops edit-sync", () => {
+  const { handle, view } = mount();
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  // Prose first so the reseed's caret at 0 stays off the table lines.
+  const content = "intro\n\n| BOOM | b |\n| - | - |\n| 1 | 2 |\n\ntail\n";
+  handle.applyDocument({ content, eol: "\n", canWrite: true, docVersion: 7, ...PAIR });
+  // Precondition: the table rendered before arming.
+  expect(document.querySelector("table")).not.toBeNull();
+
+  tableSeam.armed = true;
+  const inCell = content.indexOf("BOOM") + 4;
+  expect(() => view.dispatch({ changes: { from: inCell, insert: "x" } })).not.toThrow();
+  expect(tableSeam.armedCalls).toBeGreaterThan(0); // the armed seam really ran
+  handle.flushPending();
+  const first = editPosts().at(-1) as { content: string; baseDocVersion: number };
+  expect(first.content).toBe(hostBytes(view));
+  expect(first.content).toContain("| BOOMx | b |");
+  expect(first.baseDocVersion).toBe(7);
+
+  // The failure stays armed: the next edit inside the same table still syncs.
+  const again = view.state.doc.toString().indexOf("BOOMx") + 5;
+  expect(() => view.dispatch({ changes: { from: again, insert: "y" } })).not.toThrow();
+  handle.flushPending();
+  const second = editPosts().at(-1) as { content: string; baseDocVersion: number };
+  expect(second.content).toBe(hostBytes(view));
+  expect(second.content).toContain("| BOOMxy | b |");
+  expect(second.baseDocVersion).toBe(7);
+});
+
 it("a StateField block widget: a throwing table render settles the same way", () => {
   // The entry names a StateField widget, and `tableBlockField` is one
   // (cm-block-widget-statefield-guard.test.ts pins that). This case also gives
@@ -146,8 +196,9 @@ it("a StateField block widget: a throwing table render settles the same way", ()
       throw new Error("forced table render failure");
     });
   // ⚠️ The document MUST start with prose and the caret MUST stay out of the
-  // table: `table-field.ts:128` hides a table the caret overlaps, and a reseed
-  // leaves the caret at 0. Measured with a bare table document: render 0 calls,
+  // table: the contract's reveal (structural-blocks.ts) hides a table the caret
+  // overlaps, and a reseed leaves the caret at 0. Measured with a bare table
+  // document: render 0 calls,
   // patch 0 calls, 0 table elements — every assertion below would have been
   // vacuous.
   const table = "intro\n\n| a | b |\n| - | - |\n| 1 | 2 |\n";

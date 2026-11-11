@@ -73,7 +73,7 @@ describe("imageBlockField — emission", () => {
   it("emits exactly one block replace for a standalone allowlisted image", () => {
     const view = mount(`${SAFE}\n`);
     try {
-      const w = widgetsOf(view.state.field(imageBlockField));
+      const w = widgetsOf(view.state.field(imageBlockField).decorations);
       expect(w).toHaveLength(1);
       expect(w[0].safeUrl).toBe("https://x.test/a.png");
       expect(w[0].alt).toBe("logo");
@@ -85,7 +85,7 @@ describe("imageBlockField — emission", () => {
   it("covers whole-line boundaries", () => {
     const view = mount(`${SAFE}\n`);
     try {
-      const ranges = rangesOf(view.state.field(imageBlockField));
+      const ranges = rangesOf(view.state.field(imageBlockField).decorations);
       expect(ranges).toHaveLength(1);
       expect(ranges[0].from).toBe(0);
       expect(ranges[0].to).toBeGreaterThanOrEqual(SAFE.length);
@@ -97,7 +97,7 @@ describe("imageBlockField — emission", () => {
   it("emits a (blocked) widget with safeUrl=null for a standalone javascript: image", () => {
     const view = mount("![x](javascript:alert(1))\n");
     try {
-      const w = widgetsOf(view.state.field(imageBlockField));
+      const w = widgetsOf(view.state.field(imageBlockField).decorations);
       expect(w).toHaveLength(1);
       expect(w[0].safeUrl).toBeNull();
     } finally {
@@ -114,7 +114,7 @@ describe("imageBlockField — emission", () => {
   ])("blocks %s (safeUrl=null, render-gate via shared decode→gate)", (_label, src) => {
     const view = mount(`${src}\n`);
     try {
-      const w = widgetsOf(view.state.field(imageBlockField));
+      const w = widgetsOf(view.state.field(imageBlockField).decorations);
       expect(w).toHaveLength(1);
       expect(w[0].safeUrl).toBeNull();
     } finally {
@@ -127,7 +127,7 @@ describe("imageBlockField — standalone eligibility", () => {
   it("does NOT emit for an inline image surrounded by text", () => {
     const view = mount(`here is ${SAFE} inline\n`);
     try {
-      expect(widgetsOf(view.state.field(imageBlockField))).toHaveLength(0);
+      expect(widgetsOf(view.state.field(imageBlockField).decorations)).toHaveLength(0);
     } finally {
       view.destroy();
     }
@@ -136,7 +136,7 @@ describe("imageBlockField — standalone eligibility", () => {
   it("does NOT emit for two images on one line", () => {
     const view = mount(`${SAFE} ${SAFE}\n`);
     try {
-      expect(widgetsOf(view.state.field(imageBlockField))).toHaveLength(0);
+      expect(widgetsOf(view.state.field(imageBlockField).decorations)).toHaveLength(0);
     } finally {
       view.destroy();
     }
@@ -147,7 +147,7 @@ describe("imageBlockField — standalone eligibility", () => {
     // line would split the paragraph. Excluded by the parent-paragraph check.
     const view = mount(`${SAFE}\nmore text in the same paragraph\n`);
     try {
-      expect(widgetsOf(view.state.field(imageBlockField))).toHaveLength(0);
+      expect(widgetsOf(view.state.field(imageBlockField).decorations)).toHaveLength(0);
     } finally {
       view.destroy();
     }
@@ -156,7 +156,7 @@ describe("imageBlockField — standalone eligibility", () => {
   it("does NOT emit for an image inside a blockquote (> prefix marker)", () => {
     const view = mount(`> ${SAFE}\n`);
     try {
-      expect(widgetsOf(view.state.field(imageBlockField))).toHaveLength(0);
+      expect(widgetsOf(view.state.field(imageBlockField).decorations)).toHaveLength(0);
     } finally {
       view.destroy();
     }
@@ -165,7 +165,7 @@ describe("imageBlockField — standalone eligibility", () => {
   it("does NOT emit for an image inside a list item (- prefix marker)", () => {
     const view = mount(`- ${SAFE}\n`);
     try {
-      expect(widgetsOf(view.state.field(imageBlockField))).toHaveLength(0);
+      expect(widgetsOf(view.state.field(imageBlockField).decorations)).toHaveLength(0);
     } finally {
       view.destroy();
     }
@@ -174,7 +174,7 @@ describe("imageBlockField — standalone eligibility", () => {
   it("DOES emit for a 1-3 space indented standalone image (insignificant indent)", () => {
     const view = mount(`   ${SAFE}\n`);
     try {
-      expect(widgetsOf(view.state.field(imageBlockField))).toHaveLength(1);
+      expect(widgetsOf(view.state.field(imageBlockField).decorations)).toHaveLength(1);
     } finally {
       view.destroy();
     }
@@ -185,7 +185,7 @@ describe("imageBlockField — standalone eligibility", () => {
     // it as content so the line-trim check excludes it (Codex re-review N1).
     const view = mount(` ${SAFE}\n`);
     try {
-      expect(widgetsOf(view.state.field(imageBlockField))).toHaveLength(0);
+      expect(widgetsOf(view.state.field(imageBlockField).decorations)).toHaveLength(0);
     } finally {
       view.destroy();
     }
@@ -197,7 +197,7 @@ describe("imageBlockField — standalone eligibility", () => {
     // it — else the line would be mis-promoted (Codex re-review N4).
     const view = mount(`${SAFE}\n`);
     try {
-      expect(widgetsOf(view.state.field(imageBlockField))).toHaveLength(0);
+      expect(widgetsOf(view.state.field(imageBlockField).decorations)).toHaveLength(0);
     } finally {
       view.destroy();
     }
@@ -206,7 +206,7 @@ describe("imageBlockField — standalone eligibility", () => {
   it("does NOT emit for a reference image ![alt][ref] (no URL child)", () => {
     const view = mount("![alt][ref]\n\n[ref]: https://x.test/a.png\n");
     try {
-      expect(widgetsOf(view.state.field(imageBlockField))).toHaveLength(0);
+      expect(widgetsOf(view.state.field(imageBlockField).decorations)).toHaveLength(0);
     } finally {
       view.destroy();
     }
@@ -217,7 +217,7 @@ describe("imageBlockField — standalone eligibility", () => {
     // destination is harmless and is left to the user to complete).
     const view = mount("![alt]()\n");
     try {
-      expect(widgetsOf(view.state.field(imageBlockField))).toHaveLength(0);
+      expect(widgetsOf(view.state.field(imageBlockField).decorations)).toHaveLength(0);
     } finally {
       view.destroy();
     }
@@ -230,7 +230,7 @@ describe("imageBlockField — standalone eligibility", () => {
     // the image as its own paragraph rather than a setext heading.
     const view = mount(`---\n${SAFE}\n\n---\n\n# body\n`);
     try {
-      expect(widgetsOf(view.state.field(imageBlockField))).toHaveLength(0);
+      expect(widgetsOf(view.state.field(imageBlockField).decorations)).toHaveLength(0);
     } finally {
       view.destroy();
     }
@@ -241,7 +241,7 @@ describe("imageBlockField — alt extraction", () => {
   it("extracts plain alt text", () => {
     const view = mount("![my logo](https://x.test/a.png)\n");
     try {
-      expect(widgetsOf(view.state.field(imageBlockField))[0].alt).toBe("my logo");
+      expect(widgetsOf(view.state.field(imageBlockField).decorations)[0].alt).toBe("my logo");
     } finally {
       view.destroy();
     }
@@ -250,7 +250,7 @@ describe("imageBlockField — alt extraction", () => {
   it("preserves an empty alt", () => {
     const view = mount("![](https://x.test/a.png)\n");
     try {
-      expect(widgetsOf(view.state.field(imageBlockField))[0].alt).toBe("");
+      expect(widgetsOf(view.state.field(imageBlockField).decorations)[0].alt).toBe("");
     } finally {
       view.destroy();
     }
@@ -259,7 +259,7 @@ describe("imageBlockField — alt extraction", () => {
   it("CommonMark-normalizes alt: flattens emphasis markers (*em* -> em)", () => {
     const view = mount("![*em*](https://x.test/a.png)\n");
     try {
-      expect(widgetsOf(view.state.field(imageBlockField))[0].alt).toBe("em");
+      expect(widgetsOf(view.state.field(imageBlockField).decorations)[0].alt).toBe("em");
     } finally {
       view.destroy();
     }
@@ -268,7 +268,7 @@ describe("imageBlockField — alt extraction", () => {
   it("CommonMark-normalizes alt: decodes a backslash escape (a\\*b -> a*b)", () => {
     const view = mount("![a\\*b](https://x.test/a.png)\n");
     try {
-      expect(widgetsOf(view.state.field(imageBlockField))[0].alt).toBe("a*b");
+      expect(widgetsOf(view.state.field(imageBlockField).decorations)[0].alt).toBe("a*b");
     } finally {
       view.destroy();
     }
@@ -277,7 +277,7 @@ describe("imageBlockField — alt extraction", () => {
   it("CommonMark-normalizes alt: decodes a character entity (a&amp;b -> a&b)", () => {
     const view = mount("![a&amp;b](https://x.test/a.png)\n");
     try {
-      expect(widgetsOf(view.state.field(imageBlockField))[0].alt).toBe("a&b");
+      expect(widgetsOf(view.state.field(imageBlockField).decorations)[0].alt).toBe("a&b");
     } finally {
       view.destroy();
     }
@@ -288,7 +288,7 @@ describe("imageBlockField — reveal-on-caret", () => {
   it("hides the widget when the caret is on the image line", () => {
     const view = mount(`${SAFE}\n`, EditorSelection.cursor(3));
     try {
-      expect(widgetsOf(view.state.field(imageBlockField))).toHaveLength(0);
+      expect(widgetsOf(view.state.field(imageBlockField).decorations)).toHaveLength(0);
     } finally {
       view.destroy();
     }
@@ -297,7 +297,7 @@ describe("imageBlockField — reveal-on-caret", () => {
   it("hides when caret is AT the line's first character (boundary)", () => {
     const view = mount(`${SAFE}\n`, EditorSelection.cursor(0));
     try {
-      expect(widgetsOf(view.state.field(imageBlockField))).toHaveLength(0);
+      expect(widgetsOf(view.state.field(imageBlockField).decorations)).toHaveLength(0);
     } finally {
       view.destroy();
     }
@@ -307,7 +307,7 @@ describe("imageBlockField — reveal-on-caret", () => {
     const doc = `${SAFE}\n\ntail\n`;
     const view = mount(doc, EditorSelection.cursor(doc.length));
     try {
-      expect(widgetsOf(view.state.field(imageBlockField))).toHaveLength(1);
+      expect(widgetsOf(view.state.field(imageBlockField).decorations)).toHaveLength(1);
     } finally {
       view.destroy();
     }
@@ -328,7 +328,7 @@ describe("imageBlockField — reveal-on-caret", () => {
       )
     );
     try {
-      const w = widgetsOf(view.state.field(imageBlockField));
+      const w = widgetsOf(view.state.field(imageBlockField).decorations);
       expect(w).toHaveLength(1);
       expect(w[0].docFrom).toBe(0); // first image stays; second is revealed
     } finally {
@@ -376,7 +376,7 @@ describe("imageBlockField — relative resolution", () => {
     // caret at top would reveal an image on line 1; put the image on line 3.
     const view = mountWithBase("text\n\n![d](./img.png)\n", BASE);
     try {
-      const w = widgetsOf(view.state.field(imageBlockField));
+      const w = widgetsOf(view.state.field(imageBlockField).decorations);
       expect(w).toHaveLength(1);
       expect(w[0].safeUrl).toBe("https://csp/ws/notes/img.png");
     } finally {
@@ -396,7 +396,7 @@ describe("imageBlockField — relative resolution", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const view = mountWithBase("text\n\n![d](sub/p.png)\n\n![e](../x.png)\n", BASE);
     try {
-      const urls = widgetsOf(view.state.field(imageBlockField)).map((w) => w.safeUrl);
+      const urls = widgetsOf(view.state.field(imageBlockField).decorations).map((w) => w.safeUrl);
       expect(urls).toEqual(["https://csp/ws/notes/sub/p.png", null]);
     } finally {
       view.destroy();
@@ -407,7 +407,7 @@ describe("imageBlockField — relative resolution", () => {
   it("renders a fragment-only ![](#frag) image inert (would resolve to the document file)", () => {
     const view = mountWithBase("text\n\n![d](#frag)\n", BASE);
     try {
-      expect(widgetsOf(view.state.field(imageBlockField))[0].safeUrl).toBeNull();
+      expect(widgetsOf(view.state.field(imageBlockField).decorations)[0].safeUrl).toBeNull();
     } finally {
       view.destroy();
     }
@@ -416,7 +416,7 @@ describe("imageBlockField — relative resolution", () => {
   it("renders a query-only ![](?x=1) image inert (would resolve to the document file)", () => {
     const view = mountWithBase("text\n\n![d](?x=1)\n", BASE);
     try {
-      expect(widgetsOf(view.state.field(imageBlockField))[0].safeUrl).toBeNull();
+      expect(widgetsOf(view.state.field(imageBlockField).decorations)[0].safeUrl).toBeNull();
     } finally {
       view.destroy();
     }
@@ -425,7 +425,9 @@ describe("imageBlockField — relative resolution", () => {
   it("passes an absolute http(s) URL through unchanged (remote, CSP decides)", () => {
     const view = mountWithBase("text\n\n![d](https://x.test/a.png)\n", BASE);
     try {
-      expect(widgetsOf(view.state.field(imageBlockField))[0].safeUrl).toBe("https://x.test/a.png");
+      expect(widgetsOf(view.state.field(imageBlockField).decorations)[0].safeUrl).toBe(
+        "https://x.test/a.png"
+      );
     } finally {
       view.destroy();
     }
@@ -434,7 +436,7 @@ describe("imageBlockField — relative resolution", () => {
   it("leaves a relative image unresolved (safeUrl=null) when no base is set", () => {
     const view = mountWithBase("text\n\n![d](./img.png)\n", "");
     try {
-      expect(widgetsOf(view.state.field(imageBlockField))[0].safeUrl).toBeNull();
+      expect(widgetsOf(view.state.field(imageBlockField).decorations)[0].safeUrl).toBeNull();
     } finally {
       view.destroy();
     }
@@ -443,7 +445,7 @@ describe("imageBlockField — relative resolution", () => {
   it("blocks a javascript: image even with a base set (gate runs first)", () => {
     const view = mountWithBase("text\n\n![d](javascript:alert(1))\n", BASE);
     try {
-      expect(widgetsOf(view.state.field(imageBlockField))[0].safeUrl).toBeNull();
+      expect(widgetsOf(view.state.field(imageBlockField).decorations)[0].safeUrl).toBeNull();
     } finally {
       view.destroy();
     }

@@ -107,7 +107,7 @@ function run(initial: string, edits: Edit[]): void {
       const len = view.state.doc.length;
       // Assert BEFORE forceParsing when the post-edit tree is already complete — the
       // bounded branch ran during dispatch, so this catches a bounded bug a self-heal
-      // would mask (tableSkeletonField R2-2 / Codex finding 5).
+      // would mask (the pre-contract table field's R2-2 / Codex finding 5).
       if (syntaxTreeAvailable(view.state, len)) {
         assertEquivalent(view);
       }
