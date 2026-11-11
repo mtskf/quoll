@@ -54,6 +54,10 @@ type Unit =
   | { kind: "text"; text: string; style: StyleMask; neutral: boolean }
   | { kind: "code"; markdown: string; style: StyleMask }
   | { kind: "break"; style: StyleMask }
+  /** Repair (c)'s `&#N;`, standing in for one code point of a text unit and
+   *  carrying that unit's style. Non-neutral, emitted verbatim (never escaped), and
+   *  never a demotion or re-encoding candidate. */
+  | { kind: "entity"; text: string; style: StyleMask }
   | LinkUnit;
 
 /** A link is ONE opaque, non-neutral unit of the outer run (brackets bind tighter
@@ -178,6 +182,8 @@ function render(u: Unit, opts: InlineRunOptions): string {
       return opts.escapeText(u.text);
     case "code":
       return u.markdown;
+    case "entity":
+      return u.text;
     case "break":
       return HARD_BREAK;
     case "link":
@@ -399,6 +405,34 @@ function transferLinkStyle(
   return [...units.slice(0, idx), moved, ...units.slice(idx + 1)];
 }
 
+/** Repair (c), entity fallback: nothing on the punctuation side can move (a code
+ *  span's backtick, an all-punctuation run, an entity), so change the OTHER side —
+ *  replace the word char next to the group with a decimal reference to its code
+ *  point. `&` is punctuation, so the group then flanks. The word side is always a
+ *  text unit (code spans, links, breaks and entities present punctuation at their
+ *  edges); anything else is left alone. */
+function encodeWordNeighbour(
+  units: readonly Unit[],
+  idx: number,
+  edge: "start" | "end"
+): Unit[] | null {
+  const u = units[idx];
+  if (u === undefined || u.kind !== "text" || u.text === "") {
+    return null;
+  }
+  const chars = Array.from(u.text);
+  const ch = edge === "start" ? chars[0] : chars[chars.length - 1];
+  const rest = edge === "start" ? chars.slice(1).join("") : chars.slice(0, -1).join("");
+  const entity: Unit = {
+    kind: "entity",
+    text: `&#${ch.codePointAt(0) as number};`,
+    style: u.style,
+  };
+  const remaining: Unit[] = rest === "" ? [] : [{ ...u, text: rest }];
+  const replacement = edge === "start" ? [entity, ...remaining] : [...remaining, entity];
+  return [...units.slice(0, idx), ...replacement, ...units.slice(idx + 1)];
+}
+
 /** Apply the first applicable repair to the first failing group that has one, in
  *  output order. The link-edge and demotion preconditions are disjoint (a link
  *  unit vs a text unit on the punctuation side), so their order is immaterial. A failing group no branch can repair is skipped unchanged (never
@@ -415,9 +449,11 @@ function repairOnce(
       continue;
     }
     const punctIdx = side === "before" ? g.at - 1 : g.at;
+    const wordIdx = side === "before" ? g.at : g.at - 1;
     const repaired =
       transferLinkStyle(units, punctIdx, opts) ??
-      demotePunctuation(units, styles, punctIdx, side === "before" ? "end" : "start");
+      demotePunctuation(units, styles, punctIdx, side === "before" ? "end" : "start") ??
+      encodeWordNeighbour(units, wordIdx, side === "before" ? "start" : "end");
     if (repaired !== null) {
       return repaired;
     }
@@ -430,7 +466,7 @@ function repairOnce(
  *  Serialise, find the first marker group that does not flank on the side it
  *  needs, repair it at unit level, and re-serialise from the units, until no
  *  group can be repaired. Each repair is one-way (a link's outer style is cleared,
- *  or one char is demoted), so the loop terminates. */
+ *  one char is demoted, or one char becomes an entity), so the loop terminates. */
 export function serializeInlineRuns(
   atoms: readonly InlineAtom[],
   opts: InlineRunOptions

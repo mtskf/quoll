@@ -145,3 +145,25 @@ describe("link-edge repair", () => {
     expect(md([t("see ", B), link([t("x", 0)], B), t("y", 0)])).toBe("**see** [**x**](u)y");
   });
 });
+
+describe("entity fallback", () => {
+  it("encodes the word char after a code span's closer", () => {
+    expect(md([code("`x`", B), t("y", 0)])).toBe("**`x`**&#121;");
+  });
+
+  it("encodes the word char after an all-punctuation run", () => {
+    expect(md([t(".", B), t("a", 0)])).toBe("**.**&#97;");
+  });
+
+  it("encodes an astral neighbour as one code point, never a surrogate", () => {
+    expect(md([code("`x`", B), t("😀", 0)])).toBe("**`x`**&#128512;");
+  });
+
+  it("still escapes a literal ampersand, so a reference cannot collide", () => {
+    expect(md([t("&", 0)])).toBe("\\&");
+  });
+
+  it("re-checks after each repair until the cascade settles", () => {
+    expect(md([t("a", 0), t("a", B), t(".", I)])).toBe("&#97;**&#97;***.*");
+  });
+});
