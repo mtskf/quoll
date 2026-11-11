@@ -118,7 +118,8 @@ export interface Ctx {
   // byte. The handler uses it to choose between this conversion and the
   // clipboard's own `text/plain` bytes. Block-level writes go through
   // `serializeBlocks`' `push`, which takes the fact as a REQUIRED argument;
-  // only the inline leaves below assign it directly.
+  // the inline path assigns it directly: `collectInline`'s code/link leaves, and
+  // `inlineMarkdown` when `serializeInlineRuns` reports it emitted emphasis markers.
   emittedMarkdownSyntax: boolean;
   repair: RepairBudget; // shared by every inline run of this conversion
 }
@@ -208,11 +209,14 @@ function collapseWs(text: string): string {
  *  nothing visible remains. Distinct from `collapseWs` (the emit path, which PRESERVES
  *  joiners — WJ included — and variation selectors for fidelity): a lone one reads
  *  as blank here so an otherwise-empty container holding only one cannot flip
- *  `emittedMarkdownSyntax`. THE single answer to "is this text visually empty" — routed
+ *  `emittedMarkdownSyntax`. THE single answer to "is this text visually empty" within this
+ *  file — routed
  *  through by every emptiness decision in this module: `hasVisibleContent`, the table
  *  per-cell and blockquote/list wrapper own-text richness checks,
  *  the CODE/A/PRE/heading/blockquote/list-item residue guards, and the inline-run
- *  blank-text / non-`<li>` list-child checks — so none grows its own rule. */
+ *  blank-text / non-`<li>` list-child checks — so none grows its own rule. ⚠️ inline-runs.ts's `INVISIBLE_TOKEN` hand-mirrors the same
+ *  `\p{Default_Ignorable_Code_Point} ∪ \p{Cf}` union (it classifies atoms, not strings), so
+ *  the two must be changed together. */
 function blankAfterInvisible(text: string): boolean {
   return (
     text
@@ -338,10 +342,11 @@ function styleCancelsEmphasis(el: Element, prop: keyof typeof EMPHASIS_CANCELLED
 // The hard-break token (`HARD_BREAK`, backslash + newline) is exported by
 // inline-runs.ts, the one place that emits it: `collectInline` turns a `<br>` into a
 // break atom (counted as the token's length), and `serializeInlineRuns` renders it.
-// Edge trimming and the link-label fold happen on atoms there — a break unit at a
-// run edge is dropped, one in a label becomes a space — so no string scan here has
+// Edge trimming, the link-label fold and the heading fold (`inlineMarkdown` 'heading'
+// mode → `foldBreaksToSpaces`) all happen on atoms there — a break unit at a run edge
+// is dropped, one in a label or heading becomes a space — so no string scan here has
 // to keep the token's `\` and `\n` together. The remaining string-level readers
-// (heading, list-item and blockquote residue guards) fold the whole token.
+// (the list-item and blockquote residue guards) fold the whole token.
 //
 // A `\n` in an inline fragment ALWAYS comes from a `<br>`, because EVERY text node
 // on the inline path goes through `collapseWs`, which turns each whitespace run into
@@ -1080,7 +1085,7 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
       // non-empty source can still serialise down to — a SKIP_TAGS-only subtree (→ "")
       // or a lone joiner left by a buried <hr> that satisfied the predicate's <hr> clause
       // but serialised to nothing. The SAME full-strip `blankAfterInvisible` rule as the
-      // HEADINGS/PRE residues (HARD_BREAK folded to a space first), not `!== ""`, which
+      // heading/PRE residues (HARD_BREAK folded to a space first), not `!== ""`, which
       // let a preserved joiner through as `> ‍`.
       if (hasVisibleContent(el)) {
         // Richness is COMPOSITIONAL — ask the child walk, not the emitted string. A
