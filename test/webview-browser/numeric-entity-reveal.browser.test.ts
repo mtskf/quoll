@@ -226,10 +226,11 @@ it("decoded entities match literal-character width and word-joiner wrapping", as
       control.dispose();
     }
   }
-  if (!results.wj.wrapAtBuffer && !results.letter.wrapAtBuffer) {
-    expect(results.wj.widget).toBe(results.wj.literal);
-    expect(results.letter.widget).toBe(results.letter.literal);
-  }
+  // Spike (plan Task 2) recorded both false: the widget must not add a wrap opportunity the literal lacks.
+  expect(results.wj.wrapAtBuffer).toBe(false);
+  expect(results.letter.wrapAtBuffer).toBe(false);
+  expect(results.wj.widget).toBe(results.wj.literal);
+  expect(results.letter.widget).toBe(results.letter.literal);
 });
 
 it("repair fallback displays its letter and selection-only reveal sends no edit", async () => {

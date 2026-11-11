@@ -24,7 +24,8 @@ function bigMarkHeavyDoc(targetBytes: number): string {
   // decoration per repeat — without it that provider would emit zero in BOTH
   // viewports and `0 < 0 / 10` is false. `x/y` is a path-shaped inline code
   // span so codeRefReveal (the workspace-relative code-reference affordance)
-  // stays non-vacuous under the same rule.
+  // stays non-vacuous under the same rule, and `&#97;` does the same for
+  // numericEntityReveal (one decoded-entity widget per repeat).
   const line =
     "# h\n> q\n**bold** *italic* `code` `x/y` ~~strike~~ &#97; [t](https://x)\n- [ ] t\n- b\n```js\nc\n```\n---\ns\n=\n";
   return line.repeat(Math.ceil(targetBytes / line.length));

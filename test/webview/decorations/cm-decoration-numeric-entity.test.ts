@@ -74,6 +74,30 @@ describe("numeric entity reveal", () => {
       'plain `&#97;` \\&#97; ![&#97;](url "&#98;") [x](url "&#99;") &amp; &#12345678; &#9; &#127; &#x2028; &#x202E; &#x2066; &#0;';
     expect(entries(context(doc)).map((x) => x.text)).toEqual(["�"]);
   });
+  it("excludes every layout and bidi control at both range ends", () => {
+    const excluded = [
+      "&#1;",
+      "&#10;",
+      "&#x1F;",
+      "&#x7F;",
+      "&#x85;",
+      "&#x9F;",
+      "&#x2028;",
+      "&#x2029;",
+      "&#x202A;",
+      "&#x202E;",
+      "&#x2066;",
+      "&#x2067;",
+      "&#x2069;",
+    ];
+    const allowed = ["&#x20;", "&#xA0;", "&#x2027;", "&#x202F;", "&#x2065;", "&#x206A;"];
+    for (const raw of excluded) {
+      expect(entries(context(`x ${raw} y`)), raw).toEqual([]);
+    }
+    for (const raw of allowed) {
+      expect(entries(context(`x ${raw} y`)), raw).toHaveLength(1);
+    }
+  });
   it("reveals every caret offset including both boundaries", () => {
     for (const raw of ["&#8288;", "&#97;"]) {
       const doc = `x ${raw} y`;
