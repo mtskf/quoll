@@ -1,43 +1,34 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { commands, window } from "vscode"; // vitest-aliased to test/extension/vscode-stub.ts
 import {
-  __getActiveDocPosterForTest,
-  clearActiveDocFormatPoster,
+  clearActivePanelPost,
+  getActivePanelPost,
+  setActivePanelPost,
+} from "../../../src/extension/commands/active-panel.js";
+import {
   registerFormatDocumentCommand,
   runFormatDocumentCommand,
-  setActiveDocFormatPoster,
 } from "../../../src/extension/commands/format-document-command.js";
-
-describe("doc-format active poster", () => {
-  it("set/get + identity-guarded clear", () => {
-    const a = vi.fn();
-    const b = vi.fn();
-    setActiveDocFormatPoster(a);
-    setActiveDocFormatPoster(b);
-    clearActiveDocFormatPoster(a);
-    expect(__getActiveDocPosterForTest()).toBe(b);
-    clearActiveDocFormatPoster(b);
-    expect(__getActiveDocPosterForTest()).toBeNull();
-  });
-});
+import { PROTOCOL_VERSION } from "../../../src/shared/protocol.js";
 
 describe("runFormatDocumentCommand — the arm that used to be silent", () => {
   afterEach(() => {
-    const active = __getActiveDocPosterForTest();
+    const active = getActivePanelPost();
     if (active !== null) {
-      clearActiveDocFormatPoster(active);
+      clearActivePanelPost(active);
     }
     vi.restoreAllMocks();
   });
 
   it("forwards to the active panel without a toast", () => {
     const post = vi.fn();
-    setActiveDocFormatPoster(post);
+    setActivePanelPost(post);
     const info = vi.spyOn(window, "showInformationMessage");
 
     runFormatDocumentCommand();
 
     expect(post).toHaveBeenCalledTimes(1);
+    expect(post).toHaveBeenCalledWith({ protocol: PROTOCOL_VERSION, type: "format-document" });
     expect(info).not.toHaveBeenCalled();
   });
 
