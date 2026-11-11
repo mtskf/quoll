@@ -5,10 +5,13 @@ import { EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView, keymap, runScopeHandlers } from "@codemirror/view";
 import { describe, expect, it, vi } from "vitest";
 import {
+  quollBlockReplaceZones,
+  quollSyntaxExclusionZones,
   quollSyntaxReveal,
   syntaxRevealProviders,
 } from "../../../src/webview/cm/decorations/index.js";
 import { linkReveal } from "../../../src/webview/cm/decorations/link-reveal.js";
+import { quollHighlighting, quollTokenMarkers } from "../../../src/webview/cm/theme.js";
 import { mountEditor } from "../../../src/webview/editor.js";
 import { initialState, type WebviewState } from "../../../src/webview/state.js";
 import { fullTree } from "../helpers/full-tree.js";
@@ -31,6 +34,8 @@ function mount(doc: string): EditorView {
       markdown({ base: markdownLanguage }),
       keymap.of(defaultKeymap),
       quollSyntaxReveal(),
+      quollHighlighting,
+      quollTokenMarkers,
       history(), // undo() returns false without this; C5 undo tests would silently pass
     ],
   });
@@ -72,7 +77,7 @@ describe("orchestrator integration — providers wired", () => {
 
   it("module-level providers array is stable across multiple createSyntaxReveal() calls (no fresh-array-per-render)", () => {
     expect(syntaxRevealProviders).toBe(syntaxRevealProviders);
-    expect(syntaxRevealProviders).toHaveLength(10);
+    expect(syntaxRevealProviders).toHaveLength(11);
     expect(typeof syntaxRevealProviders[0]?.build).toBe("function");
     expect(typeof syntaxRevealProviders[1]?.build).toBe("function");
     expect(typeof syntaxRevealProviders[2]?.build).toBe("function");
@@ -301,6 +306,102 @@ describe("integration — C5 list & task-list interactive", () => {
       view.dispatch({ selection: { anchor: source.length } });
       runScopeHandlers(view, new KeyboardEvent("keydown", { key: "Enter" }), "editor");
       expect(view.state.sliceDoc()).toBe("1. one\n2. two\n3. ");
+    } finally {
+      view.destroy();
+    }
+  });
+});
+
+describe("numeric entity integration", () => {
+  it("production syntax reveal registers numeric entity display", () => {
+    const source = "plain \n\n&#97; &#8288;";
+    const view = mount(source);
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const state: WebviewState = { ...initialState, ready: true, docVersion: 1, canWrite: true };
+    const handle = mountEditor({
+      parent,
+      nonce: "test",
+      getState: () => state,
+      dispatch: () => {},
+    });
+    try {
+      expect(view.dom.querySelectorAll(".quoll-numeric-entity")).toHaveLength(2);
+      handle.applyDocument({
+        content: source,
+        eol: "\n",
+        canWrite: true,
+        docVersion: 1,
+        externalEpoch: 0,
+        epochGeneration: 1,
+        settledEditId: 0,
+      });
+      const production = EditorView.findFromDOM(
+        parent.querySelector(".quoll-editor") as HTMLElement
+      );
+      if (!production) {
+        throw new Error("missing production editor");
+      }
+      production.dispatch({ selection: { anchor: 1 } });
+      expect(production.dom.querySelectorAll(".quoll-numeric-entity")).toHaveLength(2);
+    } finally {
+      view.destroy();
+      handle.dispose();
+      parent.remove();
+    }
+  });
+  it("numeric entity selection changes preserve document bytes and edit history", () => {
+    const source = "x &#97; y";
+    const view = mount(source);
+    try {
+      view.dispatch({ selection: { anchor: 4 } });
+      view.dispatch({ selection: { anchor: 0 } });
+      expect(view.state.doc.toString()).toBe(source);
+      expect(undo({ state: view.state, dispatch: view.dispatch.bind(view) })).toBe(false);
+    } finally {
+      view.destroy();
+    }
+  });
+  it("editing an entity removes stale display and undo restores source", () => {
+    const source = "x &#97; y";
+    const view = mount(source);
+    try {
+      expect(view.dom.querySelectorAll(".quoll-numeric-entity")).toHaveLength(1);
+      view.dispatch({ changes: { from: 6, to: 7, insert: "" } });
+      expect(view.dom.querySelectorAll(".quoll-numeric-entity")).toHaveLength(0);
+      expect(undo({ state: view.state, dispatch: view.dispatch.bind(view) })).toBe(true);
+      expect(view.state.doc.toString()).toBe(source);
+      view.dispatch({ selection: { anchor: 0 } });
+      expect(view.dom.querySelectorAll(".quoll-numeric-entity")).toHaveLength(1);
+    } finally {
+      view.destroy();
+    }
+  });
+  it("numeric entity decorations respect both exclusion zone facets", () => {
+    for (const facet of [quollBlockReplaceZones, quollSyntaxExclusionZones]) {
+      for (const [zone, count] of [
+        [{ from: 2, to: 7 }, 0],
+        [{ from: 7, to: 8 }, 1],
+      ] as const) {
+        const state = EditorState.create({
+          doc: "x &#97; y",
+          extensions: [markdown({ base: markdownLanguage }), quollSyntaxReveal(), facet.of([zone])],
+        });
+        const view = settledMount({ state });
+        try {
+          expect(view.dom.querySelectorAll(".quoll-numeric-entity")).toHaveLength(count);
+        } finally {
+          view.destroy();
+        }
+      }
+    }
+  });
+  it("numeric entity replacements inherit surrounding emphasis", () => {
+    const view = mount("plain\n\n**&#97;** *&#98;* **.**&#97;");
+    try {
+      const widgets = view.dom.querySelectorAll(".quoll-numeric-entity");
+      expect(Array.from(widgets, (e) => e.textContent)).toEqual(["a", "b", "a"]);
+      expect(widgets[0]?.closest(".quoll-tok-strong")).not.toBeNull();
     } finally {
       view.destroy();
     }

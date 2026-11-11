@@ -639,6 +639,7 @@ describe("widget containment cannot be bypassed", () => {
     const widgets = widgetClasses.map((c) => c.file.slice(WEBVIEW_SRC.length + 1)).sort();
     expect(widgets).toEqual([
       "cm/decorations/blockquote-collapse-widget.ts",
+      "cm/decorations/numeric-entity-widget.ts",
       "cm/decorations/thematic-break-widget.ts",
       "cm/fenced-code/fenced-code-collapse-widget.ts",
       "cm/fenced-code/fenced-code-copy-button-widget.ts",
@@ -675,10 +676,10 @@ describe("widget containment cannot be bypassed", () => {
     ];
     expect(names.filter((n) => n === undefined)).toEqual([]); // every widget declares one
     expect(new Set(names).size).toBe(names.length);
-    // 9 `QuollWidget` subclasses (the roster above) + 1 direct caller
+    // 10 `QuollWidget` subclasses (the roster above) + 1 direct caller
     // (`cm/fold/index.ts`'s `"foldPlaceholder"`). Same convention as the roster
     // test: a new one must be a deliberate edit here.
-    expect(names.length).toBe(10);
+    expect(names.length).toBe(11);
   });
 
   // Every module a widget can reach through local imports — DERIVED, not listed.

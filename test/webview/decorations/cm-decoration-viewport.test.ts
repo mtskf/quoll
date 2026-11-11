@@ -26,7 +26,7 @@ function bigMarkHeavyDoc(targetBytes: number): string {
   // span so codeRefReveal (the workspace-relative code-reference affordance)
   // stays non-vacuous under the same rule.
   const line =
-    "# h\n> q\n**bold** *italic* `code` `x/y` ~~strike~~ [t](https://x)\n- [ ] t\n- b\n```js\nc\n```\n---\ns\n=\n";
+    "# h\n> q\n**bold** *italic* `code` `x/y` ~~strike~~ &#97; [t](https://x)\n- [ ] t\n- b\n```js\nc\n```\n---\ns\n=\n";
   return line.repeat(Math.ceil(targetBytes / line.length));
 }
 

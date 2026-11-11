@@ -19,6 +19,7 @@ import type {
   DecorationProvider,
 } from "../../../src/webview/cm/decorations/index.js";
 import { arbitrate, syntaxRevealProviders } from "../../../src/webview/cm/decorations/index.js";
+import { numericEntityReveal } from "../../../src/webview/cm/decorations/numeric-entity-reveal.js";
 import { fullTree } from "../helpers/full-tree.js";
 
 // Kitchen-sink document: one example of every construct the registry reveals.
@@ -30,7 +31,7 @@ import { fullTree } from "../helpers/full-tree.js";
 const SAMPLE_DOC = [
   "plain paragraph with no markup",
   "",
-  "# Heading",
+  "# Heading &#97; &#8288;",
   "",
   "> blockquote line",
   "",
@@ -167,6 +168,14 @@ function overlappingZones(
 const PROVIDERS = syntaxRevealProviders.map((p, i) => [i, p] as const);
 
 describe("decoration provider contract — registry coverage", () => {
+  it("registers numeric entity reveal and emits both examples", () => {
+    expect(syntaxRevealProviders).toContain(numericEntityReveal);
+    expect(
+      specOf(build(numericEntityReveal, SAMPLE_DOC, EditorSelection.single(NEUTRAL))).filter(
+        (x) => x.widget === "NumericEntityWidget"
+      )
+    ).toHaveLength(2);
+  });
   it("every registered provider emits ≥1 decoration on SAMPLE_DOC (fixture non-vacuity)", () => {
     // Guards auto-enrolment: a new provider whose construct is missing from
     // SAMPLE_DOC emits nothing here, failing loudly so the fixture is extended.

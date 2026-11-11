@@ -15,6 +15,7 @@ import { bulletMarkerReveal } from "./bullet-marker-reveal.js";
 import { headingReveal } from "./heading-reveal.js";
 import { inlineMarkReveal } from "./inline-mark-reveal.js";
 import { linkReveal } from "./link-reveal.js";
+import { numericEntityReveal } from "./numeric-entity-reveal.js";
 import { createSyntaxReveal } from "./orchestrator.js";
 import { setextNascentReveal } from "./setext-nascent-reveal.js";
 import { thematicBreakReveal } from "./thematic-break-reveal.js";
@@ -44,6 +45,7 @@ export const syntaxRevealProviders = [
   // (`src/foo.ts:42`). Display-only mark; click-to-open is wired separately
   // in cm/code-ref/code-ref-handlers.ts.
   codeRefReveal,
+  numericEntityReveal,
 ] as const;
 
 /** The single extension entry `editor.ts` registers. Bundles every
