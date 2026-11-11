@@ -1,8 +1,10 @@
 // @vitest-environment happy-dom
 import { defaultKeymap, history, undo } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
+import { highlightingFor } from "@codemirror/language";
 import { EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView, keymap, runScopeHandlers } from "@codemirror/view";
+import { tags as t } from "@lezer/highlight";
 import { describe, expect, it, vi } from "vitest";
 import {
   quollBlockReplaceZones,
@@ -401,7 +403,16 @@ describe("numeric entity integration", () => {
     try {
       const widgets = view.dom.querySelectorAll(".quoll-numeric-entity");
       expect(Array.from(widgets, (e) => e.textContent)).toEqual(["a", "b", "a"]);
+      // Each widget carries only the classes of ITS OWN source span: the `.` between
+      // the last `**` pair is strong but the trailing `&#97;` is not.
+      const emphasis = `.${highlightingFor(view.state, [t.emphasis])}`;
+      expect(emphasis).not.toBe(".null");
       expect(widgets[0]?.closest(".quoll-tok-strong")).not.toBeNull();
+      expect(widgets[0]?.closest(emphasis)).toBeNull();
+      expect(widgets[1]?.closest(emphasis)).not.toBeNull();
+      expect(widgets[1]?.closest(".quoll-tok-strong")).toBeNull();
+      expect(widgets[2]?.closest(".quoll-tok-strong")).toBeNull();
+      expect(widgets[2]?.closest(emphasis)).toBeNull();
     } finally {
       view.destroy();
     }
