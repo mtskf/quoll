@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { markdownLanguage } from "@codemirror/lang-markdown";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { htmlToMarkdown } from "../../../src/webview/cm/paste/html-to-markdown.js";
 
 // The converter returns a discriminated result; these tests predate that and
@@ -402,6 +402,51 @@ describe("htmlToMarkdown — block constructs", () => {
     // abort mid-build and return null (not build gigabytes then check).
     const oneTable = '<table><tr><td colspan="1000">x</td></tr></table>';
     expect(convert(oneTable.repeat(2000))).toBeNull();
+  });
+  // Each emphasis repair re-serialises its whole run, so the repair work is
+  // bounded per conversion (MAX_REPAIR_WORK, 4M chars), not per run.
+  describe("repair budget", () => {
+    // Restore in afterEach so a failed assertion cannot leak the muted console.
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+    const CAP_WARNING = "[quoll] rich paste: emphasis repair cap exceeded";
+
+    // A sequential cascade: `a` then alternating bold/italic `a`s, closed by a bold
+    // `.`. Each repair exposes the next failing group, so batching cannot collapse
+    // it and the work grows with depth x run length. Measured: one run fails from
+    // 577 pairs, and 50-pair paragraphs fail together from 130 of them.
+    const cascade = (pairs: number): string =>
+      `<p>a${"<b>a</b><i>a</i>".repeat(pairs)}<b>.</b></p>`;
+
+    it("returns null when one long run is a deep repair cascade", () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      expect(convert(cascade(1000))).toBeNull();
+      // The repair cap specifically, not some other throw or cap.
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(CAP_WARNING);
+    });
+    it("bounds the repair work across blocks, not per block", () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      // The same paragraph passes 60 times over but not 260 times: each block
+      // alone is cheap, and the budget is shared by the whole conversion.
+      const para = cascade(50);
+      expect(convert(para.repeat(60))).not.toBeNull();
+      expect(warn).not.toHaveBeenCalled();
+      expect(convert(para.repeat(260))).toBeNull();
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(CAP_WARNING);
+    });
+    it("converts a long run of independent repairs (one per line)", () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      // 600 `Note:` colons each need a demotion. Repaired one per pass, that is
+      // 600 re-serialisations of the whole run, over the cap; batched, it is one.
+      const md = convert(`<p>${"<b>Note:</b>text here<br>".repeat(600)}</p>`);
+      expect(md).not.toBeNull();
+      expect(md?.split("**Note**:text here").length).toBe(601);
+      expect(parsesToNode(md ?? "", "StrongEmphasis")).toBe(true);
+      expect(warn).not.toHaveBeenCalled();
+    });
   });
 });
 
@@ -1312,5 +1357,68 @@ describe("htmlToMarkdown — block separators", () => {
     // cannot express a paragraph break inside emphasis; keeping the span intact
     // is the lesser evil and is the shape the O(n) hoist test also relies on.
     expect(htmlToMarkdown("<p><strong>x<br><br>y</strong>z</p>")?.markdown).toBe("**x\\\n\\\ny**z");
+  });
+});
+
+describe("inline style runs (PASTE-01b)", () => {
+  it("merges adjacent emphasis of the same style", () => {
+    expect(convert("<b>A</b><b>B</b>")).toBe("**AB**");
+    expect(convert("<b>A<span>B</span></b>")).toBe("**AB**");
+  });
+
+  it("nests overlapping emphasis with the longer run outermost", () => {
+    expect(convert("<strong><em>A</em></strong><em>B</em><strong>C</strong>")).toBe(
+      "***A**B***C**"
+    );
+  });
+
+  it("moves edge punctuation outside a run that would not flank", () => {
+    expect(convert("<b>Note:</b>text")).toBe("**Note**:text");
+    expect(convert("<p>これは<b>「重要」</b>です。</p>")).toBe("これは「**重要**」です。");
+  });
+
+  it("keeps one span across a hard break", () => {
+    expect(convert("<b>a<br>b</b>")).toBe("**a\\\nb**");
+  });
+
+  it("bolds a rejected link's label and keeps a link's own emphasis inside it", () => {
+    expect(convert('<b><a href="javascript:x">t</a></b>')).toBe("**t**");
+    expect(convert('<a href="https://e.x"><b>t</b></a>')).toBe("[**t**](https://e.x)");
+  });
+
+  it("folds a hard break in a link label to a space", () => {
+    expect(convert('<a href="https://e.x">a<br>b</a>')).toBe("[a b](https://e.x)");
+  });
+
+  it("leaves a flanking closer before trailing whitespace alone", () => {
+    expect(convert("<p><b>a.</b> </p>")).toBe("**a.**");
+  });
+});
+
+describe("heading style runs (PASTE-01b)", () => {
+  it("merges adjacent emphasis in a heading", () => {
+    expect(convert("<h1><b>A</b><b>B</b></h1>")).toBe("# **AB**");
+  });
+
+  it("moves edge punctuation outside a heading's run", () => {
+    expect(convert("<h2><b>Note:</b>text</h2>")).toBe("## **Note**:text");
+  });
+
+  it("folds a hard break in a heading to a space", () => {
+    expect(convert("<h1>a<br>b</h1>")).toBe("# a b");
+  });
+});
+
+describe("heading trailing hash", () => {
+  it("escapes a space-preceded trailing hash run", () => {
+    expect(convert("<h1>title #</h1>")).toBe("# title \\#");
+  });
+
+  it("escapes a heading that is only a hash run", () => {
+    expect(convert("<h2>#</h2>")).toBe("## \\#");
+  });
+
+  it("leaves a hash that is part of a word", () => {
+    expect(convert("<h1>C#</h1>")).toBe("# C#");
   });
 });

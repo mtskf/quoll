@@ -51,11 +51,11 @@
 //       `blankAfterInvisible(skipTagsText(cell))` check (td/th/caption), NOT from
 //       `hasVisibleContent(el)` — whose `<hr>` clause would call an `<hr>`-only spacer
 //       cell rich. The one branch where "emit this" and "this is rich" differ.
-//     · `<strong>`/`<b>`/`<em>`/`<i>` set their flag in `emphasize`, which consults
-//       `blankAfterInvisible` on the emitted `inner` — HARD_BREAK folded to a space
-//       first, so neither a lone-joiner nor a joiner-plus-`<br>` span is bolded — but
-//       never calls `hasVisibleContent(el)`. `wrapEmphasis` additionally hoists
-//       spaces/`<br>` edges out of the markers.
+//     · `<strong>`/`<b>`/`<em>`/`<i>` only set a style mask on the atoms
+//       `collectInline` gathers; `serializeInlineRuns` (inline-runs.ts) sets the flag
+//       when it actually emits a marker. A visually empty unit — whitespace, a break,
+//       a lone joiner — is neutral there and never opens one, so neither a lone-joiner
+//       nor a joiner-plus-`<br>` span is bolded; `hasVisibleContent(el)` is not called.
 //    A block pushed with `syntax: false` — a paragraph, or the blocks a nested
 //    walk already recorded for itself — needs none of this: it cannot flip the
 //    flag, so its own "did anything render" test cannot defeat the caller's defer.
@@ -67,6 +67,18 @@ import { isAllowedUrl } from "../../../markdown/url-allowlist.js";
 import { encodeMarkdownDestination } from "../../../markdown/url-decode.js";
 import { MAX_LIST_NUMBER } from "../list/list-transform.js";
 import { SKIP_TAGS, tableElementToGfm } from "./html-table-to-gfm.js";
+import {
+  BOLD,
+  CapExceeded,
+  foldBreaksToSpaces,
+  HARD_BREAK,
+  type InlineAtom,
+  InlineRepairCapExceeded,
+  ITALIC,
+  type RepairBudget,
+  type StyleMask,
+  serializeInlineRuns,
+} from "./inline-runs.js";
 
 const TEXT_NODE = 3;
 const ELEMENT_NODE = 1;
@@ -74,6 +86,11 @@ const ELEMENT_NODE = 1;
 const MAX_HTML_INPUT_CHARS = 2 * 1024 * 1024; // 2 MiB source HTML
 const MAX_OUTPUT_CHARS = 4 * 1024 * 1024; // bound total emitted Markdown (checked incrementally)
 const MAX_NODES = 50_000; // total element visits
+// Total emphasis-repair work per conversion, in chars re-serialised (see
+// `RepairBudget`). Independent repairs are batched per pass, so the cost scales
+// with cascade depth x run length: ordinary pastes settle in one or two passes,
+// and this bounds a crafted cascade before the plain-text fallback.
+const MAX_REPAIR_WORK = 4_000_000;
 // Recursion depth cap for BOTH inline and block walks. 32 is far beyond any real
 // document (nobody nests 32 blockquotes/lists or 32 inline emphasis spans), yet
 // low enough that the transient peak memory of wrapper re-indentation
@@ -88,12 +105,12 @@ const MAX_DEPTH = 32;
 // shared because the rich converter reuses tableElementToGfm) — SCRIPT/STYLE/…
 // plus form-control + embed elements whose text/value is not prose.
 
-/** Internal cap sentinel — thrown deep in the walk, caught by `htmlToMarkdown`,
- *  which returns `null` so the handler degrades to plain-text paste. NEVER
- *  propagates to the DOM event handler. */
-class CapExceeded extends Error {}
+// The cap sentinel `CapExceeded` (imported from inline-runs.ts, so the inline
+// serializer's repair-cap error is the same class) is thrown deep in the walk and
+// caught by `htmlToMarkdown`, which returns `null` so the handler degrades to
+// plain-text paste. It NEVER propagates to the DOM event handler.
 
-interface Ctx {
+export interface Ctx {
   nodes: number; // element visits
   outLen: number; // cumulative emitted Markdown length (incremental output cap)
   // Did the walk emit Markdown SYNTAX (as opposed to escaped text + line
@@ -102,8 +119,10 @@ interface Ctx {
   // byte. The handler uses it to choose between this conversion and the
   // clipboard's own `text/plain` bytes. Block-level writes go through
   // `serializeBlocks`' `push`, which takes the fact as a REQUIRED argument;
-  // only the inline leaves below assign it directly.
+  // the inline path assigns it directly: `collectInline`'s code/link leaves, and
+  // `inlineMarkdown` when `serializeInlineRuns` reports it emitted emphasis markers.
   emittedMarkdownSyntax: boolean;
+  repair: RepairBudget; // shared by every inline run of this conversion
 }
 
 function bump(ctx: Ctx): void {
@@ -191,11 +210,14 @@ function collapseWs(text: string): string {
  *  nothing visible remains. Distinct from `collapseWs` (the emit path, which PRESERVES
  *  joiners — WJ included — and variation selectors for fidelity): a lone one reads
  *  as blank here so an otherwise-empty container holding only one cannot flip
- *  `emittedMarkdownSyntax`. THE single answer to "is this text visually empty" — routed
+ *  `emittedMarkdownSyntax`. THE single answer to "is this text visually empty" within this
+ *  file — routed
  *  through by every emptiness decision in this module: `hasVisibleContent`, the table
- *  per-cell and blockquote/list wrapper own-text richness checks, `emphasize`'s gate,
+ *  per-cell and blockquote/list wrapper own-text richness checks,
  *  the CODE/A/PRE/heading/blockquote/list-item residue guards, and the inline-run
- *  blank-text / non-`<li>` list-child checks — so none grows its own rule. */
+ *  blank-text / non-`<li>` list-child checks — so none grows its own rule. ⚠️ inline-runs.ts's `INVISIBLE_TOKEN` hand-mirrors the same
+ *  `\p{Default_Ignorable_Code_Point} ∪ \p{Cf}` union (it classifies atoms, not strings), so
+ *  the two must be changed together. */
 function blankAfterInvisible(text: string): boolean {
   return (
     text
@@ -228,7 +250,7 @@ function blankAfterInvisible(text: string): boolean {
  *  Four callers: the `hasVisibleContent` emptiness predicate and the table PER-CELL
  *  richness check both feed it to `blankAfterInvisible` (so `<style>`/`<textarea>` text
  *  no reader sees never counts as visible), and the two branches that emit a body from
- *  `textContent` rather than `serializeInline` — `<pre>` (verbatim) and inline `<code>`
+ *  `textContent` rather than `collectInline` — `<pre>` (verbatim) and inline `<code>`
  *  (then `collapseWs`'d) — read through it so SKIP_TAGS text cannot leak into a fenced /
  *  inline-code body. */
 function skipTagsText(el: Element): string {
@@ -287,79 +309,6 @@ function inlineCode(text: string): string {
   return `${fence}${pad}${text}${pad}${fence}`;
 }
 
-/** Wrap `inner` in an emphasis `marker` (`**`/`*`) with edge whitespace HOISTED
- *  outside the markers: CommonMark flanking rules reject a delimiter run adjacent
- *  to whitespace, so `<strong>foo </strong>` must emit `**foo** ` — never
- *  `**foo **`, whose closing run is space-preceded and shows as literal `**`. The
- *  hoisted edge run is spaces (collapsed to single spaces by `collapseWs`) AND
- *  `<br>` hard-break tokens (`\` + `\n`), each taken as ONE unit so its escaping
- *  backslash is never separated from its newline: a whitespace-class match (`\s`)
- *  would consume only the `\n` and strand the `\` at the boundary, emitting a
- *  marker-escaping `**foo\**`. When the whole span is hoistable (spaces/`<br>`s
- *  only) the core is empty and `inner` is returned unwrapped — a `<br>`-only span
- *  like `<strong><br></strong>` yields a bare hard break, not an empty `**\\\n**`.
- *  Done with two linear index scans, NOT a regex: an `^edge*? core edge*$` pattern
- *  backtracks O(n²) on a long `<br>` run fenced by non-hoistable text on both
- *  sides. Wrapping is O(1)/uncounted — `inner`'s leaves were already counted. */
-function wrapEmphasis(inner: string, marker: string): string {
-  let start = 0;
-  while (start < inner.length) {
-    if (inner[start] === " ") {
-      start += 1;
-    } else if (inner[start] === "\\" && inner[start + 1] === "\n") {
-      start += 2; // a `<br>` hard-break token — hoisted whole
-    } else {
-      break;
-    }
-  }
-  let end = inner.length;
-  while (end > start) {
-    if (inner[end - 1] === " ") {
-      end -= 1;
-    } else if (inner[end - 1] === "\n" && inner[end - 2] === "\\") {
-      end -= 2;
-    } else {
-      break;
-    }
-  }
-  if (start >= end) {
-    return inner; // all-whitespace / `<br>`-only: nothing to wrap
-  }
-  return `${inner.slice(0, start)}${marker}${inner.slice(start, end)}${marker}${inner.slice(end)}`;
-}
-
-/** `wrapEmphasis`, recording on `ctx` whether markers were actually emitted.
- *  `wrapEmphasis` returns its input unchanged when the span is all-whitespace /
- *  `<br>`-only, and that degenerate case emits no syntax — so compare rather than
- *  assume. Wrapping and recording are one call so they cannot be given different
- *  inputs.
- *
- *  This is where emphasis consults the emptiness rule: emphasis does NOT route
- *  through `hasVisibleContent(el)`, but a VISUALLY EMPTY span must still not become
- *  `**…**` and flip the flag. `wrapEmphasis` already returns `inner` for a
- *  whitespace-/`<br>`-only span, but the emit path preserves joiners, so a lone-joiner
- *  span (`<strong>&#8205;</strong>`) — or a joiner-plus-`<br>` span, once the HARD_BREAK
- *  token is folded to a space (see the body) — reaches here with non-hoistable `inner`.
- *  `blankAfterInvisible` (the same full-strip predicate the containers use) rejects it,
- *  returning `inner` transparently — like a `<span>` — with no markers and no flag,
- *  while a joiner WITHIN visible text (`<strong>👨‍👩‍👧</strong>`) still bolds. */
-function emphasize(ctx: Ctx, inner: string, marker: string): string {
-  // Fold HARD_BREAK tokens to a space before the emptiness gate, the same
-  // whole-token fold the `<a>` label uses. A `<br>` contributes no bold content
-  // (like whitespace / the zero-width class), but its token's escaping `\` survives
-  // `blankAfterInvisible`'s full-strip + trim — so a span of only a joiner + `<br>`
-  // (`<strong>&#8205;<br></strong>`) would otherwise pass the gate and wrap the
-  // residual joiner into `**‍**`, flipping the flag.
-  if (blankAfterInvisible(inner.split(HARD_BREAK).join(" "))) {
-    return inner;
-  }
-  const wrapped = wrapEmphasis(inner, marker);
-  if (wrapped !== inner) {
-    ctx.emittedMarkdownSyntax = true;
-  }
-  return wrapped;
-}
-
 /** The inline-style declarations that cancel the emphasis a tag implies, keyed by
  *  the property each tag is about. `400` is the numeric spelling of `normal`;
  *  `font-style` has no numeric form, so it lists only the keyword. Deliberately NOT
@@ -391,64 +340,75 @@ function styleCancelsEmphasis(el: Element, prop: keyof typeof EMPHASIS_CANCELLED
   return EMPHASIS_CANCELLED_BY[prop].test(el.getAttribute("style") ?? "");
 }
 
-/** The hard-break token `serializeInline` emits for `<br>`: a backslash
- *  immediately followed by a newline. Declared here, above its emitting site, so
- *  that site, the `trimSegmentEdges` scan and the `<a>` label fold all read the
- *  same token and cannot drift apart.
- *
- *  ⚠️ ONE place matches the same two characters WITHOUT referencing this constant:
- *  `wrapEmphasis`, declared above it, whose edge-hoisting scans compare `"\\"` and
- *  `"\n"` index by index. Change the token here and you must change those scans
- *  too — the anti-drift guarantee this declaration site offers covers its three
- *  referencing sites only, by convention, not by anything the compiler enforces.
- *
- *  A `\n` in an inline fragment ALWAYS comes from a `<br>` and always carries its
- *  own leading backslash, so matching the two-character token is unambiguous.
- *  That holds because EVERY text node on the inline path goes through
- *  `collapseWs`, which turns each whitespace run into a single space. Note the
- *  reason is `collapseWs`, NOT "`<pre>` is handled elsewhere": only DIRECT
- *  children are block-tested, so a `<pre>` under an inline ancestor
- *  (`<em><span><pre>a\nb</pre></span></em>`) does reach `serializeInline` — its
- *  body simply arrives as a text node and loses its newlines like any other. Do
- *  not skip `collapseWs` anywhere on the inline path on the assumption that
- *  `<pre>` cannot appear there. */
-const HARD_BREAK = "\\\n";
+// The hard-break token (`HARD_BREAK`, backslash + newline) is exported by
+// inline-runs.ts, the one place that emits it: `collectInline` turns a `<br>` into a
+// break atom (counted as the token's length), and `serializeInlineRuns` renders it.
+// Edge trimming, the link-label fold and the heading fold (`inlineMarkdown` 'heading'
+// mode → `foldBreaksToSpaces`) all happen on atoms there — a break unit at a run edge
+// is dropped, one in a label or heading becomes a space — so no string scan here has
+// to keep the token's `\` and `\n` together. The remaining string-level readers
+// (the list-item and blockquote residue guards) fold the whole token.
+//
+// A `\n` in an inline fragment ALWAYS comes from a `<br>`, because EVERY text node
+// on the inline path goes through `collapseWs`, which turns each whitespace run into
+// a single space. Note the reason is `collapseWs`, NOT "`<pre>` is handled
+// elsewhere": only DIRECT children are block-tested, so a `<pre>` under an inline
+// ancestor (`<em><span><pre>a\nb</pre></span></em>`) does reach `collectInline` —
+// its body simply arrives as a text node and loses its newlines like any other. Do
+// not skip `collapseWs` anywhere on the inline path on the assumption that `<pre>`
+// cannot appear there.
 
-/** Serialise inline content (children of a block) to a Markdown fragment. Text is
- *  whitespace-collapsed + escaped; recognised inline elements wrap their
- *  serialised children; unknown inline elements recurse transparently. `depth`
- *  guards against call-stack exhaustion on pathological nesting. */
-function serializeInline(node: Node, depth: number, ctx: Ctx): string {
+/** Collect inline content (children of a block) as styled atoms for
+ *  `serializeInlineRuns`, appending to `out`. `style` is the emphasis inherited
+ *  from the ancestors. Text is whitespace-collapsed (never escaped here), and
+ *  unknown inline elements recurse transparently. `depth` guards against
+ *  call-stack exhaustion on pathological nesting. Leaves are counted where they
+ *  are read — a text leaf counts its collapsed UNESCAPED text (escaping happens
+ *  later, in the serializer; it at most doubles the text, and the final output
+ *  length check stays authoritative). Emphasis tags only change the style mask:
+ *  markers, their placement and the visually-empty case are the serializer's job. */
+export function collectInline(
+  node: Node,
+  depth: number,
+  ctx: Ctx,
+  style: StyleMask,
+  out: InlineAtom[]
+): void {
   if (depth > MAX_DEPTH) {
     throw new CapExceeded();
   }
   if (node.nodeType === TEXT_NODE) {
-    return count(ctx, escapeInline(collapseWs(node.textContent ?? "")));
+    const text = count(ctx, collapseWs(node.textContent ?? ""));
+    if (text !== "") {
+      out.push({ kind: "text", text, style });
+    }
+    return;
   }
   if (node.nodeType !== ELEMENT_NODE) {
-    return "";
+    return;
   }
   const el = node as Element;
   const tag = el.tagName;
   if (SKIP_TAGS.has(tag)) {
-    return "";
+    return;
   }
   bump(ctx);
   if (tag === "BR") {
-    return count(ctx, HARD_BREAK); // hard break (backslash form survives trimming)
+    count(ctx, HARD_BREAK);
+    out.push({ kind: "break", style });
+    return;
   }
   if (tag === "CODE") {
     // Inline <code> (a <code> child of <pre> is handled by the block path). An
     // EMPTY one renders as the two-backtick `` — non-empty output from a container
     // holding nothing. Body is read through `skipTagsText` so a `<style>`/`<textarea>`
     // beside the code contributes nothing, then `collapseWs` (emit path) collapses it.
-    const body = collapseWs(skipTagsText(el));
     // `blankAfterInvisible(body)` is the SUFFICIENT / PRIMARY gate; `!hasVisibleContent(el)`
     // is a REDUNDANT twin — a proven subset, not empirically load-bearing — KEPT for
     // CODE↔A consistency + defense-in-depth (should collapseWs ever leave a visible char in
     // a body its source counted blank).
-    //  - `blankAfterInvisible(body)` (the residue) rejects everything that must return
-    //    "": a lone-joiner `<code>&#8205;</code>` (the emit-path collapseWs preserves
+    //  - `blankAfterInvisible(body)` (the residue) rejects everything that must emit
+    //    nothing: a lone-joiner `<code>&#8205;</code>` (the emit-path collapseWs preserves
     //    joiners, so `body` keeps it — full-strip, not `.trim()`, is what rejects it) AND
     //    the `<hr>`-clause case (`<code> <hr> </code>` / `<code><hr>&#8205;</code>`) where
     //    the predicate passes on its `<hr>` clause but the body has nothing to fence.
@@ -456,76 +416,111 @@ function serializeInline(node: Node, depth: number, ctx: Ctx): string {
     //    true (blankAfterInvisible(skipTagsText) AND no `<hr>`), `body` is a collapseWs
     //    subset of that same text, so blankAfterInvisible(body) already holds. A clean
     //    subset proof — the twin can never be the sole gate that fires.
+    const body = collapseWs(skipTagsText(el));
     if (!hasVisibleContent(el) || blankAfterInvisible(body)) {
-      return "";
+      return;
     }
     ctx.emittedMarkdownSyntax = true;
-    return count(ctx, inlineCode(body));
+    out.push({ kind: "code", markdown: count(ctx, inlineCode(body)), style });
+    return;
   }
-  const inner = serializeChildrenInline(el, depth + 1, ctx); // leaves counted within
+  const children = (childStyle: StyleMask, into: InlineAtom[]): void => {
+    for (const child of Array.from(el.childNodes)) {
+      collectInline(child, depth + 1, ctx, childStyle, into);
+    }
+  };
   switch (tag) {
     // A tag whose own style cancels it is transparent, exactly like an unknown
-    // inline element: no markers, no flag. See styleCancelsEmphasis.
+    // inline element. See styleCancelsEmphasis.
     case "STRONG":
     case "B":
-      return styleCancelsEmphasis(el, "font-weight") ? inner : emphasize(ctx, inner, "**");
+      children(styleCancelsEmphasis(el, "font-weight") ? style : style | BOLD, out);
+      return;
     case "EM":
     case "I":
-      return styleCancelsEmphasis(el, "font-style") ? inner : emphasize(ctx, inner, "*");
+      children(styleCancelsEmphasis(el, "font-style") ? style : style | ITALIC, out);
+      return;
     case "A": {
+      // The label is collected link-relative (base style 0); the outer style
+      // stays on the link atom.
+      const label: InlineAtom[] = [];
+      children(0, label);
       const href = el.getAttribute("href") ?? "";
-      // Link text on one line (a newline in the label would break the link). Fold
-      // the whole HARD_BREAK token, not just its `\n`: dropping the newline alone
-      // strands the escaping backslash mid-label (`[a\ b](…)`), and a backslash
-      // before a space is not a CommonMark escape — it renders literally. Same
-      // token-as-one-unit rule as trimSegmentEdges and wrapEmphasis. The second
-      // sweep has nothing left to find while the HARD_BREAK docblock's invariant
-      // holds (every inline `\n` arrives as part of the token); it stays as the
-      // unconditional guarantee that no newline can reach a link label.
-      const label = inner.split(HARD_BREAK).join(" ").replace(/\n/g, " ");
-      // Only the wrapping syntax is uncounted (O(1)); the label leaves are counted.
-      if (!isAllowedUrl(href)) {
-        return label; // rejected destination → bare label, no syntax emitted
-      }
-      // An EMPTY <a> renders as `[](url)` — a link the reader cannot see or click,
+      // A rejected destination inlines the bare label (no syntax emitted), with the
+      // outer style OR-ed in.
+      //
+      // So does an EMPTY <a>: `[](url)` is a link the reader cannot see or click,
       // and non-empty output from a container holding nothing. The commonest source
       // is a marketing mail's tracking pixel (`<a href="…"><img src="p.gif"></a>`),
       // which rides along beside otherwise plain text. Same treatment as the other
-      // empty containers: label only (here, the empty string), no syntax flag.
+      // empty containers: label only (here, nothing), no syntax flag.
       //
-      // `blankAfterInvisible(label)` is the SUFFICIENT / PRIMARY gate; `!hasVisibleContent(el)`
-      // is a REDUNDANT twin — KEPT for CODE↔A consistency + defense-in-depth, NOT empirically
-      // load-bearing.
-      //  - `blankAfterInvisible(label)` (the residue) rejects a link with nothing to show:
-      //    an empty `<a>` / tracking pixel (`<a href><img src="p.gif"></a>` → label ""), a
-      //    lone-joiner or whitespace-only label the emit path preserved, and the
-      //    `<hr>`-clause case (`<a href> <hr> </a>` / `<a href><hr>&#8205;</a>`). The SAME
-      //    full-strip rule, not `.trim()` — a joiner label that `.trim()` would leave
-      //    non-empty reads as blank here.
-      //  - `!hasVisibleContent(el)` cannot fire where the residue does not: `label` is a
-      //    different derivation (serializeChildrenInline, not `skipTagsText`), so there is
-      //    no byte-level subset proof as there is for CODE — but by case analysis, whenever
-      //    the twin is true (skipTagsText blank AND no `<hr>`), every inline leaf under it
-      //    serialises from that same blank source to DI/whitespace-only bytes, so the label
-      //    is blank too and the residue already holds. Belt-and-braces on the source, never
-      //    the sole gate that fires.
-      if (!hasVisibleContent(el) || blankAfterInvisible(label)) {
-        return label;
+      // `blankAfterInvisible(labelText(label))` is the SUFFICIENT / PRIMARY gate;
+      // `!hasVisibleContent(el)` is a REDUNDANT twin — KEPT for CODE↔A consistency +
+      // defense-in-depth, NOT empirically load-bearing.
+      //  - The residue rejects a link with nothing to show: an empty `<a>` / tracking
+      //    pixel, a lone-joiner or whitespace-only label the emit path preserved, and
+      //    the `<hr>`-clause case (`<a href> <hr> </a>` / `<a href><hr>&#8205;</a>`). The
+      //    SAME full-strip rule, not `.trim()`.
+      //  - `!hasVisibleContent(el)` cannot fire where the residue does not: by case
+      //    analysis, whenever the twin is true (skipTagsText blank AND no `<hr>`), every
+      //    inline leaf under it collects from that same blank source to DI/whitespace-only
+      //    text, so the label is blank too. Belt-and-braces on the source, never the sole
+      //    gate that fires.
+      if (
+        !isAllowedUrl(href) ||
+        !hasVisibleContent(el) ||
+        blankAfterInvisible(labelText(label, ctx))
+      ) {
+        for (const atom of label) {
+          out.push({ ...atom, style: atom.style | style });
+        }
+        return;
       }
       ctx.emittedMarkdownSyntax = true;
-      return `[${label}](${markdownDestination(href)})`;
+      out.push({ kind: "link", label, destination: markdownDestination(href), style });
+      return;
     }
     default:
-      return inner; // span/font/unknown inline → transparent
+      children(style, out); // span/font/unknown inline → transparent
   }
 }
 
-function serializeChildrenInline(el: Element, depth: number, ctx: Ctx): string {
-  let out = "";
-  for (const child of Array.from(el.childNodes)) {
-    out += serializeInline(child, depth, ctx);
+/** Serialise one inline run (a segment's nodes) to Markdown through the atom IR:
+ *  collect styled atoms, then let `serializeInlineRuns` place the markers, repair
+ *  flanking and trim the run's edge spaces / breaks. A heading cannot hold a hard
+ *  break, so `"heading"` turns each break into a single space first. Records
+ *  marker syntax on `ctx` (code and links were recorded by the collector). */
+function inlineMarkdown(
+  nodes: readonly Node[],
+  depth: number,
+  ctx: Ctx,
+  mode: "paragraph" | "heading"
+): string {
+  const atoms: InlineAtom[] = [];
+  for (const node of nodes) {
+    collectInline(node, depth, ctx, 0, atoms);
   }
-  return out;
+  const runAtoms = mode === "heading" ? foldBreaksToSpaces(atoms) : atoms;
+  const result = serializeInlineRuns(runAtoms, {
+    escapeText: escapeInline,
+    trimEdges: true,
+    repairBudget: ctx.repair,
+  });
+  if (result.emittedSyntax) {
+    ctx.emittedMarkdownSyntax = true;
+  }
+  return result.markdown;
+}
+
+/** The label as the link would show it (breaks folded to a space), for the
+ *  emptiness gate. */
+function labelText(label: readonly InlineAtom[], ctx: Ctx): string {
+  return serializeInlineRuns(foldBreaksToSpaces(label), {
+    escapeText: escapeInline,
+    trimEdges: false,
+    repairBudget: ctx.repair,
+  }).markdown;
 }
 
 const HEADINGS: Record<string, number> = { H1: 1, H2: 2, H3: 3, H4: 4, H5: 5, H6: 6 };
@@ -899,40 +894,6 @@ function contributesNothing(node: Node): boolean {
   return SKIP_TAGS.has((node as Element).tagName);
 }
 
-/** Strip hard breaks and spaces from BOTH ends of a segment's serialised form,
- *  taking the `HARD_BREAK` token as one unit. A plain `trim()` removes the
- *  token's `\n` first and strands its `\`, so a segment that merely starts or
- *  ends with a `<br>` — the trailing break browsers append to close the last line
- *  of a contenteditable block, `<p>a<br></p>` — rendered a visible backslash.
- *  Interior breaks are untouched: a lone `<br>` between content stays a hard
- *  break. Two linear index scans, matching `wrapEmphasis`' approach. */
-function trimSegmentEdges(raw: string): string {
-  let start = 0;
-  let end = raw.length;
-  while (start < end) {
-    if (raw[start] === " ") {
-      start += 1;
-    } else if (raw.startsWith(HARD_BREAK, start)) {
-      start += HARD_BREAK.length;
-    } else {
-      break;
-    }
-  }
-  while (end > start) {
-    if (raw[end - 1] === " ") {
-      end -= 1;
-    } else if (
-      end - HARD_BREAK.length >= start &&
-      raw.startsWith(HARD_BREAK, end - HARD_BREAK.length)
-    ) {
-      end -= HARD_BREAK.length;
-    } else {
-      break;
-    }
-  }
-  return raw.slice(start, end);
-}
-
 /** Serialise sibling inline nodes into the blocks they represent and push each.
  *  Shared by the inline-run flush and the `<p>` branch so both split on `<br>`
  *  runs and both drop content-free segments. */
@@ -944,16 +905,14 @@ function pushInlineBlocks(
 ): void {
   const contributing = nodes.filter((n) => !contributesNothing(n));
   for (const segment of splitInlineSegments(contributing)) {
-    const serialized = segment.map((nd) => serializeInline(nd, depth, ctx)).join("");
-    const raw = trimSegmentEdges(serialized);
+    const raw = inlineMarkdown(segment, depth, ctx, "paragraph");
     const text = escapeMarkers(raw).trim();
     // A segment that edge-trimmed to nothing — a lone `<br>` between two blocks, or
     // `<p><br></p>` — falls out here: `escapeMarkers("") === ""`, so `text` is empty
     // and nothing is pushed. Any surviving break has real content on both sides.
     if (text !== "") {
       // `false`: a paragraph is escaped text, never syntax. Any syntax INSIDE it
-      // (emphasis, a link, inline code) was recorded by `serializeInline` at the
-      // leaf that emitted it, not here.
+      // (emphasis, a link, inline code) was recorded by `inlineMarkdown`, not here.
       push(text, false);
     }
   }
@@ -1043,12 +1002,11 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
       // lone HARD_BREAK, whose `\` survives collapseWs+trim and used to be pushed
       // as `# \`. hasVisibleContent settles it on the source instead.
       if (hasVisibleContent(el)) {
-        // Fold the HARD_BREAK token to a space BEFORE collapsing — a heading is
-        // single-line, and collapseWs alone eats the token's `\n` but strands its
-        // escaping `\` (`<h1>a<br></h1>` → `# a\`). Same whole-token fold the `<a>`
-        // label uses.
+        // A heading is single-line: "heading" mode folds each break atom to a space
+        // (`<h1>a<br>b</h1>` → `# a b`); collapseWs then merges it with any
+        // neighbouring space.
         const text = collapseWs(
-          serializeChildrenInline(el, depth, ctx).split(HARD_BREAK).join(" ")
+          inlineMarkdown(Array.from(el.childNodes), depth, ctx, "heading")
         ).trim();
         // Residue guard, the SAME full-strip rule as the predicate: `text` can still
         // be empty when every child was a SKIP_TAGS subtree (`<h1><style>…</style></h1>`)
@@ -1056,7 +1014,11 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
         // when the predicate passed on its `<hr>` clause and the emit path preserved a
         // joiner (`<h1><hr>&#8205;</h1>`), which `text !== ""` would let through as `# ‍`.
         if (!blankAfterInvisible(text)) {
-          push(`${"#".repeat(HEADINGS[tag])} ${text}`, true);
+          // A trailing `#` run that is the whole text or follows a space would be
+          // read as the ATX closing sequence and vanish (CommonMark); escape its
+          // first `#`. `C#` is not a closing sequence and stays as it is.
+          const body = text.replace(/(^| )(#+)$/, "$1\\$2");
+          push(`${"#".repeat(HEADINGS[tag])} ${body}`, true);
         }
       }
     } else if (tag === "P") {
@@ -1088,7 +1050,7 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
       }
     } else if (tag === "PRE") {
       flushInline();
-      // <pre> body is a non-inline leaf (verbatim, never through serializeInline)
+      // <pre> body is a non-inline leaf (verbatim, never through collectInline)
       // → count it explicitly.
       // Two SEPARATE concerns, deliberately answered differently:
       //  - the richness DECISION is hasVisibleContent, shared with every other
@@ -1124,7 +1086,7 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
       // non-empty source can still serialise down to — a SKIP_TAGS-only subtree (→ "")
       // or a lone joiner left by a buried <hr> that satisfied the predicate's <hr> clause
       // but serialised to nothing. The SAME full-strip `blankAfterInvisible` rule as the
-      // HEADINGS/PRE residues (HARD_BREAK folded to a space first), not `!== ""`, which
+      // heading/PRE residues (HARD_BREAK folded to a space first), not `!== ""`, which
       // let a preserved joiner through as `> ‍`.
       if (hasVisibleContent(el)) {
         // Richness is COMPOSITIONAL — ask the child walk, not the emitted string. A
@@ -1255,7 +1217,12 @@ export function htmlToMarkdown(html: string): HtmlToMarkdownResult | null {
     return null;
   }
   try {
-    const ctx: Ctx = { nodes: 0, outLen: 0, emittedMarkdownSyntax: false };
+    const ctx: Ctx = {
+      nodes: 0,
+      outLen: 0,
+      emittedMarkdownSyntax: false,
+      repair: { remaining: MAX_REPAIR_WORK },
+    };
     const out = serializeBlocks(body, 0, ctx).join("\n\n").trim();
     // The incremental `count` cap already aborts amplification mid-build; this
     // final check is a cheap backstop against uncounted wrapper growth (list /
@@ -1277,7 +1244,12 @@ export function htmlToMarkdown(html: string): HtmlToMarkdownResult | null {
     // Log the error ONLY. The source HTML and the converted Markdown must never be
     // logged: that is clipboard content, which can be anything the user copied —
     // credentials, private documents — whereas an internal error's text is ours.
-    if (!(err instanceof CapExceeded)) {
+    // The emphasis repair cap is a CapExceeded (same fallback) but trips only on
+    // pathological input, so it is the one cap that says so — without the error or
+    // any content.
+    if (err instanceof InlineRepairCapExceeded) {
+      console.warn("[quoll] rich paste: emphasis repair cap exceeded");
+    } else if (!(err instanceof CapExceeded)) {
       console.warn("[quoll] rich paste: HTML→Markdown conversion failed", err);
     }
     return null;
