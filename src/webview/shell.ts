@@ -594,8 +594,8 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
         void editor?.requestSwitch();
         return;
       case "switch-aborted":
-        // SWITCH-01 Task 5 wires this message.
-        break;
+        editor?.abortSwitch();
+        return;
       default: {
         // Exhaustiveness guard — when a new HostToWebview variant is added
         // without a case here, TS flags the assignment as `never` at

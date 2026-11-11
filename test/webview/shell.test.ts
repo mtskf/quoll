@@ -2843,6 +2843,49 @@ describe("shell — switch with unsent edits", () => {
     }
   }
 
+  it.each(["abort", "post failure"])("restores editing and retries after %s", async (failure) => {
+    await mount();
+    vi.useFakeTimers();
+    deliver(buildDocument({ content: "seed" }));
+    let fail = failure === "post failure";
+    postMessage.mockImplementation((message: unknown) => {
+      if ((message as { type?: string }).type === "switch-to-text" && fail) {
+        throw new Error("switch transport failed");
+      }
+    });
+    requestSwitch("button");
+    await vi.advanceTimersByTimeAsync(0);
+    if (failure === "abort") {
+      deliver({ protocol: PROTOCOL_VERSION, type: "switch-aborted" });
+    }
+    expect(container?.querySelector(".quoll-notice-switch-unsynced")).not.toBeNull();
+    typeAtEnd("x");
+    expect(viewText()).toBe("seedx");
+    fail = false;
+    requestSwitch("button");
+    deliver(buildDocument({ docVersion: 2, content: "seedx" }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(switchPosts()).toHaveLength(2);
+    requestSwitch("button");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(switchPosts()).toHaveLength(2);
+  });
+
+  it("keeps a host read-only editor read-only after an abort", async () => {
+    await mount();
+    vi.useFakeTimers();
+    deliver(buildDocument({ content: "seed", canWrite: false }));
+    requestSwitch("button");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(switchPosts()).toHaveLength(1);
+    deliver({ protocol: PROTOCOL_VERSION, type: "switch-aborted" });
+    expect(mountedView().state.readOnly).toBe(true);
+    expect(mountedView().state.facet(EditorView.editable)).toBe(false);
+    requestSwitch("button");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(switchPosts()).toHaveLength(2);
+  });
+
   it("allows retry when the switch post fails", async () => {
     await mount();
     deliver(buildDocument({ content: "seed" }));

@@ -211,6 +211,8 @@ export type EditorHandle = {
   /** Switch to the text editor once every edit has settled on the host; a no-op
    *  while a switch is already in flight. Never rejects. */
   requestSwitch(): Promise<void>;
+  /** Release a posted switch that the host could not complete. */
+  abortSwitch(): void;
   /** Teardown: cancel any pending flush, destroy the EditorView, remove
    *  the mount node. */
   dispose(): void;
@@ -497,6 +499,21 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   // second press in the post-to-dispose window is a no-op.
   let switchInFlight = false;
   let disposed = false;
+  function releaseSwitch(): void {
+    if (!disposed && view.state.field(switchLock)) {
+      view.dispatch({ effects: setSwitchLock.of(false) });
+    }
+    switchInFlight = false;
+  }
+
+  function abortSwitch(): void {
+    if (disposed || !view.state.field(switchLock)) {
+      return;
+    }
+    releaseSwitch();
+    opts.onSwitchFailed?.();
+  }
+
   async function requestSwitch(): Promise<void> {
     if (switchInFlight || disposed) {
       return;
@@ -519,6 +536,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       view.dispatch({ effects: setSwitchLock.of(true) });
       posted = safePostMessage(getHost(), buildSwitchToTextMessage(), "switch-to-text");
       if (!posted) {
+        releaseSwitch();
         opts.onSwitchFailed?.();
       }
     } catch (err) {
@@ -528,7 +546,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       }
     } finally {
       if (!posted) {
-        switchInFlight = false;
+        releaseSwitch();
       }
     }
   }
@@ -1402,6 +1420,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       }
     },
     requestSwitch,
+    abortSwitch,
     onReducerCommit(editInFlight) {
       sync.onReducerCommit(editInFlight);
     },
