@@ -327,12 +327,13 @@ function emit(
 // parser will re-read the bytes. Pinned to 1.6.4 only: a Lezer bump that changes
 // the classification is caught by the re-parse oracle tests.
 //
-// Not modelled: the rule of three in Lezer's `resolveMarkers` (~1720), a MATCHING
-// rule rather than a flanking one. Lezer's resolveMarkers recomputes closeSize
-// from the spliced leftover delimiter (dist/index.js ~1706-1720), so the
-// emitter's run shapes never hit a rule-of-3 block; there is no repair branch for
-// it. The nested-emission invariant and the re-parse oracle corpus are the checks
-// on that omission.
+// The rule of three is a matching rule, not modelled by this classifier.
+// Lezer 1.6.4 recomputes delimiter sizes after consuming markers; it accepts
+// `**a*b****c*` and `*a**b*****c**` with the intended styles. CommonMark's
+// original-run-length rule rejects matches needed by these layouts;
+// markdown-it renders literal stars. These bytes also occur before the IR.
+// The oracle pins editor-parser compatibility, not CommonMark conformance.
+// See cm-paste-emphasis-oracle.test.ts and the spec-safe emission follow-up.
 // ---------------------------------------------------------------------------
 
 const LEZER_PUNCTUATION = /[\p{S}|\p{P}]/u;
@@ -377,10 +378,10 @@ function hasWordChar(text: string): boolean {
 
 /** Repair (b), punctuation demotion: the punctuation next to the failing group is
  *  the edge char of a non-neutral text unit. Split that char into its own NEUTRAL
- *  unit — it then takes the intersection style of rule 2 and the markers move past
- *  it — but only while the unit's run (the contiguous units of the same effective
- *  style) keeps a non-punctuation, non-neutral char, so a run is never demoted down
- *  to nothing. A demoted unit is neutral and so is never demoted again. */
+ *  unit — it then takes its neutral stretch's style from `effectiveStyles` and the
+ *  markers move past it — but only while the unit's run (the contiguous units of
+ *  the same effective style) keeps a non-punctuation, non-neutral char, so a run is
+ *  never demoted down to nothing. A demoted unit is neutral and so is never demoted again. */
 function demotePunctuation(
   units: readonly Unit[],
   styles: readonly StyleMask[],
