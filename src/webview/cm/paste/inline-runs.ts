@@ -188,36 +188,53 @@ function render(u: Unit, opts: InlineRunOptions): string {
 const MARKER: Record<number, string> = { [BOLD]: "**", [ITALIC]: "*" };
 const STYLES = [BOLD, ITALIC] as const;
 
+/** How many consecutive units, starting at `from`, carry style `s`. */
+function extent(styles: readonly StyleMask[], from: number, s: StyleMask): number {
+  let i = from;
+  while (i < styles.length && styles[i] & s) {
+    i++;
+  }
+  return i - from;
+}
+
+/** Emit markers with an open-stack. At each unit, close from the top of the stack
+ *  down to the deepest open style the unit does not carry, then open the styles it
+ *  is missing, the one that runs furthest outermost (so `***A**B***C**`, not a
+ *  close-and-reopen per element). A NEUTRAL unit never opens anything: an opener
+ *  right before whitespace is not left-flanking, so it is emitted with whatever is
+ *  still open and its missing styles open at the next non-neutral unit
+ *  (`**a*a*** *a*`, not `**a*a**** a*`). */
 function emit(units: readonly Unit[], styles: readonly StyleMask[], opts: InlineRunOptions) {
   let out = "";
-  let open: StyleMask = 0;
+  const stack: StyleMask[] = [];
   let emittedSyntax = false;
-  const closeAll = (): void => {
-    for (const s of [...STYLES].reverse()) {
-      if (open & s) {
-        out += MARKER[s];
-      }
+  const closeTo = (depth: number): void => {
+    while (stack.length > depth) {
+      out += MARKER[stack.pop() as StyleMask];
     }
-    open = 0;
   };
   units.forEach((u, i) => {
     if (u.kind === "link" && u.labelSyntax) {
       emittedSyntax = true;
     }
     const target = styles[i];
-    if (target !== open) {
-      closeAll();
-      for (const s of STYLES) {
-        if (target & s) {
-          out += MARKER[s];
-          emittedSyntax = true;
-        }
+    const deepest = stack.findIndex((s) => !(target & s));
+    if (deepest >= 0) {
+      closeTo(deepest);
+    }
+    if (!isNeutral(u)) {
+      const missing = STYLES.filter((s) => target & s && !stack.includes(s)).sort(
+        (a, b) => extent(styles, i, b) - extent(styles, i, a)
+      );
+      for (const s of missing) {
+        out += MARKER[s];
+        stack.push(s);
+        emittedSyntax = true;
       }
-      open = target;
     }
     out += render(u, opts);
   });
-  closeAll();
+  closeTo(0);
   return { markdown: out, emittedSyntax };
 }
 

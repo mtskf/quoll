@@ -94,3 +94,17 @@ describe("link atoms", () => {
     expect(md([link([t(" x ", 0)])], true)).toBe("[ x ](u)");
   });
 });
+
+describe("nested emission", () => {
+  it("keeps the longer-running style outermost", () => {
+    expect(md([t("A", B | I), t("B", I), t("C", B)])).toBe("***A**B***C**");
+  });
+
+  it("never opens a marker right before a neutral unit (leading space)", () => {
+    expect(md([t("a", B), t("a", B | I), t(" a", I)])).toBe("**a*a*** *a*");
+  });
+
+  it("never opens a marker right before a neutral unit (trailing space)", () => {
+    expect(md([t("a", I), t("a ", B | I), t("a", B)])).toBe("*a**a*** **a**");
+  });
+});
