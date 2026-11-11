@@ -11,7 +11,12 @@ import {
 const B = BOLD;
 const I = ITALIC;
 
-const freshCtx = (): Ctx => ({ nodes: 0, outLen: 0, emittedMarkdownSyntax: false });
+const freshCtx = (): Ctx => ({
+  nodes: 0,
+  outLen: 0,
+  emittedMarkdownSyntax: false,
+  repair: { remaining: Number.POSITIVE_INFINITY },
+});
 
 function firstP(html: string): Element {
   const doc = new DOMParser().parseFromString(`<p>${html}</p>`, "text/html");

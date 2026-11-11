@@ -403,6 +403,22 @@ describe("htmlToMarkdown — block constructs", () => {
     const oneTable = '<table><tr><td colspan="1000">x</td></tr></table>';
     expect(convert(oneTable.repeat(2000))).toBeNull();
   });
+  // Each emphasis repair re-serialises its whole run, so the repair work is
+  // bounded per conversion (MAX_REPAIR_WORK, 4M chars), not per run.
+  it("returns null when one long run needs thousands of emphasis repairs", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    // 2000 repairs over a 6000-char run: ~12M chars of re-serialisation.
+    expect(convert(`<p>${"a<b>.a</b>".repeat(2000)}</p>`)).toBeNull();
+    vi.restoreAllMocks();
+  });
+  it("bounds the repair work across blocks, not per block", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    // Each paragraph alone is cheap (60 repairs × 180 chars); 400 of them total ~4.3M.
+    const para = `<p>${"a<b>.a</b>".repeat(60)}</p>`;
+    expect(convert(para.repeat(300))).not.toBeNull();
+    expect(convert(para.repeat(400))).toBeNull();
+    vi.restoreAllMocks();
+  });
 });
 
 describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {

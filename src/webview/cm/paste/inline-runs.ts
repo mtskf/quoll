@@ -43,14 +43,21 @@ export class CapExceeded extends Error {}
  *  same plain-text fallback; its own class so the converter can warn about it. */
 export class InlineRepairCapExceeded extends CapExceeded {}
 
+/** Repair work left for one whole conversion, in chars re-serialised. Shared by
+ *  every call so the total stays bounded: each repair re-serialises its whole run,
+ *  so a per-call cap would still let many repairs over a long run go quadratic. */
+export interface RepairBudget {
+  remaining: number;
+}
+
 export interface InlineRunOptions {
   /** Trim leading/trailing whitespace and break units (a block's edges). */
   readonly trimEdges: boolean;
   /** Escapes a text unit so it renders literally (the converter's `escapeInline`,
    *  injected so this module has no import from the converter). */
   readonly escapeText: (s: string) => string;
-  /** Repair budget; defaults to the units' char count. For tests. */
-  readonly maxRepairs?: number;
+  /** Charged by each repair; running out throws `InlineRepairCapExceeded`. */
+  readonly repairBudget: RepairBudget;
 }
 
 export interface InlineRunResult {
@@ -471,7 +478,7 @@ function repairOnce(
   return null;
 }
 
-/** Text chars plus one per non-text unit: an upper bound on the repairs. */
+/** Text chars plus one per non-text unit: the cost of one serialisation pass. */
 function unitCharCount(units: readonly Unit[]): number {
   let n = 0;
   for (const u of units) {
@@ -494,9 +501,6 @@ export function serializeInlineRuns(
   if (opts.trimEdges) {
     units = trimUnits(units);
   }
-  // Every repair consumes a text char or a link's outer style for good, so this
-  // budget is never reached by a correct loop; it turns a bug into a fallback.
-  let budget = opts.maxRepairs ?? unitCharCount(units);
   for (;;) {
     const styles = effectiveStyles(units);
     const emission = emit(units, styles, opts);
@@ -504,10 +508,12 @@ export function serializeInlineRuns(
     if (repaired === null) {
       return { markdown: emission.markdown, emittedSyntax: emission.emittedSyntax };
     }
-    if (budget <= 0) {
+    // Charge the re-serialisation this repair forces (at least 1, so even an
+    // empty run cannot loop for free).
+    opts.repairBudget.remaining -= Math.max(1, unitCharCount(repaired));
+    if (opts.repairBudget.remaining < 0) {
       throw new InlineRepairCapExceeded("inline emphasis repair cap exceeded");
     }
-    budget--;
     units = repaired;
   }
 }

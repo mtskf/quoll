@@ -5,6 +5,7 @@ import {
   type InlineAtom,
   InlineRepairCapExceeded,
   ITALIC,
+  type RepairBudget,
   type StyleMask,
   serializeInlineRuns,
 } from "../../../src/webview/cm/paste/inline-runs.js";
@@ -28,7 +29,11 @@ const code = (markdown: string, style: StyleMask = 0): InlineAtom => ({
 });
 
 function run(atoms: readonly InlineAtom[], trimEdges = false) {
-  return serializeInlineRuns(atoms, { trimEdges, escapeText: escapeInline });
+  return serializeInlineRuns(atoms, {
+    trimEdges,
+    escapeText: escapeInline,
+    repairBudget: { remaining: Number.POSITIVE_INFINITY },
+  });
 }
 const md = (atoms: readonly InlineAtom[], trimEdges = false): string =>
   run(atoms, trimEdges).markdown;
@@ -172,8 +177,8 @@ describe("entity fallback", () => {
 
 describe("repair cap", () => {
   const cascade = [t("a", 0), t("a", B), t(".", I)];
-  const capped = (maxRepairs: number) => () =>
-    serializeInlineRuns(cascade, { trimEdges: false, escapeText: escapeInline, maxRepairs });
+  const capped = (repairBudget: RepairBudget) => () =>
+    serializeInlineRuns(cascade, { trimEdges: false, escapeText: escapeInline, repairBudget });
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -183,7 +188,7 @@ describe("repair cap", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     let caught: unknown;
     try {
-      capped(0)();
+      capped({ remaining: 0 })();
     } catch (err) {
       caught = err;
     }
@@ -192,15 +197,29 @@ describe("repair cap", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
+  it("charges one budget across calls, so the total work is bounded", () => {
+    const probe = { remaining: 1_000_000 };
+    capped(probe)();
+    const perCall = 1_000_000 - probe.remaining;
+    expect(perCall).toBeGreaterThan(0);
+    const shared = { remaining: perCall };
+    expect(capped(shared)()).toEqual({ markdown: "&#97;**&#97;***.*", emittedSyntax: true });
+    expect(shared.remaining).toBe(0);
+    expect(capped(shared)).toThrow(InlineRepairCapExceeded);
+  });
+
   it("throws when the budget runs out mid-cascade", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    expect(capped(1)).toThrow(InlineRepairCapExceeded);
-    expect(warn).not.toHaveBeenCalled();
+    const probe = { remaining: 1_000_000 };
+    capped(probe)();
+    expect(capped({ remaining: 1_000_000 - probe.remaining - 1 })).toThrow(InlineRepairCapExceeded);
   });
 
   it("does not spend a repair on checking a settled result", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    expect(capped(2)().markdown).toBe("&#97;**&#97;***.*");
+    const probe = { remaining: 1_000_000 };
+    capped(probe)();
+    // Exactly the repairs' cost: the final, settled pass is free.
+    expect(capped({ remaining: 1_000_000 - probe.remaining })().markdown).toBe("&#97;**&#97;***.*");
     expect(warn).not.toHaveBeenCalled();
   });
 });

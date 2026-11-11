@@ -74,6 +74,7 @@ import {
   type InlineAtom,
   InlineRepairCapExceeded,
   ITALIC,
+  type RepairBudget,
   type StyleMask,
   serializeInlineRuns,
 } from "./inline-runs.js";
@@ -84,6 +85,10 @@ const ELEMENT_NODE = 1;
 const MAX_HTML_INPUT_CHARS = 2 * 1024 * 1024; // 2 MiB source HTML
 const MAX_OUTPUT_CHARS = 4 * 1024 * 1024; // bound total emitted Markdown (checked incrementally)
 const MAX_NODES = 50_000; // total element visits
+// Total emphasis-repair work per conversion, in chars re-serialised (see
+// `RepairBudget`). Real pastes need a handful of repairs; this bounds a crafted
+// run of thousands to well under a second before the plain-text fallback.
+const MAX_REPAIR_WORK = 4_000_000;
 // Recursion depth cap for BOTH inline and block walks. 32 is far beyond any real
 // document (nobody nests 32 blockquotes/lists or 32 inline emphasis spans), yet
 // low enough that the transient peak memory of wrapper re-indentation
@@ -114,6 +119,7 @@ export interface Ctx {
   // `serializeBlocks`' `push`, which takes the fact as a REQUIRED argument;
   // only the inline leaves below assign it directly.
   emittedMarkdownSyntax: boolean;
+  repair: RepairBudget; // shared by every inline run of this conversion
 }
 
 function bump(ctx: Ctx): void {
@@ -454,7 +460,11 @@ export function collectInline(
       //    inline leaf under it collects from that same blank source to DI/whitespace-only
       //    text, so the label is blank too. Belt-and-braces on the source, never the sole
       //    gate that fires.
-      if (!isAllowedUrl(href) || !hasVisibleContent(el) || blankAfterInvisible(labelText(label))) {
+      if (
+        !isAllowedUrl(href) ||
+        !hasVisibleContent(el) ||
+        blankAfterInvisible(labelText(label, ctx))
+      ) {
         for (const atom of label) {
           out.push({ ...atom, style: (atom.style | style) as StyleMask });
         }
@@ -490,7 +500,11 @@ function inlineMarkdown(
           (a): InlineAtom => (a.kind === "break" ? { kind: "text", text: " ", style: a.style } : a)
         )
       : atoms;
-  const result = serializeInlineRuns(runAtoms, { escapeText: escapeInline, trimEdges: true });
+  const result = serializeInlineRuns(runAtoms, {
+    escapeText: escapeInline,
+    trimEdges: true,
+    repairBudget: ctx.repair,
+  });
   if (result.emittedSyntax) {
     ctx.emittedMarkdownSyntax = true;
   }
@@ -499,11 +513,15 @@ function inlineMarkdown(
 
 /** The label as the link would show it (breaks folded to a space), for the
  *  emptiness gate. */
-function labelText(label: readonly InlineAtom[]): string {
+function labelText(label: readonly InlineAtom[], ctx: Ctx): string {
   const folded = label.map(
     (a): InlineAtom => (a.kind === "break" ? { kind: "text", text: " ", style: a.style } : a)
   );
-  return serializeInlineRuns(folded, { escapeText: escapeInline, trimEdges: false }).markdown;
+  return serializeInlineRuns(folded, {
+    escapeText: escapeInline,
+    trimEdges: false,
+    repairBudget: ctx.repair,
+  }).markdown;
 }
 
 const HEADINGS: Record<string, number> = { H1: 1, H2: 2, H3: 3, H4: 4, H5: 5, H6: 6 };
@@ -1200,7 +1218,12 @@ export function htmlToMarkdown(html: string): HtmlToMarkdownResult | null {
     return null;
   }
   try {
-    const ctx: Ctx = { nodes: 0, outLen: 0, emittedMarkdownSyntax: false };
+    const ctx: Ctx = {
+      nodes: 0,
+      outLen: 0,
+      emittedMarkdownSyntax: false,
+      repair: { remaining: MAX_REPAIR_WORK },
+    };
     const out = serializeBlocks(body, 0, ctx).join("\n\n").trim();
     // The incremental `count` cap already aborts amplification mid-build; this
     // final check is a cheap backstop against uncounted wrapper growth (list /
@@ -1222,8 +1245,9 @@ export function htmlToMarkdown(html: string): HtmlToMarkdownResult | null {
     // Log the error ONLY. The source HTML and the converted Markdown must never be
     // logged: that is clipboard content, which can be anything the user copied —
     // credentials, private documents — whereas an internal error's text is ours.
-    // The emphasis repair cap is a CapExceeded (same fallback) but should never
-    // trip, so it is the one cap that says so — without the error or any content.
+    // The emphasis repair cap is a CapExceeded (same fallback) but trips only on
+    // pathological input, so it is the one cap that says so — without the error or
+    // any content.
     if (err instanceof InlineRepairCapExceeded) {
       console.warn("[quoll] rich paste: emphasis repair cap exceeded");
     } else if (!(err instanceof CapExceeded)) {
