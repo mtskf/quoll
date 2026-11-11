@@ -177,29 +177,34 @@ function trimUnits(units: Unit[]): Unit[] {
   return units.slice(start, end);
 }
 
-/** Effective style per unit. A neutral unit keeps only the styles shared by its own
- *  source style and the nearest non-neutral unit on each side (a missing side is 0):
- *  an interior space keeps its style, while a space at a run edge drops the style
- *  that cannot end on whitespace (CommonMark flanking). */
+/** Effective style per unit. Each maximal stretch of consecutive neutral units
+ *  takes ONE style: the styles shared by every unit's own source style in the
+ *  stretch and the nearest non-neutral unit on each side (a missing side is 0). An
+ *  interior space keeps its style, while a space at a run edge drops the style that
+ *  cannot end on whitespace (CommonMark flanking). Uniform per stretch so a closer
+ *  only ever lands at the stretch's first unit, right after a non-neutral one —
+ *  never after a styled space that a differently styled neutral follows. */
 function effectiveStyles(units: readonly Unit[]): StyleMask[] {
-  const n = units.length;
-  const before: StyleMask[] = new Array(n).fill(0);
-  const after: StyleMask[] = new Array(n).fill(0);
-  let last = 0;
-  for (let i = 0; i < n; i++) {
-    before[i] = last;
+  const styles = units.map((u) => u.style);
+  let prev = 0;
+  let i = 0;
+  while (i < units.length) {
     if (!isNeutral(units[i])) {
-      last = units[i].style;
+      prev = units[i].style;
+      i++;
+      continue;
     }
-  }
-  last = 0;
-  for (let i = n - 1; i >= 0; i--) {
-    after[i] = last;
-    if (!isNeutral(units[i])) {
-      last = units[i].style;
+    let j = i;
+    let shared = prev;
+    while (j < units.length && isNeutral(units[j])) {
+      shared &= units[j].style;
+      j++;
     }
+    shared &= j < units.length ? units[j].style : 0;
+    styles.fill(shared, i, j);
+    i = j;
   }
-  return units.map((u, i) => (isNeutral(u) ? u.style & before[i] & after[i] : u.style));
+  return styles;
 }
 
 function render(u: Unit, opts: InlineRunOptions): string {

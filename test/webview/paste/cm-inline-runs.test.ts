@@ -1,4 +1,6 @@
+// @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { htmlToMarkdown } from "../../../src/webview/cm/paste/html-to-markdown.js";
 import {
   BOLD,
   CapExceeded,
@@ -9,6 +11,7 @@ import {
   type StyleMask,
   serializeInlineRuns,
 } from "../../../src/webview/cm/paste/inline-runs.js";
+import { assertStyleParity } from "./inline-style-oracle.js";
 
 // A byte-for-byte copy of the converter's private `escapeInline`
 // (src/webview/cm/paste/html-to-markdown.ts). The serializer takes the escaper as
@@ -232,5 +235,34 @@ describe("repair cap", () => {
     // Exactly the repairs' cost: the final, settled pass is free.
     expect(capped({ remaining: 1_000_000 - probe.remaining })().markdown).toBe("&#97;**&#97;***.*");
     expect(warn).not.toHaveBeenCalled();
+  });
+});
+
+// Converter output re-read by Lezer (the editor's parser) must style the same chars
+// the HTML did; see inline-style-oracle.ts.
+describe("re-parse round trip", () => {
+  const roundTrip = (html: string) => () => {
+    const out = htmlToMarkdown(html)?.markdown;
+    expect(out).toBeTypeOf("string");
+    assertStyleParity(html, out as string);
+  };
+
+  it(
+    "closes before the space when a styled space meets an unstyled break",
+    roundTrip("<p><b>a </b><br><b>b</b></p>")
+  );
+  it(
+    "closes before the space when a styled space meets an unstyled space",
+    roundTrip("<p><b>a </b> <b>b</b></p>")
+  );
+});
+
+describe("neutral stretches", () => {
+  it("closes a styled space's run before an unstyled break", () => {
+    expect(md([t("a ", B), br(0), t("b", B)])).toBe("**a** \\\n**b**");
+  });
+
+  it("closes a styled space's run before an unstyled space, without an entity", () => {
+    expect(md([t("a ", B), t(" ", 0), t("b", B)])).toBe("**a**  **b**");
   });
 });
