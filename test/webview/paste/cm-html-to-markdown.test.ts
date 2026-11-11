@@ -1363,3 +1363,17 @@ describe("heading style runs (PASTE-01b)", () => {
     expect(convert("<h1>a<br>b</h1>")).toBe("# a b");
   });
 });
+
+describe("heading trailing hash", () => {
+  it("escapes a space-preceded trailing hash run", () => {
+    expect(convert("<h1>title #</h1>")).toBe("# title \\#");
+  });
+
+  it("escapes a heading that is only a hash run", () => {
+    expect(convert("<h2>#</h2>")).toBe("## \\#");
+  });
+
+  it("leaves a hash that is part of a word", () => {
+    expect(convert("<h1>C#</h1>")).toBe("# C#");
+  });
+});

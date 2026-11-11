@@ -997,7 +997,11 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
         // when the predicate passed on its `<hr>` clause and the emit path preserved a
         // joiner (`<h1><hr>&#8205;</h1>`), which `text !== ""` would let through as `# ‍`.
         if (!blankAfterInvisible(text)) {
-          push(`${"#".repeat(HEADINGS[tag])} ${text}`, true);
+          // A trailing `#` run that is the whole text or follows a space would be
+          // read as the ATX closing sequence and vanish (CommonMark); escape its
+          // first `#`. `C#` is not a closing sequence and stays as it is.
+          const body = text.replace(/(^| )(#+)$/, "$1\\$2");
+          push(`${"#".repeat(HEADINGS[tag])} ${body}`, true);
         }
       }
     } else if (tag === "P") {
