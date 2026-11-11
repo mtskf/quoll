@@ -226,7 +226,7 @@ it("decoded entities match literal-character width and word-joiner wrapping", as
       control.dispose();
     }
   }
-  // Spike (plan Task 2) recorded both false: the widget must not add a wrap opportunity the literal lacks.
+  // The widget must not add a wrap opportunity the literal lacks.
   expect(results.wj.wrapAtBuffer).toBe(false);
   expect(results.letter.wrapAtBuffer).toBe(false);
   expect(results.wj.widget).toBe(results.wj.literal);
