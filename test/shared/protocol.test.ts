@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildFormatCommandMessage,
   buildFormatDocumentMessage,
+  buildPastePlainMessage,
   buildSwitchToTextMessage,
   FORMAT_ACTIONS,
   isHostToWebview,
@@ -1297,5 +1298,21 @@ describe("protocol 3 messages are obsolete", () => {
   it("rejects the previous envelope in both directions", () => {
     expect(isHostToWebview({ ...validDocument(), protocol: 3 })).toBe(false);
     expect(isWebviewToHost({ ...validReady(), protocol: 3 })).toBe(false);
+  });
+});
+
+describe("paste-plain message", () => {
+  it("builds and accepts a plain-text message", () => {
+    const m = buildPastePlainMessage("x");
+    expect(m).toEqual({ protocol: PROTOCOL_VERSION, type: "paste-plain", text: "x" });
+    expect(isHostToWebview(m)).toBe(true);
+  });
+
+  it("rejects missing text", () => {
+    expect(isHostToWebview({ protocol: PROTOCOL_VERSION, type: "paste-plain" })).toBe(false);
+  });
+
+  it.each([null, undefined, 1, true, {}, []])("rejects non-string text %p", (text) => {
+    expect(isHostToWebview({ protocol: PROTOCOL_VERSION, type: "paste-plain", text })).toBe(false);
   });
 });

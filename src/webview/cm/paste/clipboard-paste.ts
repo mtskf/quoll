@@ -123,6 +123,13 @@ export function createClipboardPaste(options: {
         })
       ),
     ],
+    pastePlain(view: EditorView, text: string) {
+      if (!view.hasFocus) {
+        return;
+      }
+      const { from, to } = view.state.selection.main;
+      coordinator.capture(view, { from, to, render: () => text }, 0);
+    },
     resolve(requestId: string, path: string | null) {
       if (!transport.resolve(requestId, path) && path !== null) {
         reportUnlinked(path);

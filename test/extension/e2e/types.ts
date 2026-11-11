@@ -170,6 +170,8 @@ export type FormatCommandMessageShape = EnvelopeShape & {
 
 export type FormatDocumentMessageShape = EnvelopeShape & { type: "format-document" };
 
+export type PastePlainMessageShape = EnvelopeShape & { type: "paste-plain"; text: string };
+
 // Pin the full host→webview union so future variants cannot silently drift.
 export type HostToWebviewShape =
   | DocumentMessageShape
@@ -178,7 +180,8 @@ export type HostToWebviewShape =
   | EditorConfigMessageShape
   | CaretApplyMessageShape
   | FormatCommandMessageShape
-  | FormatDocumentMessageShape;
+  | FormatDocumentMessageShape
+  | PastePlainMessageShape;
 
 export type WebviewToHostShape =
   | ReadyMessageShape
