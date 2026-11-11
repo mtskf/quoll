@@ -56,7 +56,9 @@ describe("package.json contributions — Command Palette visibility", () => {
     expect(kbs).toHaveLength(1);
     expect(kbs[0].key).toBe("ctrl+shift+v");
     expect(kbs[0].mac).toBe("cmd+shift+v");
-    expect(kbs[0].when).toBe("activeCustomEditorId == 'quoll.editMarkdown'");
+    expect(kbs[0].when).toBe(
+      "activeCustomEditorId == 'quoll.editMarkdown' && !terminalFocus && !inputFocus"
+    );
   });
 
   it("hides quoll.pastePlain from the palette", () => {

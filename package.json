@@ -218,7 +218,7 @@
         "command": "quoll.pastePlain",
         "key": "ctrl+shift+v",
         "mac": "cmd+shift+v",
-        "when": "activeCustomEditorId == 'quoll.editMarkdown'"
+        "when": "activeCustomEditorId == 'quoll.editMarkdown' && !terminalFocus && !inputFocus"
       },
       {
         "command": "quoll.toggleEditor",
