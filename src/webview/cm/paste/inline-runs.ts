@@ -34,12 +34,22 @@ export type InlineAtom =
  *  two trailing spaces). The single declaration of the token. */
 export const HARD_BREAK = "\\\n";
 
+/** A conversion bound was hit; the converter falls back to plain text. Lives here
+ *  (not in the converter) so the converter imports it one way and its existing
+ *  `instanceof CapExceeded` checks see this serializer's error too. */
+export class CapExceeded extends Error {}
+
+/** The flanking repair loop ran past its budget. A `CapExceeded`, so it takes the
+ *  same plain-text fallback; its own class so the converter can warn about it. */
+export class InlineRepairCapExceeded extends CapExceeded {}
+
 export interface InlineRunOptions {
   /** Trim leading/trailing whitespace and break units (a block's edges). */
   readonly trimEdges: boolean;
   /** Escapes a text unit so it renders literally (the converter's `escapeInline`,
    *  injected so this module has no import from the converter). */
   readonly escapeText: (s: string) => string;
+  /** Repair budget; defaults to the units' char count. For tests. */
   readonly maxRepairs?: number;
 }
 
@@ -461,6 +471,15 @@ function repairOnce(
   return null;
 }
 
+/** Text chars plus one per non-text unit: an upper bound on the repairs. */
+function unitCharCount(units: readonly Unit[]): number {
+  let n = 0;
+  for (const u of units) {
+    n += u.kind === "text" ? u.text.length : 1;
+  }
+  return n;
+}
+
 /** Serialise styled inline atoms to Markdown. Pure: no DOM, no logging.
  *
  *  Serialise, find the first marker group that does not flank on the side it
@@ -475,6 +494,9 @@ export function serializeInlineRuns(
   if (opts.trimEdges) {
     units = trimUnits(units);
   }
+  // Every repair consumes a text char or a link's outer style for good, so this
+  // budget is never reached by a correct loop; it turns a bug into a fallback.
+  let budget = opts.maxRepairs ?? unitCharCount(units);
   for (;;) {
     const styles = effectiveStyles(units);
     const emission = emit(units, styles, opts);
@@ -482,6 +504,10 @@ export function serializeInlineRuns(
     if (repaired === null) {
       return { markdown: emission.markdown, emittedSyntax: emission.emittedSyntax };
     }
+    if (budget <= 0) {
+      throw new InlineRepairCapExceeded("inline emphasis repair cap exceeded");
+    }
+    budget--;
     units = repaired;
   }
 }

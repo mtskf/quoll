@@ -1,7 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   BOLD,
+  CapExceeded,
   type InlineAtom,
+  InlineRepairCapExceeded,
   ITALIC,
   type StyleMask,
   serializeInlineRuns,
@@ -165,5 +167,40 @@ describe("entity fallback", () => {
 
   it("re-checks after each repair until the cascade settles", () => {
     expect(md([t("a", 0), t("a", B), t(".", I)])).toBe("&#97;**&#97;***.*");
+  });
+});
+
+describe("repair cap", () => {
+  const cascade = [t("a", 0), t("a", B), t(".", I)];
+  const capped = (maxRepairs: number) => () =>
+    serializeInlineRuns(cascade, { trimEdges: false, escapeText: escapeInline, maxRepairs });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("throws the typed cap error, silently, when no repair is allowed", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let caught: unknown;
+    try {
+      capped(0)();
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(InlineRepairCapExceeded);
+    expect(caught).toBeInstanceOf(CapExceeded);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("throws when the budget runs out mid-cascade", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(capped(1)).toThrow(InlineRepairCapExceeded);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("does not spend a repair on checking a settled result", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(capped(2)().markdown).toBe("&#97;**&#97;***.*");
+    expect(warn).not.toHaveBeenCalled();
   });
 });
