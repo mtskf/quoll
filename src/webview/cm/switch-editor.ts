@@ -26,10 +26,40 @@
 // write-lock. The caret survives via the host handler; this module adds no caret
 // code.
 
-import { type Extension, Prec } from "@codemirror/state";
+import { EditorState, type Extension, Prec, StateEffect, StateField } from "@codemirror/state";
 import { EditorView, type PluginValue, ViewPlugin } from "@codemirror/view";
 
 import { requireQuollEditorHost } from "./editor-host.js";
+import { hostDocumentReseed } from "./host-reseed.js";
+
+/** Switch lock: on from the moment `switch-to-text` is posted, so a keystroke
+ *  between the post and the panel's disposal cannot change a body the host has
+ *  already handed to the text editor. Drops user doc changes only; selection
+ *  moves and host reseeds (`hostDocumentReseed`) still apply. */
+export const setSwitchLock = StateEffect.define<boolean>();
+
+export const switchLock = StateField.define<boolean>({
+  create: () => false,
+  update(locked, transaction) {
+    for (const effect of transaction.effects) {
+      if (effect.is(setSwitchLock)) {
+        locked = effect.value;
+      }
+    }
+    return locked;
+  },
+  provide: (field) =>
+    EditorState.transactionFilter.of((transaction) => {
+      if (
+        transaction.startState.field(field) &&
+        transaction.docChanged &&
+        !transaction.annotation(hostDocumentReseed)
+      ) {
+        return [];
+      }
+      return transaction;
+    }),
+});
 
 /** Match the Quoll→text switch chord: Ctrl/Cmd + Alt + E, keyed on the PHYSICAL
  *  `event.code` ("KeyE") — NOT `event.key`. On macOS Option+E is the acute-accent

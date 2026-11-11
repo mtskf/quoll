@@ -74,7 +74,7 @@ import {
   serializeDocument,
   splitToCmText,
 } from "./cm/seed.js";
-import { quollSwitchEditor } from "./cm/switch-editor.js";
+import { quollSwitchEditor, setSwitchLock, switchLock } from "./cm/switch-editor.js";
 import { tableBlockField } from "./cm/table/index.js";
 import { quollTaskCheckboxKeymap } from "./cm/task-checkbox/task-checkbox-command.js";
 import {
@@ -516,6 +516,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         return;
       }
       flushCaretReport();
+      view.dispatch({ effects: setSwitchLock.of(true) });
       posted = safePostMessage(getHost(), buildSwitchToTextMessage(), "switch-to-text");
       if (!posted) {
         opts.onSwitchFailed?.();
@@ -972,6 +973,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // (no CM change, no write-lock); the host reopens the document in the
         // built-in text editor and re-applies the caret. Present in read-only
         // mode too (navigation).
+        switchLock,
         quollSwitchEditor(requestSwitch),
         // Floating-toolbar scroll-hide: one shared scroll-direction observer on
         // view.scrollDOM stamps `.quoll-chrome-hidden` on the .quoll-editor host
