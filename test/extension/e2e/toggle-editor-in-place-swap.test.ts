@@ -51,8 +51,74 @@ describe("⌘⌥E in-place editor-surface swap", function () {
   });
   afterEach(async () => {
     const harness = await getHarness();
+    harness.webviewPostMessageOverride = null;
     await cleanupBetweenTests(harness);
   });
+
+  for (const command of ["quoll.reopenInTextEditor", "quoll.toggleEditor"]) {
+    it(`${command} routes through the real webview before switching`, async () => {
+      const harness = await getHarness();
+      harness.clearEvents();
+      const uri = tempMd(`${command}-roundtrip.md`);
+      await vscode.commands.executeCommand("vscode.openWith", uri, VIEW_TYPE);
+      await harness.waitForInbound(
+        (event) => (event.raw as { type?: string } | null)?.type === "ready",
+        8000
+      );
+      const panel = harness.activePanel;
+      assert.ok(panel, "no active panel");
+      const outbound: string[] = [];
+      harness.webviewPostMessageOverride = (message) => {
+        outbound.push(message.type);
+        return panel.webviewPanel.webview.postMessage(message);
+      };
+      await vscode.commands.executeCommand(command);
+      await harness.waitForInbound(
+        (event) => (event.raw as { type?: string } | null)?.type === "switch-to-text",
+        8000
+      );
+      const deadline = Date.now() + 8000;
+      while (Date.now() < deadline) {
+        if (allTabs().some(textTab(uri)) && !allTabs().some(customTab(uri))) {
+          break;
+        }
+        await tick(100);
+      }
+      assert.ok(outbound.includes("switch-command"), "switch-command was not posted");
+      assert.strictEqual(allTabs().filter(textTab(uri)).length, 1);
+      assert.strictEqual(allTabs().filter(customTab(uri)).length, 0);
+      assert.strictEqual(
+        (await vscode.workspace.openTextDocument(uri)).getText(),
+        "# Title\n\nbody\n"
+      );
+    });
+
+    it(`${command} leaves Quoll open when switch-command is swallowed`, async () => {
+      const harness = await getHarness();
+      harness.clearEvents();
+      const uri = tempMd(`${command}-swallowed.md`);
+      await vscode.commands.executeCommand("vscode.openWith", uri, VIEW_TYPE);
+      await harness.waitForInbound(
+        (event) => (event.raw as { type?: string } | null)?.type === "ready",
+        8000
+      );
+      const panel = harness.activePanel;
+      assert.ok(panel, "no active panel");
+      let swallowed = 0;
+      harness.webviewPostMessageOverride = (message) => {
+        if (message.type === "switch-command") {
+          swallowed++;
+          return Promise.resolve(true);
+        }
+        return panel.webviewPanel.webview.postMessage(message);
+      };
+      await vscode.commands.executeCommand(command);
+      await tick(500);
+      assert.strictEqual(swallowed, 1);
+      assert.strictEqual(allTabs().filter(customTab(uri)).length, 1);
+      assert.strictEqual(allTabs().filter(textTab(uri)).length, 0);
+    });
+  }
 
   it("forward (dirty): Quoll→text closes the Quoll tab, keeps edits", async () => {
     const uri = tempMd("fwd.md");

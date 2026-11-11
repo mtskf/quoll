@@ -153,7 +153,7 @@ describe("quollFloatingToolbarScroll — ViewPlugin (happy-dom)", () => {
     const host = mount([
       quollFloatingToolbarScroll(),
       quollOutline(),
-      quollSwitchEditor({ postMessage() {} }, () => {}),
+      quollSwitchEditor(async () => {}),
     ]);
     const chrome = (): Element[] => Array.from(host.querySelectorAll(CHROME_SELECTOR));
     expect(chrome()).toHaveLength(2); // outline toggle + switch toggle

@@ -169,6 +169,8 @@ export type FormatCommandMessageShape = EnvelopeShape & {
 };
 
 export type FormatDocumentMessageShape = EnvelopeShape & { type: "format-document" };
+export type SwitchCommandMessageShape = EnvelopeShape & { type: "switch-command" };
+export type SwitchAbortedMessageShape = EnvelopeShape & { type: "switch-aborted" };
 
 // Pin the full host→webview union so future variants cannot silently drift.
 export type HostToWebviewShape =
@@ -178,7 +180,9 @@ export type HostToWebviewShape =
   | EditorConfigMessageShape
   | CaretApplyMessageShape
   | FormatCommandMessageShape
-  | FormatDocumentMessageShape;
+  | FormatDocumentMessageShape
+  | SwitchCommandMessageShape
+  | SwitchAbortedMessageShape;
 
 export type WebviewToHostShape =
   | ReadyMessageShape

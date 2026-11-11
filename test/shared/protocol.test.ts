@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   buildFormatCommandMessage,
   buildFormatDocumentMessage,
+  buildSwitchAbortedMessage,
+  buildSwitchCommandMessage,
   buildSwitchToTextMessage,
   FORMAT_ACTIONS,
   isHostToWebview,
@@ -1290,6 +1292,23 @@ describe("format-document message", () => {
     expect(isHostToWebview({ protocol: PROTOCOL_VERSION + 1, type: "format-document" })).toBe(
       false
     );
+  });
+});
+
+describe.each([
+  ["switch-command", buildSwitchCommandMessage],
+  ["switch-aborted", buildSwitchAbortedMessage],
+] as const)("%s message", (type, build) => {
+  it("builds and accepts the envelope", () => {
+    expect(build()).toEqual({ protocol: PROTOCOL_VERSION, type });
+    expect(isHostToWebview(build())).toBe(true);
+  });
+
+  it("rejects extra or missing fields", () => {
+    expect(isHostToWebview({ ...build(), extra: true })).toBe(false);
+    expect(isHostToWebview({ type })).toBe(false);
+    expect(isHostToWebview({ protocol: PROTOCOL_VERSION })).toBe(false);
+    expect(isHostToWebview({ protocol: PROTOCOL_VERSION + 1, type })).toBe(false);
   });
 });
 

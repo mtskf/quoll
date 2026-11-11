@@ -1,7 +1,7 @@
 // Quoll → plain text editor switch. A webview-native affordance mirroring the
 // document-outline overlay: a top-RIGHT overlay button + a Prec.high keydown
-// handler, both posting the envelope-only `switch-to-text` side-channel message.
-// The host reopens the document in VS Code's built-in text editor (vscode.openWith
+// handler, both calling the editor's `requestSwitch`, which posts the envelope-only
+// `switch-to-text` side-channel message once every edit has settled. The host reopens the document in VS Code's built-in text editor (vscode.openWith
 // … "default") and re-applies the caret.
 //
 // The chord lives HERE (a CodeMirror keydown handler), not in package.json
@@ -26,14 +26,28 @@
 // write-lock. The caret survives via the host handler; this module adds no caret
 // code.
 
-import { type Extension, Prec } from "@codemirror/state";
+import { type Extension, Prec, StateEffect, StateField } from "@codemirror/state";
 import { EditorView, type PluginValue, ViewPlugin } from "@codemirror/view";
 
-import { buildSwitchToTextMessage } from "../../shared/protocol.js";
-import { type PostMessageHost, safePostMessage } from "../safe-post-message.js";
 import { requireQuollEditorHost } from "./editor-host.js";
 
-export type SwitchEditorHost = PostMessageHost;
+/** Switch lock: on from the moment `switch-to-text` is posted, so a keystroke
+ *  between the post and the panel's disposal cannot change a body the host has
+ *  already handed to the text editor. Drops user doc changes only; selection
+ *  moves and host reseeds (`hostDocumentReseed`) still apply. */
+export const setSwitchLock = StateEffect.define<boolean>();
+
+export const switchLock = StateField.define<boolean>({
+  create: () => false,
+  update(locked, transaction) {
+    for (const effect of transaction.effects) {
+      if (effect.is(setSwitchLock)) {
+        locked = effect.value;
+      }
+    }
+    return locked;
+  },
+});
 
 /** Match the Quoll→text switch chord: Ctrl/Cmd + Alt + E, keyed on the PHYSICAL
  *  `event.code` ("KeyE") — NOT `event.key`. On macOS Option+E is the acute-accent
@@ -83,29 +97,13 @@ function createFileCodeIcon(): SVGSVGElement {
   return svg;
 }
 
-/** Post `switch-to-text`, logging (never throwing) on transport failure — a
- *  throw out of a click handler / keymap command would unwind the caller. */
-function postSwitchToText(host: SwitchEditorHost, flushPendingEdit: () => void): void {
-  // Flush any pending debounced edit FIRST: the switch disposes this panel,
-  // so a late debounced Edit would be dropped post-dispose (data loss). FIFO
-  // — the flushed Edit reaches the host before switch-to-text, so the
-  // reopened text editor shows the just-typed content.
-  try {
-    flushPendingEdit();
-  } catch (err) {
-    console.error("[quoll] flushPendingEdit before switch failed", err);
-  }
-  safePostMessage(host, buildSwitchToTextMessage(), "switch-to-text");
-}
-
 class SwitchEditorButton implements PluginValue {
   private readonly hostEl: HTMLElement;
   private readonly buttonEl: HTMLButtonElement;
 
   constructor(
     view: EditorView,
-    private readonly messageHost: SwitchEditorHost,
-    private readonly flushPendingEdit: () => void
+    private readonly requestSwitch: () => Promise<void>
   ) {
     // Mounted inside the `.quoll-editor` host (position:relative) so the button
     // overlays the surface without reflowing the reading column — identical
@@ -124,7 +122,7 @@ class SwitchEditorButton implements PluginValue {
     this.buttonEl.addEventListener("mousedown", (e) => e.preventDefault());
     this.buttonEl.addEventListener("click", (e) => {
       e.preventDefault();
-      postSwitchToText(this.messageHost, this.flushPendingEdit);
+      void this.requestSwitch();
     });
     this.hostEl.appendChild(this.buttonEl);
   }
@@ -135,9 +133,9 @@ class SwitchEditorButton implements PluginValue {
 }
 
 /** The switch-editor extension: the top-right overlay button + the chord keydown
- *  handler, both posting `switch-to-text`. */
-export function quollSwitchEditor(host: SwitchEditorHost, flushPendingEdit: () => void): Extension {
-  const plugin = ViewPlugin.define((view) => new SwitchEditorButton(view, host, flushPendingEdit));
+ *  handler, both calling `requestSwitch` (the editor's settled-verdict gate). */
+export function quollSwitchEditor(requestSwitch: () => Promise<void>): Extension {
+  const plugin = ViewPlugin.define((view) => new SwitchEditorButton(view, requestSwitch));
   // A raw keydown handler (NOT a keymap) so the chord matches on the PHYSICAL
   // `event.code` — see matchesSwitchEditorChord for the macOS Option+E dead-key
   // rationale. Prec.high so it claims ⌘⌥E before lower-precedence handlers;
@@ -149,7 +147,7 @@ export function quollSwitchEditor(host: SwitchEditorHost, flushPendingEdit: () =
         if (!matchesSwitchEditorChord(event)) {
           return false;
         }
-        postSwitchToText(host, flushPendingEdit);
+        void requestSwitch();
         return true;
       },
     })
