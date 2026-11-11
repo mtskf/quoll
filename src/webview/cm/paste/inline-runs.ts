@@ -53,7 +53,20 @@ export interface InlineRunResult {
 type Unit =
   | { kind: "text"; text: string; style: StyleMask; neutral: boolean }
   | { kind: "code"; markdown: string; style: StyleMask }
-  | { kind: "break"; style: StyleMask };
+  | { kind: "break"; style: StyleMask }
+  | LinkUnit;
+
+/** A link is ONE opaque, non-neutral unit of the outer run (brackets bind tighter
+ *  than emphasis); its label is serialised on its own by the same function. */
+interface LinkUnit {
+  kind: "link";
+  label: InlineAtom[];
+  destination: string;
+  style: StyleMask;
+  /** The serialised label (`[${…}](…)` body) and whether it emitted markers. */
+  labelMarkdown: string;
+  labelSyntax: boolean;
+}
 
 /** A token holding only `\p{Default_Ignorable_Code_Point} ∪ \p{Cf}` chars — what the
  *  converter's `blankAfterInvisible` calls blank for a whitespace-free token (a lone
@@ -61,7 +74,32 @@ type Unit =
 const INVISIBLE_TOKEN = /^(?:\p{Default_Ignorable_Code_Point}|\p{Cf})+$/u;
 const WHITESPACE_RUN = /^\s+$/;
 
-function toUnits(atoms: readonly InlineAtom[]): Unit[] {
+/** A hard break cannot live in a link label (the newline would end the link), so a
+ *  label's break atoms become one space each, keeping their style. */
+function foldLabelBreaks(label: readonly InlineAtom[]): InlineAtom[] {
+  return label.map((a) => (a.kind === "break" ? { kind: "text", text: " ", style: a.style } : a));
+}
+
+function linkUnit(
+  label: InlineAtom[],
+  destination: string,
+  style: StyleMask,
+  opts: InlineRunOptions
+): LinkUnit {
+  // `trimEdges: false`: label-edge spaces are not block edges; the converter has
+  // always kept them (`[ x ](u)`).
+  const inner = serializeInlineRuns(foldLabelBreaks(label), { ...opts, trimEdges: false });
+  return {
+    kind: "link",
+    label,
+    destination,
+    style,
+    labelMarkdown: inner.markdown,
+    labelSyntax: inner.emittedSyntax,
+  };
+}
+
+function toUnits(atoms: readonly InlineAtom[], opts: InlineRunOptions): Unit[] {
   const units: Unit[] = [];
   for (const atom of atoms) {
     switch (atom.kind) {
@@ -80,7 +118,8 @@ function toUnits(atoms: readonly InlineAtom[]): Unit[] {
         units.push({ kind: "break", style: atom.style });
         break;
       case "link":
-        throw new Error("link atoms: Task 1b");
+        units.push(linkUnit(atom.label, atom.destination, atom.style, opts));
+        break;
     }
   }
   return units;
@@ -141,6 +180,8 @@ function render(u: Unit, opts: InlineRunOptions): string {
       return u.markdown;
     case "break":
       return HARD_BREAK;
+    case "link":
+      return `[${u.labelMarkdown}](${u.destination})`;
   }
 }
 
@@ -160,6 +201,9 @@ function emit(units: readonly Unit[], styles: readonly StyleMask[], opts: Inline
     open = 0;
   };
   units.forEach((u, i) => {
+    if (u.kind === "link" && u.labelSyntax) {
+      emittedSyntax = true;
+    }
     const target = styles[i];
     if (target !== open) {
       closeAll();
@@ -182,7 +226,7 @@ export function serializeInlineRuns(
   atoms: readonly InlineAtom[],
   opts: InlineRunOptions
 ): InlineRunResult {
-  let units = toUnits(atoms);
+  let units = toUnits(atoms, opts);
   if (opts.trimEdges) {
     units = trimUnits(units);
   }

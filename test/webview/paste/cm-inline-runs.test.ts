@@ -69,3 +69,28 @@ describe("serializeInlineRuns", () => {
     expect(run([code("`x`", B)])).toEqual({ markdown: "**`x`**", emittedSyntax: true });
   });
 });
+
+const link = (label: InlineAtom[], style: StyleMask = 0, destination = "u"): InlineAtom => ({
+  kind: "link",
+  label,
+  destination,
+  style,
+});
+
+describe("link atoms", () => {
+  it("serialises the label's own emphasis inside the brackets", () => {
+    expect(run([link([t("x", B)])])).toEqual({ markdown: "[**x**](u)", emittedSyntax: true });
+  });
+
+  it("wraps the whole link in its outer style", () => {
+    expect(md([link([t("x", 0)], B)])).toBe("**[x](u)**");
+  });
+
+  it("folds a break in the label to a single space", () => {
+    expect(md([link([t("a", 0), br(0), t("b", 0)])])).toBe("[a b](u)");
+  });
+
+  it("keeps label-edge spaces (they are not segment edges)", () => {
+    expect(md([link([t(" x ", 0)])], true)).toBe("[ x ](u)");
+  });
+});
