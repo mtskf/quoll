@@ -72,6 +72,7 @@ import {
   CapExceeded,
   HARD_BREAK,
   type InlineAtom,
+  InlineRepairCapExceeded,
   ITALIC,
   type StyleMask,
   serializeInlineRuns,
@@ -1217,7 +1218,11 @@ export function htmlToMarkdown(html: string): HtmlToMarkdownResult | null {
     // Log the error ONLY. The source HTML and the converted Markdown must never be
     // logged: that is clipboard content, which can be anything the user copied —
     // credentials, private documents — whereas an internal error's text is ours.
-    if (!(err instanceof CapExceeded)) {
+    // The emphasis repair cap is a CapExceeded (same fallback) but should never
+    // trip, so it is the one cap that says so — without the error or any content.
+    if (err instanceof InlineRepairCapExceeded) {
+      console.warn("[quoll] rich paste: emphasis repair cap exceeded");
+    } else if (!(err instanceof CapExceeded)) {
       console.warn("[quoll] rich paste: HTML→Markdown conversion failed", err);
     }
     return null;
