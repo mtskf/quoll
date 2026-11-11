@@ -412,21 +412,28 @@ describe("htmlToMarkdown — block constructs", () => {
     });
     const CAP_WARNING = "[quoll] rich paste: emphasis repair cap exceeded";
 
-    it("returns null when one long run needs thousands of emphasis repairs", () => {
+    // A sequential cascade: `a` then alternating bold/italic `a`s, closed by a bold
+    // `.`. Each repair exposes the next failing group, so batching cannot collapse
+    // it and the work grows with depth x run length. Measured: one run fails from
+    // 577 pairs, and 50-pair paragraphs fail together from 130 of them.
+    const cascade = (pairs: number): string =>
+      `<p>a${"<b>a</b><i>a</i>".repeat(pairs)}<b>.</b></p>`;
+
+    it("returns null when one long run is a deep repair cascade", () => {
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-      // 2000 repairs over a 6000-char run: ~12M chars of re-serialisation.
-      expect(convert(`<p>${"a<b>.a</b>".repeat(2000)}</p>`)).toBeNull();
+      expect(convert(cascade(1000))).toBeNull();
       // The repair cap specifically, not some other throw or cap.
       expect(warn).toHaveBeenCalledTimes(1);
       expect(warn).toHaveBeenCalledWith(CAP_WARNING);
     });
     it("bounds the repair work across blocks, not per block", () => {
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-      // Each paragraph alone is cheap (60 repairs × 180 chars); 400 of them total ~4.3M.
-      const para = `<p>${"a<b>.a</b>".repeat(60)}</p>`;
-      expect(convert(para.repeat(300))).not.toBeNull();
+      // The same paragraph passes 60 times over but not 260 times: each block
+      // alone is cheap, and the budget is shared by the whole conversion.
+      const para = cascade(50);
+      expect(convert(para.repeat(60))).not.toBeNull();
       expect(warn).not.toHaveBeenCalled();
-      expect(convert(para.repeat(400))).toBeNull();
+      expect(convert(para.repeat(260))).toBeNull();
       expect(warn).toHaveBeenCalledTimes(1);
       expect(warn).toHaveBeenCalledWith(CAP_WARNING);
     });
