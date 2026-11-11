@@ -142,6 +142,17 @@ describe("flanking repair", () => {
     expect(md([t("a", B), t("a", B | I), t("(a)", I)])).toBe("**a*a***(*a)*");
   });
 
+  it("never leaves markers around a lone joiner a demotion split off", () => {
+    expect(run([t(`${ZWJ}:`, B), t("a", 0)])).toEqual({
+      markdown: `${ZWJ}:a`,
+      emittedSyntax: false,
+    });
+    expect(run([t("a", 0), t(`(${ZWJ}`, B)])).toEqual({
+      markdown: `a(${ZWJ}`,
+      emittedSyntax: false,
+    });
+  });
+
   it("leaves a flanking closer before a trimmed edge alone", () => {
     expect(md([t("a.", B), t(" ", 0)], true)).toBe("**a.**");
   });

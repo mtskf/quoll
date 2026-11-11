@@ -102,6 +102,15 @@ export function foldBreaksToSpaces(atoms: readonly InlineAtom[]): InlineAtom[] {
   return atoms.map((a) => (a.kind === "break" ? { kind: "text", text: " ", style: a.style } : a));
 }
 
+/** A text unit, neutral iff it is a whitespace run or an invisible-only token. The
+ *  one constructor for text units, so a split remainder (a demotion's or an
+ *  encoding's) re-derives neutrality from its own text instead of inheriting the
+ *  parent's: a lone joiner left behind must not carry markers on its own. */
+function textUnit(text: string, style: StyleMask): Unit {
+  const neutral = WHITESPACE_RUN.test(text) || INVISIBLE_TOKEN.test(text);
+  return { kind: "text", text, style, neutral };
+}
+
 function linkUnit(
   label: InlineAtom[],
   destination: string,
@@ -128,8 +137,7 @@ function toUnits(atoms: readonly InlineAtom[], opts: InlineRunOptions): Unit[] {
       case "text":
         for (const piece of atom.text.split(/(\s+)/)) {
           if (piece !== "") {
-            const neutral = WHITESPACE_RUN.test(piece) || INVISIBLE_TOKEN.test(piece);
-            units.push({ kind: "text", text: piece, style: atom.style, neutral });
+            units.push(textUnit(piece, atom.style));
           }
         }
         break;
@@ -399,7 +407,7 @@ function demotePunctuation(
     return null;
   }
   const demoted: Unit = { kind: "text", text: ch, style: u.style, neutral: true };
-  const remaining: Unit[] = rest === "" ? [] : [{ ...u, text: rest }];
+  const remaining: Unit[] = rest === "" ? [] : [textUnit(rest, u.style)];
   const replacement = edge === "end" ? [...remaining, demoted] : [demoted, ...remaining];
   return [...units.slice(0, idx), ...replacement, ...units.slice(idx + 1)];
 }
@@ -446,7 +454,7 @@ function encodeWordNeighbour(
     text: `&#${ch.codePointAt(0) as number};`,
     style: u.style,
   };
-  const remaining: Unit[] = rest === "" ? [] : [{ ...u, text: rest }];
+  const remaining: Unit[] = rest === "" ? [] : [textUnit(rest, u.style)];
   const replacement = edge === "start" ? [entity, ...remaining] : [...remaining, entity];
   return [...units.slice(0, idx), ...replacement, ...units.slice(idx + 1)];
 }
