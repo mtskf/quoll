@@ -34,6 +34,33 @@ describe("oracle self-tests", () => {
   it("trims whitespace at the HTML edge", accept("<b>a </b>", "**a**"));
   it("trims the heading separator on the Markdown side", accept("<h1>t #</h1>", "# t \\#"));
   it("collapses whitespace per text node", accept("a  <b>  b</b>", "a  **b**"));
+
+  // One self-test per remaining fail() branch, each pinned to its own message so a
+  // branch that stops firing (or fires as another) turns its test red.
+  it("rejects differing text", () => {
+    expect(() => assertStyleParity("<b>a</b>", "**b**")).toThrow(/text differs/);
+  });
+  it("rejects a restyled word", () => {
+    expect(() => assertStyleParity("<b>a</b>", "a")).toThrow(/word char 0 restyled/);
+  });
+  it("rejects a word that gained a style", () => {
+    expect(() => assertStyleParity("a", "**a**")).toThrow(/word char 0 restyled/);
+  });
+  it("rejects a space that gained a style", () => {
+    expect(() => assertStyleParity("<b>a</b> <b>b</b>", "**a b**")).toThrow(
+      /space 1 gained a style/
+    );
+  });
+  it("rejects punctuation that gained a style", () => {
+    expect(() => assertStyleParity("<b>a</b>.<b>b</b>", "**a.b**")).toThrow(
+      /punctuation 1 gained a style/
+    );
+  });
+  it("names the style on a lost-style punctuation", () => {
+    expect(() => assertStyleParity("<b>a.</b>", "**a**.")).toThrow(
+      /punctuation 1 lost style \d+ without a forced demotion/
+    );
+  });
 });
 
 function roundTrip(html: string): void {
@@ -105,8 +132,27 @@ describe("emphasis round-trip against the Lezer re-parse", () => {
     ["heading trailing hash", "<h1>title #</h1>"],
     ["heading of a lone hash", "<h2>#</h2>"],
     ["code span closer before a word", "<b><code>x</code></b>y"],
+    ["link inside strong", '<b><a href="https://example.com">x</a></b>y'],
+    ["link beside strong", '<a href="https://example.com">x</a><b>y</b>'],
+    ["code beside strong", "<b>a</b><code>b</code>"],
+    ["code beside emphasis", "<code>a</code><i>b</i>"],
+    ["break between strong runs", "<b>a</b><br><b>b</b>"],
+    ["star inside strong", "<b>a*b</b>c"],
+    ["underscore inside emphasis", "<i>a_b</i>c"],
+    ["ampersand inside strong", "<b>a&amp;b</b>"],
+    ["brackets inside strong", "<b>[a]</b>b"],
   ])("%s", (_name, html) => {
     roundTrip(html);
+  });
+
+  // Pins compatibility with Lezer 1.6.4's re-parse of these nested-closer runs;
+  // it is not a claim of CommonMark conformance.
+  it.each([
+    ["strong then italic after nested italic", "<b>a<i>b</i></b><i>c</i>", "**a*b****c*"],
+    ["italic then strong after nested strong", "<i>a<b>b</b></i><b>c</b>", "*a**b*****c**"],
+  ])("%s", (_name, html, expected) => {
+    expect(htmlToMarkdown(html)?.markdown).toBe(expected);
+    expect(() => assertStyleParity(html, expected)).not.toThrow();
   });
 
   it.each([
