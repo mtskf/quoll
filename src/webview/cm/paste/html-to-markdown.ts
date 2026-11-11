@@ -624,6 +624,34 @@ export function collectInline(
   }
 }
 
+/** Serialise one inline run (a segment's nodes) to Markdown through the atom IR:
+ *  collect styled atoms, then let `serializeInlineRuns` place the markers, repair
+ *  flanking and trim the run's edge spaces / breaks. A heading cannot hold a hard
+ *  break, so `"heading"` turns each break into a single space first. Records
+ *  marker syntax on `ctx` (code and links were recorded by the collector). */
+function inlineMarkdown(
+  nodes: readonly Node[],
+  depth: number,
+  ctx: Ctx,
+  mode: "paragraph" | "heading"
+): string {
+  const atoms: InlineAtom[] = [];
+  for (const node of nodes) {
+    collectInline(node, depth, ctx, 0, atoms);
+  }
+  const runAtoms =
+    mode === "heading"
+      ? atoms.map(
+          (a): InlineAtom => (a.kind === "break" ? { kind: "text", text: " ", style: a.style } : a)
+        )
+      : atoms;
+  const result = serializeInlineRuns(runAtoms, { escapeText: escapeInline, trimEdges: true });
+  if (result.emittedSyntax) {
+    ctx.emittedMarkdownSyntax = true;
+  }
+  return result.markdown;
+}
+
 /** The label as the link would show it (breaks folded to a space), for the
  *  emptiness gate. */
 function labelText(label: readonly InlineAtom[]): string {
@@ -1049,16 +1077,14 @@ function pushInlineBlocks(
 ): void {
   const contributing = nodes.filter((n) => !contributesNothing(n));
   for (const segment of splitInlineSegments(contributing)) {
-    const serialized = segment.map((nd) => serializeInline(nd, depth, ctx)).join("");
-    const raw = trimSegmentEdges(serialized);
+    const raw = inlineMarkdown(segment, depth, ctx, "paragraph");
     const text = escapeMarkers(raw).trim();
     // A segment that edge-trimmed to nothing — a lone `<br>` between two blocks, or
     // `<p><br></p>` — falls out here: `escapeMarkers("") === ""`, so `text` is empty
     // and nothing is pushed. Any surviving break has real content on both sides.
     if (text !== "") {
       // `false`: a paragraph is escaped text, never syntax. Any syntax INSIDE it
-      // (emphasis, a link, inline code) was recorded by `serializeInline` at the
-      // leaf that emitted it, not here.
+      // (emphasis, a link, inline code) was recorded by `inlineMarkdown`, not here.
       push(text, false);
     }
   }

@@ -1314,3 +1314,38 @@ describe("htmlToMarkdown — block separators", () => {
     expect(htmlToMarkdown("<p><strong>x<br><br>y</strong>z</p>")?.markdown).toBe("**x\\\n\\\ny**z");
   });
 });
+
+describe("inline style runs (PASTE-01b)", () => {
+  it("merges adjacent emphasis of the same style", () => {
+    expect(convert("<b>A</b><b>B</b>")).toBe("**AB**");
+    expect(convert("<b>A<span>B</span></b>")).toBe("**AB**");
+  });
+
+  it("nests overlapping emphasis with the longer run outermost", () => {
+    expect(convert("<strong><em>A</em></strong><em>B</em><strong>C</strong>")).toBe(
+      "***A**B***C**"
+    );
+  });
+
+  it("moves edge punctuation outside a run that would not flank", () => {
+    expect(convert("<b>Note:</b>text")).toBe("**Note**:text");
+    expect(convert("<p>これは<b>「重要」</b>です。</p>")).toBe("これは「**重要**」です。");
+  });
+
+  it("keeps one span across a hard break", () => {
+    expect(convert("<b>a<br>b</b>")).toBe("**a\\\nb**");
+  });
+
+  it("bolds a rejected link's label and keeps a link's own emphasis inside it", () => {
+    expect(convert('<b><a href="javascript:x">t</a></b>')).toBe("**t**");
+    expect(convert('<a href="https://e.x"><b>t</b></a>')).toBe("[**t**](https://e.x)");
+  });
+
+  it("folds a hard break in a link label to a space", () => {
+    expect(convert('<a href="https://e.x">a<br>b</a>')).toBe("[a b](https://e.x)");
+  });
+
+  it("leaves a flanking closer before trailing whitespace alone", () => {
+    expect(convert("<p><b>a.</b> </p>")).toBe("**a.**");
+  });
+});
