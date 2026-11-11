@@ -398,6 +398,18 @@ export function buildFormatDocumentMessage(): FormatDocumentMessage {
   return { protocol: PROTOCOL_VERSION, type: "format-document" };
 }
 
+export type SwitchCommandMessage = Envelope & { type: "switch-command" };
+
+export function buildSwitchCommandMessage(): SwitchCommandMessage {
+  return { protocol: PROTOCOL_VERSION, type: "switch-command" };
+}
+
+export type SwitchAbortedMessage = Envelope & { type: "switch-aborted" };
+
+export function buildSwitchAbortedMessage(): SwitchAbortedMessage {
+  return { protocol: PROTOCOL_VERSION, type: "switch-aborted" };
+}
+
 export type HostToWebview =
   | DocumentMessage
   | ThemeMessage
@@ -405,7 +417,9 @@ export type HostToWebview =
   | EditorConfigMessage
   | CaretApplyMessage
   | FormatCommandMessage
-  | FormatDocumentMessage;
+  | FormatDocumentMessage
+  | SwitchCommandMessage
+  | SwitchAbortedMessage;
 
 // ---------- Webview → Host ----------
 
@@ -767,6 +781,9 @@ export function isHostToWebview(value: unknown): value is HostToWebview {
       return typeof v.action === "string" && FORMAT_ACTION_SET.has(v.action);
     case "format-document":
       return true; // no payload beyond the validated envelope/protocol
+    case "switch-command":
+    case "switch-aborted":
+      return Object.keys(v).every((key) => key === "protocol" || key === "type");
     default:
       return false;
   }
