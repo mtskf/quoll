@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { commands, window } from "vscode"; // vitest-aliased to test/extension/vscode-stub.ts
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { commands, env, window } from "vscode"; // vitest-aliased to test/extension/vscode-stub.ts
 import {
   clearActivePanelPost,
   getActivePanelPost,
@@ -56,7 +56,7 @@ describe("runPastePlainCommand", () => {
     });
   });
 
-  it("targets B when the active panel switches from A to B during the read", async () => {
+  it("drops the paste when the active panel switches from A to B during the read", async () => {
     const postA = vi.fn();
     const postB = vi.fn();
     setActivePanelPost(postA);
@@ -68,11 +68,27 @@ describe("runPastePlainCommand", () => {
     await pending;
 
     expect(postA).not.toHaveBeenCalled();
-    expect(postB).toHaveBeenCalledExactlyOnceWith({
+    expect(postB).not.toHaveBeenCalled();
+  });
+
+  it("still posts to A when the user returns to A before the read resolves", async () => {
+    const postA = vi.fn();
+    const postB = vi.fn();
+    setActivePanelPost(postA);
+    const read = deferredRead();
+
+    const pending = runPastePlainCommand(read.readText);
+    setActivePanelPost(postB);
+    setActivePanelPost(postA);
+    read.resolve("arrived");
+    await pending;
+
+    expect(postA).toHaveBeenCalledExactlyOnceWith({
       protocol: PROTOCOL_VERSION,
       type: "paste-plain",
       text: "arrived",
     });
+    expect(postB).not.toHaveBeenCalled();
   });
 
   it("posts nothing when the active panel is cleared during the read", async () => {
@@ -98,6 +114,14 @@ describe("runPastePlainCommand", () => {
     await pending;
 
     expect(post).not.toHaveBeenCalled();
+  });
+
+  it("does not read the clipboard when no panel is active", async () => {
+    const readText = vi.fn(() => Promise.resolve("never"));
+
+    await runPastePlainCommand(readText);
+
+    expect(readText).not.toHaveBeenCalled();
   });
 
   it("shows one error toast and logs a rejected read without posting", async () => {
@@ -142,11 +166,33 @@ describe("command registration", () => {
     vi.restoreAllMocks();
   });
 
-  it("wires quoll.pastePlain to runPastePlainCommand", () => {
+  it("ignores stray command arguments and reads the real clipboard", async () => {
     const spy = vi.spyOn(commands, "registerCommand");
+    // The stub env has no clipboard; install one for this test only.
+    const clipboard = vi.fn(() => Promise.resolve("from clipboard"));
+    Object.defineProperty(env, "clipboard", {
+      value: { readText: clipboard },
+      configurable: true,
+    });
+    onTestFinished(() => {
+      Reflect.deleteProperty(env, "clipboard");
+    });
+    const toast = vi.spyOn(window, "showErrorMessage");
+    const post = vi.fn();
+    setActivePanelPost(post);
 
     registerPastePlainCommand();
+    const call = spy.mock.calls.find(([id]) => id === "quoll.pastePlain");
+    const handler = call?.[1] as (...args: unknown[]) => Promise<void>;
+    await handler("junk");
+    releaseActivePoster();
 
-    expect(spy).toHaveBeenCalledWith("quoll.pastePlain", runPastePlainCommand);
+    expect(clipboard).toHaveBeenCalledOnce();
+    expect(toast).not.toHaveBeenCalled();
+    expect(post).toHaveBeenCalledExactlyOnceWith({
+      protocol: PROTOCOL_VERSION,
+      type: "paste-plain",
+      text: "from clipboard",
+    });
   });
 });
