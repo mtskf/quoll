@@ -95,10 +95,11 @@ interface LinkUnit {
 const INVISIBLE_TOKEN = /^(?:\p{Default_Ignorable_Code_Point}|\p{Cf})+$/u;
 const WHITESPACE_RUN = /^\s+$/;
 
-/** A hard break cannot live in a link label (the newline would end the link), so a
- *  label's break atoms become one space each, keeping their style. */
-function foldLabelBreaks(label: readonly InlineAtom[]): InlineAtom[] {
-  return label.map((a) => (a.kind === "break" ? { kind: "text", text: " ", style: a.style } : a));
+/** Turn each top-level break atom into one space, keeping its style — for content
+ *  that cannot hold a hard break: a link label (the newline would end the link) or
+ *  a heading (single-line). */
+export function foldBreaksToSpaces(atoms: readonly InlineAtom[]): InlineAtom[] {
+  return atoms.map((a) => (a.kind === "break" ? { kind: "text", text: " ", style: a.style } : a));
 }
 
 function linkUnit(
@@ -109,7 +110,7 @@ function linkUnit(
 ): LinkUnit {
   // `trimEdges: false`: label-edge spaces are not block edges; the converter has
   // always kept them (`[ x ](u)`).
-  const inner = serializeInlineRuns(foldLabelBreaks(label), { ...opts, trimEdges: false });
+  const inner = serializeInlineRuns(foldBreaksToSpaces(label), { ...opts, trimEdges: false });
   return {
     kind: "link",
     label,
@@ -417,7 +418,7 @@ function transferLinkStyle(
   if (u === undefined || u.kind !== "link" || u.style === 0) {
     return null;
   }
-  const label = u.label.map((a) => ({ ...a, style: (a.style | u.style) as StyleMask }));
+  const label = u.label.map((a) => ({ ...a, style: a.style | u.style }));
   const moved = linkUnit(label, u.destination, 0, opts);
   return [...units.slice(0, idx), moved, ...units.slice(idx + 1)];
 }
@@ -452,8 +453,9 @@ function encodeWordNeighbour(
 
 /** Apply the first applicable repair to the first failing group that has one, in
  *  output order. The link-edge and demotion preconditions are disjoint (a link
- *  unit vs a text unit on the punctuation side), so their order is immaterial. A failing group no branch can repair is skipped unchanged (never
- *  retried). Null when nothing applies — the fixpoint. */
+ *  unit vs a text unit on the punctuation side), so their order is immaterial. A
+ *  failing group no branch can repair is skipped unchanged (never retried). Null
+ *  when nothing applies — the fixpoint. */
 function repairOnce(
   units: readonly Unit[],
   styles: readonly StyleMask[],

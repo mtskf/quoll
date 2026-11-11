@@ -70,6 +70,7 @@ import { SKIP_TAGS, tableElementToGfm } from "./html-table-to-gfm.js";
 import {
   BOLD,
   CapExceeded,
+  foldBreaksToSpaces,
   HARD_BREAK,
   type InlineAtom,
   InlineRepairCapExceeded,
@@ -466,7 +467,7 @@ export function collectInline(
         blankAfterInvisible(labelText(label, ctx))
       ) {
         for (const atom of label) {
-          out.push({ ...atom, style: (atom.style | style) as StyleMask });
+          out.push({ ...atom, style: atom.style | style });
         }
         return;
       }
@@ -494,12 +495,7 @@ function inlineMarkdown(
   for (const node of nodes) {
     collectInline(node, depth, ctx, 0, atoms);
   }
-  const runAtoms =
-    mode === "heading"
-      ? atoms.map(
-          (a): InlineAtom => (a.kind === "break" ? { kind: "text", text: " ", style: a.style } : a)
-        )
-      : atoms;
+  const runAtoms = mode === "heading" ? foldBreaksToSpaces(atoms) : atoms;
   const result = serializeInlineRuns(runAtoms, {
     escapeText: escapeInline,
     trimEdges: true,
@@ -514,10 +510,7 @@ function inlineMarkdown(
 /** The label as the link would show it (breaks folded to a space), for the
  *  emptiness gate. */
 function labelText(label: readonly InlineAtom[], ctx: Ctx): string {
-  const folded = label.map(
-    (a): InlineAtom => (a.kind === "break" ? { kind: "text", text: " ", style: a.style } : a)
-  );
-  return serializeInlineRuns(folded, {
+  return serializeInlineRuns(foldBreaksToSpaces(label), {
     escapeText: escapeInline,
     trimEdges: false,
     repairBudget: ctx.repair,
