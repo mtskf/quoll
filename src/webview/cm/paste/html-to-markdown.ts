@@ -67,6 +67,14 @@ import { isAllowedUrl } from "../../../markdown/url-allowlist.js";
 import { encodeMarkdownDestination } from "../../../markdown/url-decode.js";
 import { MAX_LIST_NUMBER } from "../list/list-transform.js";
 import { SKIP_TAGS, tableElementToGfm } from "./html-table-to-gfm.js";
+import {
+  BOLD,
+  CapExceeded,
+  type InlineAtom,
+  ITALIC,
+  type StyleMask,
+  serializeInlineRuns,
+} from "./inline-runs.js";
 
 const TEXT_NODE = 3;
 const ELEMENT_NODE = 1;
@@ -88,12 +96,12 @@ const MAX_DEPTH = 32;
 // shared because the rich converter reuses tableElementToGfm) — SCRIPT/STYLE/…
 // plus form-control + embed elements whose text/value is not prose.
 
-/** Internal cap sentinel — thrown deep in the walk, caught by `htmlToMarkdown`,
- *  which returns `null` so the handler degrades to plain-text paste. NEVER
- *  propagates to the DOM event handler. */
-class CapExceeded extends Error {}
+// The cap sentinel `CapExceeded` (imported from inline-runs.ts, so the inline
+// serializer's repair-cap error is the same class) is thrown deep in the walk and
+// caught by `htmlToMarkdown`, which returns `null` so the handler degrades to
+// plain-text paste. It NEVER propagates to the DOM event handler.
 
-interface Ctx {
+export interface Ctx {
   nodes: number; // element visits
   outLen: number; // cumulative emitted Markdown length (incremental output cap)
   // Did the walk emit Markdown SYNTAX (as opposed to escaped text + line
@@ -526,6 +534,103 @@ function serializeChildrenInline(el: Element, depth: number, ctx: Ctx): string {
     out += serializeInline(child, depth, ctx);
   }
   return out;
+}
+
+/** Collect inline content (children of a block) as styled atoms for
+ *  `serializeInlineRuns`, appending to `out`. `style` is the emphasis inherited
+ *  from the ancestors. The walk mirrors `serializeInline`: same depth / node caps,
+ *  same SKIP_TAGS, same CODE and A emptiness gates, and the same leaf counting —
+ *  except that a text leaf counts its collapsed UNESCAPED text (escaping happens
+ *  later, in the serializer; it at most doubles the text, and the final output
+ *  length check stays authoritative). Emphasis tags only change the style mask:
+ *  markers, their placement and the visually-empty case are the serializer's job. */
+export function collectInline(
+  node: Node,
+  depth: number,
+  ctx: Ctx,
+  style: StyleMask,
+  out: InlineAtom[]
+): void {
+  if (depth > MAX_DEPTH) {
+    throw new CapExceeded();
+  }
+  if (node.nodeType === TEXT_NODE) {
+    const text = count(ctx, collapseWs(node.textContent ?? ""));
+    if (text !== "") {
+      out.push({ kind: "text", text, style });
+    }
+    return;
+  }
+  if (node.nodeType !== ELEMENT_NODE) {
+    return;
+  }
+  const el = node as Element;
+  const tag = el.tagName;
+  if (SKIP_TAGS.has(tag)) {
+    return;
+  }
+  bump(ctx);
+  if (tag === "BR") {
+    count(ctx, HARD_BREAK);
+    out.push({ kind: "break", style });
+    return;
+  }
+  if (tag === "CODE") {
+    // Same gates as serializeInline's CODE arm (see the reasoning there).
+    const body = collapseWs(skipTagsText(el));
+    if (!hasVisibleContent(el) || blankAfterInvisible(body)) {
+      return;
+    }
+    ctx.emittedMarkdownSyntax = true;
+    out.push({ kind: "code", markdown: count(ctx, inlineCode(body)), style });
+    return;
+  }
+  const children = (childStyle: StyleMask, into: InlineAtom[]): void => {
+    for (const child of Array.from(el.childNodes)) {
+      collectInline(child, depth + 1, ctx, childStyle, into);
+    }
+  };
+  switch (tag) {
+    // A tag whose own style cancels it is transparent, exactly like an unknown
+    // inline element. See styleCancelsEmphasis.
+    case "STRONG":
+    case "B":
+      children(styleCancelsEmphasis(el, "font-weight") ? style : style | BOLD, out);
+      return;
+    case "EM":
+    case "I":
+      children(styleCancelsEmphasis(el, "font-style") ? style : style | ITALIC, out);
+      return;
+    case "A": {
+      // The label is collected link-relative (base style 0); the outer style
+      // stays on the link atom.
+      const label: InlineAtom[] = [];
+      children(0, label);
+      const href = el.getAttribute("href") ?? "";
+      // Same gates as serializeInline's A arm (see the reasoning there): a
+      // rejected destination, or a label with nothing to show, inlines the label.
+      if (!isAllowedUrl(href) || !hasVisibleContent(el) || blankAfterInvisible(labelText(label))) {
+        for (const atom of label) {
+          out.push({ ...atom, style: (atom.style | style) as StyleMask });
+        }
+        return;
+      }
+      ctx.emittedMarkdownSyntax = true;
+      out.push({ kind: "link", label, destination: markdownDestination(href), style });
+      return;
+    }
+    default:
+      children(style, out); // span/font/unknown inline → transparent
+  }
+}
+
+/** The label as the link would show it (breaks folded to a space), for the
+ *  emptiness gate. */
+function labelText(label: readonly InlineAtom[]): string {
+  const folded = label.map(
+    (a): InlineAtom => (a.kind === "break" ? { kind: "text", text: " ", style: a.style } : a)
+  );
+  return serializeInlineRuns(folded, { escapeText: escapeInline, trimEdges: false }).markdown;
 }
 
 const HEADINGS: Record<string, number> = { H1: 1, H2: 2, H3: 3, H4: 4, H5: 5, H6: 6 };
