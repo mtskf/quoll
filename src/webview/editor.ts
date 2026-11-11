@@ -20,6 +20,7 @@ import {
 import { EditorView, keymap } from "@codemirror/view";
 import { perfNow, perfRecord } from "../shared/perf.js";
 import {
+  buildSwitchToTextMessage,
   type DocumentMessage,
   type FormatAction,
   type LintDiagnosticWire,
@@ -172,6 +173,9 @@ export type EditorOptions = {
    *  dead. It reports the SYNC check only: whether the post that follows a
    *  `true` goes out is `safePostMessage`'s to report. Not fired on teardown. */
   onHandoffSynced?: (synced: boolean) => void;
+  /** Fired when a switch to text stops without posting and no send-failure
+   *  banner already explains why (unsynced timeout, failed post, throw). */
+  onSwitchFailed?: () => void;
 };
 
 /** The part of a host `DocumentMessage` the editor consumes. An object, not
@@ -204,6 +208,9 @@ export type EditorHandle = {
    *  the last keystrokes OR strand the final caret inside its debounce window.
    *  Single-flight-safe (delegates to edit-sync's flush → trySend). */
   flushPending(): void;
+  /** Switch to the text editor once every edit has settled on the host; a no-op
+   *  while a switch is already in flight. Never rejects. */
+  requestSwitch(): Promise<void>;
   /** Teardown: cancel any pending flush, destroy the EditorView, remove
    *  the mount node. */
   dispose(): void;
@@ -483,6 +490,47 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     clearCaretTimer();
     pendingCaret = null;
   };
+
+  // Gate switch-to-text on the edit-sync settled verdict: an Edit that never
+  // reached the host (oversize, transport throw) must not let the host reopen
+  // stale text and close Quoll. The flag stays set after a successful post so a
+  // second press in the post-to-dispose window is a no-op.
+  let switchInFlight = false;
+  let disposed = false;
+  async function requestSwitch(): Promise<void> {
+    if (switchInFlight || disposed) {
+      return;
+    }
+    switchInFlight = true;
+    let posted = false;
+    try {
+      sync.flushIfIdle();
+      const outcome = await sync.awaitSettled(HANDOFF_SETTLE_TIMEOUT_MS);
+      if (disposed || outcome === "cancelled") {
+        return;
+      }
+      if (outcome !== "settled") {
+        if (opts.getState().sendFailure === null) {
+          opts.onSwitchFailed?.();
+        }
+        return;
+      }
+      flushCaretReport();
+      posted = safePostMessage(getHost(), buildSwitchToTextMessage(), "switch-to-text");
+      if (!posted) {
+        opts.onSwitchFailed?.();
+      }
+    } catch (err) {
+      console.error("[quoll] switch to text failed", err);
+      if (!disposed && opts.getState().sendFailure === null) {
+        opts.onSwitchFailed?.();
+      }
+    } finally {
+      if (!posted) {
+        switchInFlight = false;
+      }
+    }
+  }
 
   // A committed local change → edit-sync. Called from `dispatchTransactions`,
   // NOT an updateListener: CodeMirror commits the state before its DOM phase and
@@ -924,15 +972,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // (no CM change, no write-lock); the host reopens the document in the
         // built-in text editor and re-applies the caret. Present in read-only
         // mode too (navigation).
-        quollSwitchEditor(getHost(), () => {
-          // Pre-switch flush: push the latest pending Edit AND the debounced
-          // caret-report to the host BEFORE switch-to-text, so the reopened
-          // text editor shows the just-typed content with its caret at the
-          // just-moved position (the host applies lastKnownCaret on the switch).
-          // postSwitchToText posts switch-to-text AFTER this callback → FIFO.
-          sync.flush();
-          flushCaretReport();
-        }),
+        quollSwitchEditor(requestSwitch),
         // Floating-toolbar scroll-hide: one shared scroll-direction observer on
         // view.scrollDOM stamps `.quoll-chrome-hidden` on the .quoll-editor host
         // so BOTH toggles above + the outline panel slide off the top edge on
@@ -1359,6 +1399,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         applyingRemoteCaret = false;
       }
     },
+    requestSwitch,
     onReducerCommit(editInFlight) {
       sync.onReducerCommit(editInFlight);
     },
@@ -1367,6 +1408,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       flushCaretReport();
     },
     dispose() {
+      disposed = true;
       // Cancel the pending debounced flush BEFORE tearing the view down.
       // A timer that fires after destroy would call getDoc() through a
       // destroyed view; the empty-string Edit it would post must never

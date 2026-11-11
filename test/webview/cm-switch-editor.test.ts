@@ -3,7 +3,6 @@ import { EditorState, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { PROTOCOL_VERSION } from "../../src/shared/protocol.js";
 import { matchesSwitchEditorChord, quollSwitchEditor } from "../../src/webview/cm/switch-editor.js";
 
 let view: EditorView | null = null;
@@ -27,8 +26,6 @@ function dispatchKeydown(init: KeyboardEventInit): void {
     new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init })
   );
 }
-
-const EXPECTED = { protocol: PROTOCOL_VERSION, type: "switch-to-text" };
 
 describe("matchesSwitchEditorChord", () => {
   // The regression this pins: on macOS Option+E is the acute-accent DEAD KEY, so a
@@ -72,51 +69,28 @@ describe("matchesSwitchEditorChord", () => {
 });
 
 describe("quollSwitchEditor chord (keydown)", () => {
-  it("posts switch-to-text for the macOS dead-key ⌘⌥E keydown (reproduces + fixes the regression)", () => {
-    const postMessage = vi.fn();
-    mount([quollSwitchEditor({ postMessage }, () => {})]);
+  it("requests a switch for the macOS dead-key chord", () => {
+    const requestSwitch = vi.fn(async () => {});
+    mount([quollSwitchEditor(requestSwitch)]);
     dispatchKeydown({ key: "Dead", code: "KeyE", metaKey: true, altKey: true });
-    expect(postMessage).toHaveBeenCalledWith(EXPECTED);
-  });
-
-  it("flushes pending edits before posting (no data loss on type-then-switch)", () => {
-    const calls: string[] = [];
-    const flush = vi.fn(() => calls.push("flush"));
-    const postMessage = vi.fn(() => calls.push("post"));
-    mount([quollSwitchEditor({ postMessage }, flush)]);
-    dispatchKeydown({ key: "Dead", code: "KeyE", metaKey: true, altKey: true });
-    expect(calls).toEqual(["flush", "post"]);
-  });
-
-  it("does not throw out of the keydown handler when postMessage throws", () => {
-    const postMessage = vi.fn(() => {
-      throw new Error("transport gone");
-    });
-    mount([quollSwitchEditor({ postMessage }, () => {})]);
-    expect(() =>
-      dispatchKeydown({ key: "Dead", code: "KeyE", metaKey: true, altKey: true })
-    ).not.toThrow();
+    expect(requestSwitch).toHaveBeenCalledOnce();
   });
 
   it("ignores a non-chord keydown", () => {
-    const postMessage = vi.fn();
-    mount([quollSwitchEditor({ postMessage }, () => {})]);
+    const requestSwitch = vi.fn(async () => {});
+    mount([quollSwitchEditor(requestSwitch)]);
     dispatchKeydown({ key: "a", code: "KeyA" });
-    expect(postMessage).not.toHaveBeenCalled();
+    expect(requestSwitch).not.toHaveBeenCalled();
   });
 });
 
 describe("quollSwitchEditor button", () => {
-  it("renders a top-right toggle button inside the .quoll-editor host", () => {
-    const postMessage = vi.fn();
-    const host = mount([quollSwitchEditor({ postMessage }, () => {})]);
-    expect(host.querySelector(".quoll-switch-editor-toggle")).not.toBeNull();
-  });
-
-  it("posts switch-to-text when the button is clicked", () => {
-    const postMessage = vi.fn();
-    const host = mount([quollSwitchEditor({ postMessage }, () => {})]);
-    host.querySelector<HTMLButtonElement>(".quoll-switch-editor-toggle")?.click();
-    expect(postMessage).toHaveBeenCalledWith(EXPECTED);
+  it("renders a toggle and requests a switch when clicked", () => {
+    const requestSwitch = vi.fn(async () => {});
+    const host = mount([quollSwitchEditor(requestSwitch)]);
+    const button = host.querySelector<HTMLButtonElement>(".quoll-switch-editor-toggle");
+    expect(button).not.toBeNull();
+    button?.click();
+    expect(requestSwitch).toHaveBeenCalledOnce();
   });
 });

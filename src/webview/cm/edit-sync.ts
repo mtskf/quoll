@@ -368,7 +368,7 @@ export type EditSync = {
    *  that in-flight case it RETAINS the buffer so the reseed cannot strand the
    *  bytes, but that costs an extra idempotent round-trip `flushIfIdle` avoids.
    *  Reserve `flush`
-   *  for TEARDOWN paths (visibilitychange / pagehide / switch-to-text) where the
+   *  for TEARDOWN paths (visibilitychange / pagehide) where the
    *  panel may dispose and the host stash / retained buffer are the last
    *  authorities. No-op when nothing was typed in the debounce window. */
   flushIfIdle: () => void;
