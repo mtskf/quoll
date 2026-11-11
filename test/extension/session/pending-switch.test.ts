@@ -5,7 +5,7 @@ import { getActiveSwitchPoster } from "../../../src/extension/surface/switch-pos
 import { PROTOCOL_VERSION } from "../../../src/shared/protocol.js";
 
 vi.mock("vscode", async (importOriginal) => {
-  const stub = await importOriginal<typeof import("../../vscode-stub.js")>();
+  const stub = await importOriginal<typeof import("../vscode-stub.js")>();
   const event = () => ({ dispose() {} });
   return {
     ...stub,
