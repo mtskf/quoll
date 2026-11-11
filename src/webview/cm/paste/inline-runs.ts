@@ -103,9 +103,9 @@ export function foldBreaksToSpaces(atoms: readonly InlineAtom[]): InlineAtom[] {
 }
 
 /** A text unit, neutral iff it is a whitespace run or an invisible-only token. The
- *  one constructor for text units, so a split remainder (a demotion's or an
- *  encoding's) re-derives neutrality from its own text instead of inheriting the
- *  parent's: a lone joiner left behind must not carry markers on its own. */
+ *  constructor for text units and demotion remainders, which re-derive neutrality
+ *  from their own text instead of inheriting the parent's: a lone joiner left
+ *  behind must not carry markers on its own. */
 function textUnit(text: string, style: StyleMask): Unit {
   const neutral = WHITESPACE_RUN.test(text) || INVISIBLE_TOKEN.test(text);
   return { kind: "text", text, style, neutral };
@@ -376,6 +376,19 @@ function hasWordChar(text: string): boolean {
   return false;
 }
 
+/** The inclusive bounds of the contiguous run with the same effective style. */
+function runRange(styles: readonly StyleMask[], idx: number): [number, number] {
+  let lo = idx;
+  while (lo > 0 && styles[lo - 1] === styles[idx]) {
+    lo--;
+  }
+  let hi = idx;
+  while (hi < styles.length - 1 && styles[hi + 1] === styles[idx]) {
+    hi++;
+  }
+  return [lo, hi];
+}
+
 /** Repair (b), punctuation demotion: the punctuation next to the failing group is
  *  the edge char of a non-neutral text unit. Split that char into its own NEUTRAL
  *  unit — it then takes its neutral stretch's style from `effectiveStyles` and the
@@ -399,7 +412,7 @@ function demotePunctuation(
   const rest = edge === "end" ? u.text.slice(0, -1) : u.text.slice(1);
   const keeps = (j: number): boolean => {
     if (j === idx) {
-      return hasWordChar(rest);
+      return hasWordChar(rest) && !isNeutral(textUnit(rest, u.style));
     }
     const v = units[j];
     if (isNeutral(v)) {
@@ -407,14 +420,7 @@ function demotePunctuation(
     }
     return v.kind !== "text" || hasWordChar(v.text);
   };
-  let lo = idx;
-  while (lo > 0 && styles[lo - 1] === styles[idx]) {
-    lo--;
-  }
-  let hi = idx;
-  while (hi < units.length - 1 && styles[hi + 1] === styles[idx]) {
-    hi++;
-  }
+  const [lo, hi] = runRange(styles, idx);
   let kept = false;
   for (let j = lo; j <= hi && !kept; j++) {
     kept = keeps(j);
@@ -468,21 +474,21 @@ function encodeWordNeighbour(
     text: `&#${ch.codePointAt(0) as number};`,
     style: u.style,
   };
-  const remaining: Unit[] = rest === "" ? [] : [textUnit(rest, u.style)];
+  const remaining: Unit[] = rest === "" ? [] : [{ ...u, text: rest }];
   return edge === "start" ? [entity, ...remaining] : [...remaining, entity];
 }
 
 /** One repair pass: walk the failing groups in output order and repair each with
  *  the first applicable branch, batching every independent repair into ONE
  *  re-serialisation — otherwise k failing groups in a long run (one `Note:` per
- *  line) cost k full passes. Independent means the group's two neighbour units
- *  (`at - 1`, `at`) are untouched by an earlier repair in this pass: a repair
- *  only edits one of them and only reads the state around its own boundary, so a
- *  group next to an edited unit waits for the next pass, which re-reads the
- *  repaired output. The link-edge and demotion preconditions are disjoint (a link
- *  unit vs a text unit on the punctuation side), so their order is immaterial. A
- *  failing group no branch can repair is skipped unchanged. Null when nothing
- *  applies — the fixpoint. */
+ *  line) cost k full passes. Both neighbour units must be untouched; a
+ *  punctuation-side repair also requires its whole same-style run untouched,
+ *  because demotion reads that run for a surviving styled character. Transfers
+ *  and demotions touch the whole run so later repairs re-read its witness on the
+ *  next pass. Word-side encoding only touches the two neighbours. The link-edge
+ *  and demotion preconditions are disjoint (a link vs a text unit), so their order
+ *  is immaterial. A failing group no branch can repair is skipped unchanged.
+ *  Null when nothing applies — the fixpoint. */
 function repairPass(
   units: readonly Unit[],
   styles: readonly StyleMask[],
@@ -498,6 +504,14 @@ function repairPass(
     }
     const punctIdx = side === "before" ? g.at - 1 : g.at;
     const wordIdx = side === "before" ? g.at : g.at - 1;
+    const [lo, hi] = runRange(styles, punctIdx);
+    let runTouched = false;
+    for (let j = lo; j <= hi && !runTouched; j++) {
+      runTouched = touched.has(j);
+    }
+    if (runTouched) {
+      continue;
+    }
     const fromPunct =
       transferLinkStyle(units, punctIdx, opts) ??
       demotePunctuation(units, styles, punctIdx, side === "before" ? "end" : "start");
@@ -509,6 +523,11 @@ function repairPass(
       continue;
     }
     edits.set(idx, replacement);
+    if (fromPunct !== null) {
+      for (let j = lo; j <= hi; j++) {
+        touched.add(j);
+      }
+    }
     touched.add(g.at - 1);
     touched.add(g.at);
   }

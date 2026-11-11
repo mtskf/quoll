@@ -148,13 +148,34 @@ describe("flanking repair", () => {
 
   it("never leaves markers around a lone joiner a demotion split off", () => {
     expect(run([t(`${ZWJ}:`, B), t("a", 0)])).toEqual({
-      markdown: `${ZWJ}:a`,
-      emittedSyntax: false,
+      markdown: `**${ZWJ}:**&#97;`,
+      emittedSyntax: true,
     });
     expect(run([t("a", 0), t(`(${ZWJ}`, B)])).toEqual({
-      markdown: `a(${ZWJ}`,
-      emittedSyntax: false,
+      markdown: `&#97;**(${ZWJ}**`,
+      emittedSyntax: true,
     });
+    assertStyleParity(`<b>${ZWJ}:</b>a`, md([t(`${ZWJ}:`, B), t("a", 0)]));
+    assertStyleParity(`a<b>(${ZWJ}</b>`, md([t("a", 0), t(`(${ZWJ}`, B)]));
+  });
+
+  it("rechecks a punctuation run after transferring its link style", () => {
+    const out = md([t("w", 0), link([t("x", 0)], B), t(".", B), t("z", 0)], true);
+    expect(out).toBe("w[**x**](u)**.**&#122;");
+    assertStyleParity('w<b><a href="u">x</a>.</b>z', out);
+  });
+
+  it("rechecks a punctuation run after an earlier demotion", () => {
+    const out = md([t("a", 0), t(".", B), t(`${ZWJ}.`, B), t("a", 0)]);
+    expect(out).toBe(`a.**${ZWJ}.**&#97;`);
+    assertStyleParity(`a<b>.${ZWJ}.</b>a`, out);
+  });
+
+  it("keeps enclosing bold after a nested link transfer", () => {
+    const html = '<b>a<i><a href="https://example.com">x</a>.</i>a</b>';
+    const out = htmlToMarkdown(html)?.markdown;
+    expect(out).toBeTypeOf("string");
+    assertStyleParity(html, out as string);
   });
 
   it("leaves a flanking closer before a trimmed edge alone", () => {
@@ -183,6 +204,15 @@ describe("entity fallback", () => {
 
   it("still escapes a literal ampersand, so a reference cannot collide", () => {
     expect(md([t("&", 0)])).toBe("\\&");
+  });
+
+  it.each([
+    ["closing", [t(`${ZWJ}a`, B), t(".", I)], `**${ZWJ}&#97;***.*`, `<b>${ZWJ}a</b><i>.</i>`],
+    ["opening", [t(".", I), t(`a${ZWJ}`, B)], `*.***&#97;${ZWJ}**`, `<i>.</i><b>a${ZWJ}</b>`],
+  ] as const)("keeps a raw joiner beside an encoded %s word edge", (_edge, atoms, expected, html) => {
+    const out = md(atoms);
+    expect(out).toBe(expected);
+    assertStyleParity(html, out);
   });
 
   it("re-checks after each repair until the cascade settles", () => {
