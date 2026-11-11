@@ -236,10 +236,18 @@ describe("save-then-handoff-switch-ordering", function () {
       harness.applyEditOverride = (edit) =>
         gate.promise.then(() => vscode.workspace.applyEdit(edit));
       try {
+        harness.clearEvents();
         const swap = command
           ? vscode.commands.executeCommand("quoll.reopenInTextEditor")
           : undefined;
-        if (!command) {
+        if (command) {
+          // The command routes through the webview gate; let the real webview's
+          // switch-to-text land (lock-free) before the later Edit arrives.
+          await harness.waitForInbound(
+            (event) => (event.raw as { type?: string } | null)?.type === "switch-to-text",
+            8000
+          );
+        } else {
           panel.simulateInbound({ protocol: PROTOCOL_VERSION, type: "switch-to-text" });
         }
         panel.simulateInbound({
