@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 import { defaultKeymap, history, undo } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { highlightingFor } from "@codemirror/language";
-import { EditorSelection, EditorState } from "@codemirror/state";
+import { highlightingFor, syntaxHighlighting } from "@codemirror/language";
+import { EditorSelection, EditorState, type Extension } from "@codemirror/state";
 import { EditorView, keymap, runScopeHandlers } from "@codemirror/view";
 import { tags as t } from "@lezer/highlight";
 import { describe, expect, it, vi } from "vitest";
@@ -27,7 +27,7 @@ vi.mock("../../../src/webview/host.js", () => ({
   patchPersistedState: () => {},
 }));
 
-function mount(doc: string): EditorView {
+function mount(doc: string, extra: Extension[] = []): EditorView {
   const parent = document.createElement("div");
   document.body.appendChild(parent);
   const state = EditorState.create({
@@ -39,6 +39,7 @@ function mount(doc: string): EditorView {
       quollSyntaxReveal(),
       quollHighlighting,
       quollTokenMarkers,
+      ...extra,
       history(), // undo() returns false without this; C5 undo tests would silently pass
     ],
   });
@@ -432,6 +433,37 @@ describe("numeric entity integration", () => {
       expect(classes[0]).toContain("quoll-tok-strong");
       expect(classes[1]).toContain(highlightingFor(view.state, [t.emphasis]));
       expect(classes[1]).not.toContain("quoll-tok-strong");
+    } finally {
+      view.destroy();
+    }
+  });
+  it("the highlight walk skips the folded gap between visible ranges", () => {
+    // The gap holds ~1000 styled tokens. A walk spanning first-entity..last-entity
+    // would style every one of them; per-range walks style only the two small ranges.
+    const head = "**&#97;**";
+    const tail = "*&#98;*";
+    const doc = `${head}\n\n${"**x** ".repeat(500)}\n\n${tail}`;
+    let styled = 0;
+    const counter = syntaxHighlighting({
+      style: () => {
+        styled++;
+        return null;
+      },
+    });
+    const view = mount(doc, [counter]);
+    try {
+      styled = 0;
+      numericEntityReveal.build({
+        state: view.state,
+        selection: view.state.selection,
+        visibleRanges: [
+          { from: 0, to: head.length },
+          { from: doc.length - tail.length, to: doc.length },
+        ],
+        tree: fullTree(view.state),
+      });
+      expect(styled).toBeGreaterThan(0);
+      expect(styled).toBeLessThan(50);
     } finally {
       view.destroy();
     }
