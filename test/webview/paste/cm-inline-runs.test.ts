@@ -233,7 +233,11 @@ describe("repair cap", () => {
     const big = "x".repeat(100_000);
     const spent = (atoms: InlineAtom[]): number => {
       const probe = { remaining: 1_000_000 };
-      serializeInlineRuns(atoms, { trimEdges: false, escapeText: escapeInline, repairBudget: probe });
+      serializeInlineRuns(atoms, {
+        trimEdges: false,
+        escapeText: escapeInline,
+        repairBudget: probe,
+      });
       return 1_000_000 - probe.remaining;
     };
     // One repair (the `Note:` colon is demoted), so one re-serialisation pass.
