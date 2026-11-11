@@ -1,7 +1,6 @@
 import { highlightingFor } from "@codemirror/language";
-import type { EditorState } from "@codemirror/state";
 import { Decoration } from "@codemirror/view";
-import type { SyntaxNode, Tree } from "@lezer/common";
+import type { SyntaxNode } from "@lezer/common";
 import { highlightTree } from "@lezer/highlight";
 import { decodeNumericEntity } from "../../../markdown/numeric-entity.js";
 import { buildSortedRangeSet } from "../sorted-range-set.js";
@@ -28,33 +27,13 @@ function isInsideImage(node: SyntaxNode): boolean {
   return false;
 }
 
-// The classes the active highlighters assign to [from, to), inherited emphasis
-// included — the same walk syntaxHighlighting() runs for the source text.
-function highlightClassAt(state: EditorState, tree: Tree, from: number, to: number): string {
-  const classes = new Set<string>();
-  highlightTree(
-    tree,
-    { style: (tags) => highlightingFor(state, tags) },
-    (_from, _to, cls) => {
-      for (const c of cls.split(" ")) {
-        if (c) {
-          classes.add(c);
-        }
-      }
-    },
-    from,
-    to
-  );
-  return [...classes].join(" ");
-}
-
 export const numericEntityReveal: DecorationProvider = {
   build(ctx) {
     const out: Array<{
       from: number;
       to: number;
       text: string;
-      highlightClass: string;
+      classes: Set<string>;
       revealed: boolean;
     }> = [];
     for (const range of ctx.visibleRanges) {
@@ -76,18 +55,45 @@ export const numericEntityReveal: DecorationProvider = {
             from: node.from,
             to: node.to,
             text,
-            highlightClass: highlightClassAt(ctx.state, ctx.tree, node.from, node.to),
+            classes: new Set(),
             revealed: intersectsAnySelection(ctx.selection, node.from, node.to),
           });
         },
       });
+    }
+    // The classes the active highlighters assign to each entity's source text,
+    // inherited emphasis included — the same walk syntaxHighlighting() runs. One
+    // walk over the entities' span (not one per entity) keeps the build linear.
+    out.sort((a, b) => a.from - b.from);
+    if (out.length > 0) {
+      let next = 0;
+      highlightTree(
+        ctx.tree,
+        { style: (tags) => highlightingFor(ctx.state, tags) },
+        (from, to, cls) => {
+          while (next < out.length && out[next].to <= from) {
+            next++;
+          }
+          for (let i = next; i < out.length && out[i].from < to; i++) {
+            for (const c of cls.split(" ")) {
+              if (c) {
+                out[i].classes.add(c);
+              }
+            }
+          }
+        },
+        out[0].from,
+        out[out.length - 1].to
+      );
     }
     return buildSortedRangeSet(out, (entry) => [
       entry.from,
       entry.to,
       entry.revealed
         ? REVEAL_MARK
-        : Decoration.replace({ widget: new NumericEntityWidget(entry.text, entry.highlightClass) }),
+        : Decoration.replace({
+            widget: new NumericEntityWidget(entry.text, [...entry.classes].join(" ")),
+          }),
     ]);
   },
 };
