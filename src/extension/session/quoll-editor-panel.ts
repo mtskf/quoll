@@ -157,26 +157,6 @@ function readSpellcheckEnabled(): boolean {
   return workspace.getConfiguration().get<boolean>(SPELLCHECK_CONFIG_KEY, true);
 }
 
-export async function postSwitchAborted(
-  send: () => Thenable<boolean>,
-  isDisposed: () => boolean,
-  showError: (message: string) => void
-): Promise<void> {
-  if (isDisposed()) {
-    return;
-  }
-  try {
-    if (await send()) {
-      return;
-    }
-  } catch {
-    // Treat a detached transport like a refused delivery.
-  }
-  if (!isDisposed()) {
-    showError("Quoll: could not unlock the editor after switching. Please reload the window.");
-  }
-}
-
 export class QuollEditorPanel implements CustomTextEditorProvider {
   public static register(context: ExtensionContext, harness?: TestHarness): Disposable {
     return window.registerCustomEditorProvider(
@@ -572,6 +552,8 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     };
     let webviewReady = false;
     let pendingSwitch = false;
+    let startupNoticeShown = false;
+    let startupTimer: ReturnType<typeof setTimeout> | undefined;
     const switchPoster: SwitchPoster = (uriKey) => {
       if (uriKey !== document.uri.toString()) {
         return false;
@@ -580,6 +562,21 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         post(buildSwitchCommandMessage());
       } else {
         pendingSwitch = true;
+        if (!startupNoticeShown && startupTimer === undefined) {
+          startupTimer = setTimeout(() => {
+            startupTimer = undefined;
+            if (disposed || webviewReady || !pendingSwitch) {
+              return;
+            }
+            startupNoticeShown = true;
+            showSafely(
+              window.showWarningMessage(
+                "Quoll: the editor has not finished starting, so the switch to text is waiting. If this persists, reload the window."
+              ),
+              "showWarningMessage"
+            );
+          }, 5000);
+        }
       }
       return true;
     };
@@ -874,6 +871,8 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           // Reverse switch caret restore (one-shot; see caret-handoff-wiring.ts).
           caretWiring.applySwitchCaretOnReady();
           webviewReady = true;
+          clearTimeout(startupTimer);
+          startupTimer = undefined;
           if (pendingSwitch) {
             pendingSwitch = false;
             post(buildSwitchCommandMessage());
@@ -1012,23 +1011,12 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
               }
             },
             finalize: () => finalizeForwardSwap(document.uri, sourceTab),
-            postAborted: () => {
-              void postSwitchAborted(
-                async () => {
-                  const message = buildSwitchAbortedMessage();
-                  const send =
-                    this.harness?.webviewPostMessageOverride ??
-                    ((m) => webviewPanel.webview.postMessage(m));
-                  const delivered = await send(message);
-                  if (delivered && !disposed) {
-                    this.harness?.recordEvent(message, document.uri.toString());
-                  }
-                  return delivered;
-                },
-                () => disposed,
-                showError
-              );
-            },
+            postAborted: () =>
+              post(buildSwitchAbortedMessage(), () =>
+                showError(
+                  "Quoll: could not unlock the editor after switching. Please reload the window."
+                )
+              ),
             onError: (err) => {
               showSafely(
                 window.showErrorMessage(
@@ -1143,6 +1131,8 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       // channels by its own verdict (`isEditApplied`). Flag-first stays as the
       // defence for a `disposed` transition that throws.
       disposed = true;
+      clearTimeout(startupTimer);
+      startupTimer = undefined;
       // Clear the format poster immediately so `quoll.format` can never forward
       // to a disposing panel. Primary guard; `post` (createEffectExecutor) is a
       // backstop that self-suppresses after dispose (effect-executor.ts).
