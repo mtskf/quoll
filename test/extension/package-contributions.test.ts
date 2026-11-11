@@ -41,6 +41,30 @@ describe("package.json contributions — Command Palette visibility", () => {
     expect(entry?.when).toBe("false");
   });
 
+  it("declares quoll.pastePlain with the plain paste title", () => {
+    const entry = pkg.contributes.commands.find(
+      (c: { command: string }) => c.command === "quoll.pastePlain"
+    );
+    expect(entry).toBeDefined();
+    expect(entry?.title).toBe("Quoll: Paste as Plain Text");
+  });
+
+  it("binds Ctrl/Cmd+Shift+V exactly once in the Quoll editor context", () => {
+    const kbs = pkg.contributes.keybindings.filter(
+      (k: { command: string }) => k.command === "quoll.pastePlain"
+    );
+    expect(kbs).toHaveLength(1);
+    expect(kbs[0].key).toBe("ctrl+shift+v");
+    expect(kbs[0].mac).toBe("cmd+shift+v");
+    expect(kbs[0].when).toBe("activeCustomEditorId == 'quoll.editMarkdown'");
+  });
+
+  it("hides quoll.pastePlain from the palette", () => {
+    const entry = paletteMenus.find((m) => m.command === "quoll.pastePlain");
+    expect(entry).toBeDefined();
+    expect(entry?.when).toBe("false");
+  });
+
   it("keeps quoll.formatDocument in the palette (it is the command's only entry point)", () => {
     // No keybinding contributes it, so hiding it would strand the feature. It
     // stays discoverable and explains itself when no Quoll panel is active.
