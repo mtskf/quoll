@@ -3,7 +3,9 @@ import { createActivePoster } from "./active-poster.js";
 
 // The active panel's `post`: host commands (inline format, format document,
 // plain paste) forward their message to the ACTIVE Quoll panel's webview through
-// it (active-edge latch, not focus — the webview applies its own focus guard).
+// it. This is an active-edge latch, not focus: the focus-dependent commands
+// (inline format, plain paste) apply their own hasFocus guard in the webview;
+// format document deliberately has none.
 const registry = createActivePoster<(message: HostToWebview) => void>();
 
 export function setActivePanelPost(post: (message: HostToWebview) => void): void {
