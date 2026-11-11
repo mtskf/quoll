@@ -12,11 +12,11 @@ import {
 } from "./harness";
 
 // Pins the REAL dispatch of `quoll.format`: `executeCommand("quoll.format",
-// "bold")` -> the registered command body -> the ACTIVE panel's format poster
+// "bold")` -> the registered command body -> the ACTIVE panel's post (active-panel latch)
 // -> a `format-command` message on the wire to that panel's webview, and to no
 // other. All five keybindings ride this one command, and unit coverage
 // (test/extension/commands/format-command.test.ts) exercises the body against a
-// stubbed poster, so this hop — command registration + active-poster placement
+// stubbed post, so this hop — command registration + active-panel latch placement
 // + the actual post — had no observation anywhere.
 //
 // Routing is proved by the `uri` stamp the harness records alongside each post
@@ -120,8 +120,8 @@ describe("format-command-dispatch", function () {
     // assertion would be true by construction and could never observe the
     // still-disposing panel it appears to guard against. The zero-post
     // assertion below is the real pin — it rides the panel's dispose-time
-    // `clearActiveFormatPoster`, which the vitest suite cannot reach (it only
-    // ever starts from an already-empty registry).
+    // `clearActivePanelPost`, which the vitest suite cannot reach (it only
+    // ever starts from an already-empty latch).
     await vscode.commands.executeCommand("quoll.format", "bold");
     await tick(300);
     assert.strictEqual(

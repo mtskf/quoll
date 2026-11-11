@@ -63,6 +63,7 @@ A toggle-able overlay lists the document's headings — click one to jump straig
 - **Frontmatter panel** — YAML frontmatter renders as a metadata block.
 - **Fenced-code tools** — one-click copy; long blocks collapse behind a "Show more" bar.
 - **Image paste & drop** — pasted or dropped images save under `./assets/` and insert a relative link.
+- **Plain paste** — `⌘⇧V` (`Ctrl+Shift+V`) pastes the clipboard as plain text, with no link wrapping, list re-indent or rich conversion. If another app (such as a clipboard manager) takes that shortcut, rebind `quoll.pastePlain` in Keyboard Shortcuts.
 - **Switch between rich and text** — flip between Quoll and the built-in text editor with `⌘⌥E` (`Ctrl+Alt+E`), carrying your caret across.
 - **Markdown lint & spellcheck** — advisory findings as inline underlines, with an optional gutter dot, an optional **Problems**-panel mirror, opt-in prose-style hints, and native spellcheck.
 - **Tune the reading surface** — font family, size, line height, and column width, from the outline sidebar's Settings popover or `settings.json`.
