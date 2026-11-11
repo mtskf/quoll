@@ -53,6 +53,7 @@ import { perfReport } from "../../shared/perf.js";
 import {
   buildFormatCommandMessage,
   buildFormatDocumentMessage,
+  buildSwitchAbortedMessage,
   buildSwitchCommandMessage,
   type FormatCommandMessage,
   isWebviewToHost,
@@ -88,7 +89,7 @@ import {
 } from "../surface/reveal-code-reference.js";
 import { createRevertRescueWiring } from "../surface/revert-rescue-wiring.js";
 import { showSafely } from "../surface/show-safely.js";
-import { finalizeForwardSwap, findSourceTab } from "../surface/surface-swap.js";
+import { finalizeForwardSwap, findSourceTab, runForwardSwitch } from "../surface/surface-swap.js";
 import {
   clearActiveSwitchPoster,
   type SwitchPoster,
@@ -968,64 +969,40 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           });
           return;
         case "switch-to-text": {
-          // Pure side channel: reopen THIS document in the built-in text editor.
-          // Never enters the host-session core (no write lock, no document
-          // mutation). The panel owns document.uri, so no path crosses the wire.
-          //
-          // Edit-applied barrier: if a flushed edit is still applying, DEFER the
-          // switch so the reopened text editor shows the applied content (and
-          // the caret handoff clamps against the applied document). Runs
-          // immediately when the lock is free.
-          //
-          // Forward in-place swap. openInTextEditor (vscode.openWith … "default")
-          // opens the text editor as a SECOND tab beside THIS Quoll custom tab —
-          // it does NOT replace it (E2E-probed 2026-07-10). We capture the
-          // source custom tab now (before the barrier defers / the target
-          // opens), apply the stashed caret to the freshly-opened text editor,
-          // then finalizeForwardSwap saves-if-dirty and closes the Quoll tab so
-          // only one surface remains. Closing disposes THIS panel, so it is the
-          // last action; caret apply + document.uri are closure locals, safe
-          // across the dispose. finalizeForwardSwap never throws and refuses to
-          // close a doc it could not make clean (no revert / no data loss).
+          // Wait for any applying edit before opening the second tab. Finalize
+          // never throws and closes the Quoll tab only after a safe save; every
+          // stopped switch reports an abort so the webview releases its lock.
           const sourceTab = findSourceTab(
             document.uri.toString(),
             "quoll",
             QuollEditorPanel.viewType
           );
-          editSettledBarrier.run(() => {
-            const caret = caretWiring.getCaret();
-            void openInTextEditor(document.uri).then(
-              () => {
-                // finalizeForwardSwap records the swap OUTCOME in surface memory
-                // LAST, after finalization settles ("text" only if the source
-                // closed), because the restore watcher already sibling-adopted
-                // "text" when the text tab opened (a failed open records nothing).
-                // applyCaretToTextEditor never throws, so a failed caret restore
-                // cannot skip that finalize.
-                if (caret !== null) {
-                  const editor = window.visibleTextEditors.find(
-                    (e) => e.document.uri.toString() === document.uri.toString()
-                  );
-                  if (editor) {
-                    caretWiring.applyCaretToTextEditor(editor, caret);
-                  }
-                }
-                void finalizeForwardSwap(document.uri, sourceTab);
-              },
-              (err: unknown) => {
-                // Symmetric with quoll.toggleEditor's forward error toast (a
-                // silent console-only failure would make the button look dead).
-                console.error("[quoll] switch-to-text openWith rejected", err);
-                showSafely(
-                  window.showErrorMessage(
-                    `Quoll: could not open the text editor: ${
-                      err instanceof Error ? err.message : String(err)
-                    }`
-                  ),
-                  "showErrorMessage"
+          runForwardSwitch({
+            barrier: editSettledBarrier,
+            open: async () => await openInTextEditor(document.uri),
+            restoreCaret: () => {
+              const caret = caretWiring.getCaret();
+              if (caret !== null) {
+                const editor = window.visibleTextEditors.find(
+                  (e) => e.document.uri.toString() === document.uri.toString()
                 );
+                if (editor) {
+                  caretWiring.applyCaretToTextEditor(editor, caret);
+                }
               }
-            );
+            },
+            finalize: () => finalizeForwardSwap(document.uri, sourceTab),
+            postAborted: () => post(buildSwitchAbortedMessage()),
+            onError: (err) => {
+              showSafely(
+                window.showErrorMessage(
+                  `Quoll: could not open the text editor: ${
+                    err instanceof Error ? err.message : String(err)
+                  }`
+                ),
+                "showErrorMessage"
+              );
+            },
           });
           return;
         }

@@ -10,6 +10,7 @@ import {
   type FinalizeSwapDeps,
   finalizeForwardSwap,
   finalizeSurfaceSwap,
+  runForwardSwitch,
   shouldCloseSourceTab,
 } from "../../../src/extension/surface/surface-swap.js";
 
@@ -214,13 +215,13 @@ describe("finalizeForwardSwap (forward outcome → surface memory)", () => {
     ],
   ] as const)('records "text" after %s', async (_label, doc, overrides) => {
     const { deps } = makeDeps(doc, overrides);
-    await finalizeForwardSwap(fileUri, SENTINEL_TAB, deps);
+    await expect(finalizeForwardSwap(fileUri, SENTINEL_TAB, deps)).resolves.toBe(true);
     expect(__getRememberedSurfaceForTest(KEY)).toBe("text");
   });
 
   it('records "quoll" when a dirty doc\'s save() returns false', async () => {
     const { deps } = makeDeps(fakeDoc(true, false));
-    await finalizeForwardSwap(fileUri, SENTINEL_TAB, deps);
+    await expect(finalizeForwardSwap(fileUri, SENTINEL_TAB, deps)).resolves.toBe(false);
     expect(__getRememberedSurfaceForTest(KEY)).toBe("quoll");
   });
 
@@ -313,6 +314,82 @@ describe("finalizeForwardSwap (forward outcome → surface memory)", () => {
       await run;
       expect(__getRememberedSurfaceForTest(KEY)).toBe("quoll");
     });
+  });
+});
+
+describe("runForwardSwitch", () => {
+  function setup() {
+    let sideChannel: (() => void) | undefined;
+    let onDrop: (() => void) | undefined;
+    const barrier = {
+      run(run: () => void, drop?: () => void) {
+        sideChannel = run;
+        onDrop = drop;
+      },
+    };
+    const deps = {
+      barrier,
+      open: vi.fn<() => Promise<unknown>>(async () => undefined),
+      restoreCaret: vi.fn(),
+      finalize: vi.fn(async () => true),
+      postAborted: vi.fn(),
+      onError: vi.fn(),
+    };
+    return {
+      deps,
+      run: () => sideChannel?.(),
+      drop: () => onDrop?.(),
+    };
+  }
+
+  it.each([
+    "synchronous open",
+    "rejected open",
+    "caret",
+    "finalize",
+  ])("posts an abort on %s failure", async (failure) => {
+    const test = setup();
+    if (failure === "synchronous open") {
+      test.deps.open.mockImplementation(() => {
+        throw new Error("open");
+      });
+    } else if (failure === "rejected open") {
+      test.deps.open.mockRejectedValue(new Error("open"));
+    } else if (failure === "caret") {
+      test.deps.restoreCaret.mockImplementation(() => {
+        throw new Error("caret");
+      });
+    } else {
+      test.deps.finalize.mockResolvedValue(false);
+    }
+    runForwardSwitch(test.deps);
+    test.run();
+    await vi.waitFor(() => expect(test.deps.postAborted).toHaveBeenCalledOnce());
+  });
+
+  it("posts an abort when the barrier drops the operation", () => {
+    const test = setup();
+    runForwardSwitch(test.deps);
+    test.drop();
+    expect(test.deps.postAborted).toHaveBeenCalledOnce();
+    expect(test.deps.open).not.toHaveBeenCalled();
+  });
+
+  it("can run successfully after a synchronous open throw", async () => {
+    const test = setup();
+    test.deps.open.mockImplementationOnce(() => {
+      throw new Error("open");
+    });
+    runForwardSwitch(test.deps);
+    test.run();
+    await vi.waitFor(() => expect(test.deps.postAborted).toHaveBeenCalledOnce());
+    test.deps.postAborted.mockClear();
+    test.deps.open.mockClear();
+    runForwardSwitch(test.deps);
+    test.run();
+    await vi.waitFor(() => expect(test.deps.finalize).toHaveBeenCalledOnce());
+    expect(test.deps.open).toHaveBeenCalledOnce();
+    expect(test.deps.postAborted).not.toHaveBeenCalled();
   });
 });
 
