@@ -1,7 +1,7 @@
 import { highlightingFor } from "@codemirror/language";
 import type { EditorState } from "@codemirror/state";
 import { Decoration } from "@codemirror/view";
-import type { Tree } from "@lezer/common";
+import type { SyntaxNode, Tree } from "@lezer/common";
 import { highlightTree } from "@lezer/highlight";
 import { decodeNumericEntity } from "../../../markdown/numeric-entity.js";
 import { buildSortedRangeSet } from "../sorted-range-set.js";
@@ -17,6 +17,15 @@ function displayable(text: string): boolean {
     (cp >= 0x2028 && cp <= 0x202e) ||
     (cp >= 0x2066 && cp <= 0x2069)
   );
+}
+
+function isInsideImage(node: SyntaxNode): boolean {
+  for (let parent = node.parent; parent; parent = parent.parent) {
+    if (parent.name === "Image") {
+      return true;
+    }
+  }
+  return false;
 }
 
 // The classes the active highlighters assign to [from, to), inherited emphasis
@@ -56,10 +65,8 @@ export const numericEntityReveal: DecorationProvider = {
           if (node.name !== "Entity" || node.from >= range.to || range.from >= node.to) {
             return;
           }
-          for (let parent = node.node.parent; parent; parent = parent.parent) {
-            if (parent.name === "Image") {
-              return;
-            }
+          if (isInsideImage(node.node)) {
+            return;
           }
           const text = decodeNumericEntity(ctx.state.sliceDoc(node.from, node.to));
           if (text === null || !displayable(text)) {
