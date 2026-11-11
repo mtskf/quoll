@@ -1,11 +1,15 @@
 // @vitest-environment happy-dom
 
-import { insertNewline } from "@codemirror/commands";
+import { insertNewline, redo, undo } from "@codemirror/commands";
 import { EditorState, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { hostDocumentReseed } from "../../src/webview/cm/host-reseed.js";
-import { matchesSwitchEditorChord, quollSwitchEditor } from "../../src/webview/cm/switch-editor.js";
+import {
+  matchesSwitchEditorChord,
+  quollSwitchEditor,
+  setSwitchLock,
+} from "../../src/webview/cm/switch-editor.js";
 import { type EditorHandle, mountEditor } from "../../src/webview/editor.js";
 import { initialState } from "../../src/webview/state.js";
 
@@ -76,6 +80,23 @@ describe("switch edit lock", () => {
     const mounted = mountRealEditor();
     await mounted.handle.requestSwitch();
     insertNewline(mounted.view);
+    expect(mounted.view.state.doc.toString()).toBe("seed");
+  });
+
+  it("blocks undo while locked", () => {
+    const mounted = mountRealEditor();
+    mounted.view.dispatch({ changes: { from: 4, insert: "x" } });
+    mounted.view.dispatch({ effects: setSwitchLock.of(true) });
+    expect(undo(mounted.view)).toBe(true);
+    expect(mounted.view.state.doc.toString()).toBe("seedx");
+  });
+
+  it("blocks redo while locked", () => {
+    const mounted = mountRealEditor();
+    mounted.view.dispatch({ changes: { from: 4, insert: "x" } });
+    expect(undo(mounted.view)).toBe(true);
+    mounted.view.dispatch({ effects: setSwitchLock.of(true) });
+    expect(redo(mounted.view)).toBe(true);
     expect(mounted.view.state.doc.toString()).toBe("seed");
   });
 

@@ -26,11 +26,10 @@
 // write-lock. The caret survives via the host handler; this module adds no caret
 // code.
 
-import { EditorState, type Extension, Prec, StateEffect, StateField } from "@codemirror/state";
+import { type Extension, Prec, StateEffect, StateField } from "@codemirror/state";
 import { EditorView, type PluginValue, ViewPlugin } from "@codemirror/view";
 
 import { requireQuollEditorHost } from "./editor-host.js";
-import { hostDocumentReseed } from "./host-reseed.js";
 
 /** Switch lock: on from the moment `switch-to-text` is posted, so a keystroke
  *  between the post and the panel's disposal cannot change a body the host has
@@ -48,17 +47,6 @@ export const switchLock = StateField.define<boolean>({
     }
     return locked;
   },
-  provide: (field) =>
-    EditorState.transactionFilter.of((transaction) => {
-      if (
-        transaction.startState.field(field) &&
-        transaction.docChanged &&
-        !transaction.annotation(hostDocumentReseed)
-      ) {
-        return [];
-      }
-      return transaction;
-    }),
 });
 
 /** Match the Quoll→text switch chord: Ctrl/Cmd + Alt + E, keyed on the PHYSICAL

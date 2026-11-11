@@ -617,6 +617,13 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     // `docChanged`: a throw before the commit leaves the doc as it was, and
     // there is then nothing to send.
     dispatchTransactions(trs, v) {
+      // History dispatches with filter:false, so guard the batch at the view boundary.
+      if (
+        v.state.field(switchLock) &&
+        trs.some((tr) => tr.docChanged && !tr.annotation(hostDocumentReseed))
+      ) {
+        return;
+      }
       const before = v.state.doc;
       try {
         v.update(trs);
