@@ -296,6 +296,16 @@ function emit(
           (a, b) => extent(styles, i, b) - extent(styles, i, a)
         );
     boundary(i, closeDepth, opens);
+    // A `!` right before a link's `[` turns the link into an image. Test the
+    // emitted bytes, not unit adjacency: merging same-style runs can put the two
+    // together (`**![x](u)**`), and a marker between them (`!**[x](u)**`) already
+    // keeps them apart. Escaping only here keeps every other `!` unescaped. The
+    // `!` is a raw text byte (escapeText never escapes it, and every escaped
+    // backslash comes in pairs), and swapping it for `\!` keeps a group's
+    // punctuation neighbour punctuation.
+    if (u.kind === "link" && out.endsWith("!")) {
+      out = `${out.slice(0, -1)}\\!`;
+    }
     out += render(u, opts);
   });
   boundary(units.length, 0, []);

@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { gfmParser } from "../../../src/markdown/gfm-parser.js";
 import { htmlToMarkdown } from "../../../src/webview/cm/paste/html-to-markdown.js";
 import {
   BOLD,
@@ -264,5 +265,40 @@ describe("neutral stretches", () => {
 
   it("closes a styled space's run before an unstyled space, without an entity", () => {
     expect(md([t("a ", B), t(" ", 0), t("b", B)])).toBe("**a**  **b**");
+  });
+});
+
+describe("a `!` before a link", () => {
+  const nodeNames = (markdown: string): Set<string> => {
+    const names = new Set<string>();
+    gfmParser.parse(markdown).iterate({
+      enter: (n) => {
+        names.add(n.name);
+      },
+    });
+    return names;
+  };
+  const expectLinkNotImage = (markdown: string) => {
+    const names = nodeNames(markdown);
+    expect(names.has("Link")).toBe(true);
+    expect(names.has("Image")).toBe(false);
+  };
+
+  it("escapes a `!` that a same-style merge puts right before `[`", () => {
+    const html = '<p><b>!</b><b><a href="https://example.com">Read me</a></b></p>';
+    const out = htmlToMarkdown(html)?.markdown as string;
+    expect(out).toBe("**\\![Read me](https://example.com)**");
+    expectLinkNotImage(out);
+  });
+
+  it("escapes an unstyled `!` right before `[`", () => {
+    const html = '<p>!<a href="https://example.com">Read me</a></p>';
+    const out = htmlToMarkdown(html)?.markdown as string;
+    expectLinkNotImage(out);
+  });
+
+  it("leaves a `!` a marker already separates from `[`, and every other `!`, alone", () => {
+    expect(md([t("Hi!", 0), link([t("x", 0)], B)])).toBe("Hi!**[x](u)**");
+    expect(md([t("Hi! there", 0)])).toBe("Hi! there");
   });
 });
