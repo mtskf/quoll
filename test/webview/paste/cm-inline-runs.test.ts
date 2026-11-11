@@ -139,3 +139,9 @@ describe("flanking repair", () => {
     expect(md([t("a.", B), t(" ", 0)], true)).toBe("**a.**");
   });
 });
+
+describe("link-edge repair", () => {
+  it("moves a link's outer style into its label when the bracket breaks flanking", () => {
+    expect(md([t("see ", B), link([t("x", 0)], B), t("y", 0)])).toBe("**see** [**x**](u)y");
+  });
+});

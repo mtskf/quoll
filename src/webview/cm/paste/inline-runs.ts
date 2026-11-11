@@ -380,13 +380,34 @@ function demotePunctuation(
   return [...units.slice(0, idx), ...replacement, ...units.slice(idx + 1)];
 }
 
+/** Repair (a), link edge: the punctuation next to the failing group is a styled
+ *  link's own `[` or `)`. Move the link's outer style into its label (the label
+ *  masks are link-relative, so OR it in) and clear the outer style: the markers
+ *  then sit inside the brackets, next to the label text, instead of outside them.
+ *  The outer style never comes back, so this fires at most once per link. */
+function transferLinkStyle(
+  units: readonly Unit[],
+  idx: number,
+  opts: InlineRunOptions
+): Unit[] | null {
+  const u = units[idx];
+  if (u === undefined || u.kind !== "link" || u.style === 0) {
+    return null;
+  }
+  const label = u.label.map((a) => ({ ...a, style: (a.style | u.style) as StyleMask }));
+  const moved = linkUnit(label, u.destination, 0, opts);
+  return [...units.slice(0, idx), moved, ...units.slice(idx + 1)];
+}
+
 /** Apply the first applicable repair to the first failing group that has one, in
- *  output order. A failing group no branch can repair is skipped unchanged (never
+ *  output order. The link-edge and demotion preconditions are disjoint (a link
+ *  unit vs a text unit on the punctuation side), so their order is immaterial. A failing group no branch can repair is skipped unchanged (never
  *  retried). Null when nothing applies — the fixpoint. */
 function repairOnce(
   units: readonly Unit[],
   styles: readonly StyleMask[],
-  emission: Emission
+  emission: Emission,
+  opts: InlineRunOptions
 ): Unit[] | null {
   for (const g of emission.groups) {
     const side = failingSide(emission.markdown, g);
@@ -394,12 +415,9 @@ function repairOnce(
       continue;
     }
     const punctIdx = side === "before" ? g.at - 1 : g.at;
-    const repaired = demotePunctuation(
-      units,
-      styles,
-      punctIdx,
-      side === "before" ? "end" : "start"
-    );
+    const repaired =
+      transferLinkStyle(units, punctIdx, opts) ??
+      demotePunctuation(units, styles, punctIdx, side === "before" ? "end" : "start");
     if (repaired !== null) {
       return repaired;
     }
@@ -411,8 +429,8 @@ function repairOnce(
  *
  *  Serialise, find the first marker group that does not flank on the side it
  *  needs, repair it at unit level, and re-serialise from the units, until no
- *  group can be repaired. Each repair permanently changes one char, so the loop
- *  terminates. */
+ *  group can be repaired. Each repair is one-way (a link's outer style is cleared,
+ *  or one char is demoted), so the loop terminates. */
 export function serializeInlineRuns(
   atoms: readonly InlineAtom[],
   opts: InlineRunOptions
@@ -424,7 +442,7 @@ export function serializeInlineRuns(
   for (;;) {
     const styles = effectiveStyles(units);
     const emission = emit(units, styles, opts);
-    const repaired = repairOnce(units, styles, emission);
+    const repaired = repairOnce(units, styles, emission, opts);
     if (repaired === null) {
       return { markdown: emission.markdown, emittedSyntax: emission.emittedSyntax };
     }
