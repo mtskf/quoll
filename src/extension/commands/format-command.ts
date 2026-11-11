@@ -23,11 +23,13 @@
 // editor provider hands out no registry, so the active panel registers itself).
 
 import { commands, type Disposable, window } from "vscode";
-import { FORMAT_ACTIONS, type FormatAction } from "../../shared/protocol.js";
+import {
+  buildFormatCommandMessage,
+  FORMAT_ACTIONS,
+  type FormatAction,
+} from "../../shared/protocol.js";
 import { showSafely } from "../surface/show-safely.js";
-import { createActivePoster } from "./active-poster.js";
-
-export type FormatPoster = (action: FormatAction) => void;
+import { getActivePanelPost } from "./active-panel.js";
 
 // Both the guard below and the toast's "one of …" list read the protocol's
 // FORMAT_ACTIONS directly, so this command can never know a different action set
@@ -35,18 +37,6 @@ export type FormatPoster = (action: FormatAction) => void;
 // unknown is now unrepresentable rather than merely tested for.
 function isFormatAction(value: unknown): value is FormatAction {
   return typeof value === "string" && (FORMAT_ACTIONS as readonly string[]).includes(value);
-}
-
-// Identity-guarded single-slot latch (see active-poster.ts): a panel losing
-// focus after another already became active must not wipe the new poster.
-const registry = createActivePoster<FormatPoster>();
-
-export function setActiveFormatPoster(poster: FormatPoster): void {
-  registry.set(poster);
-}
-
-export function clearActiveFormatPoster(poster: FormatPoster): void {
-  registry.clear(poster);
 }
 
 export function normalizeFormatAction(arg: unknown): FormatAction | null {
@@ -77,7 +67,7 @@ export function runFormatCommand(arg: unknown): void {
     );
     return;
   }
-  const post = registry.get();
+  const post = getActivePanelPost();
   if (post === null) {
     showSafely(
       window.showInformationMessage(
@@ -87,14 +77,9 @@ export function runFormatCommand(arg: unknown): void {
     );
     return;
   }
-  post(action);
+  post(buildFormatCommandMessage(action));
 }
 
 export function registerFormatCommand(): Disposable {
   return commands.registerCommand("quoll.format", runFormatCommand);
-}
-
-/** Test seam — do not use in production code. */
-export function __getActivePosterForTest(): FormatPoster | null {
-  return registry.get();
 }

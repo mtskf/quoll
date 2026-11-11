@@ -398,6 +398,12 @@ export function buildFormatDocumentMessage(): FormatDocumentMessage {
   return { protocol: PROTOCOL_VERSION, type: "format-document" };
 }
 
+export type PastePlainMessage = Envelope & { type: "paste-plain"; text: string };
+
+export function buildPastePlainMessage(text: string): PastePlainMessage {
+  return { protocol: PROTOCOL_VERSION, type: "paste-plain", text };
+}
+
 export type SwitchCommandMessage = Envelope & { type: "switch-command" };
 
 export function buildSwitchCommandMessage(): SwitchCommandMessage {
@@ -418,6 +424,7 @@ export type HostToWebview =
   | CaretApplyMessage
   | FormatCommandMessage
   | FormatDocumentMessage
+  | PastePlainMessage
   | SwitchCommandMessage
   | SwitchAbortedMessage;
 
@@ -779,6 +786,8 @@ export function isHostToWebview(value: unknown): value is HostToWebview {
       return isCaretCoordinate(v.line) && isCaretCoordinate(v.character);
     case "format-command":
       return typeof v.action === "string" && FORMAT_ACTION_SET.has(v.action);
+    case "paste-plain":
+      return typeof v.text === "string";
     case "format-document":
       return true; // no payload beyond the validated envelope/protocol
     case "switch-command":

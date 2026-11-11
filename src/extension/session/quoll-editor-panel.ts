@@ -51,18 +51,11 @@ import {
 
 import { perfReport } from "../../shared/perf.js";
 import {
-  buildFormatCommandMessage,
-  buildFormatDocumentMessage,
   buildSwitchAbortedMessage,
   buildSwitchCommandMessage,
-  type FormatCommandMessage,
   isWebviewToHost,
 } from "../../shared/protocol.js";
-import { clearActiveFormatPoster, setActiveFormatPoster } from "../commands/format-command.js";
-import {
-  clearActiveDocFormatPoster,
-  setActiveDocFormatPoster,
-} from "../commands/format-document-command.js";
+import { clearActivePanelPost, setActivePanelPost } from "../commands/active-panel.js";
 import { createEditorConfigWiring } from "../config/editor-config-wiring.js";
 import { isRelevantConfigChange, readEditorPrefs } from "../config/editor-prefs-config.js";
 import { handleUpdateConfig } from "../config/handle-update-config.js";
@@ -539,17 +532,6 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         }),
     });
 
-    // Forward inline-format actions from the global `quoll.format` command to
-    // this webview when the panel is the active editor. Bound once so the
-    // identity-guarded clear (below) matches on the active edge / dispose.
-    const formatPoster = (action: FormatCommandMessage["action"]): void => {
-      post(buildFormatCommandMessage(action));
-    };
-    // Sibling poster for the whole-document `quoll.formatDocument` command. Same
-    // active-edge lifecycle as formatPoster (registered/cleared adjacent to it).
-    const docFormatPoster = (): void => {
-      post(buildFormatDocumentMessage());
-    };
     let webviewReady = false;
     let pendingSwitch = false;
     let startupNoticeShown = false;
@@ -582,10 +564,9 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     };
     // onDidChangeViewState does NOT fire for the initial active state, so
     // register once here if this panel opens active (the edge handler owns it
-    // thereafter). This runs after `post`/`formatPoster` are defined.
+    // thereafter). This runs after `post` is defined.
     if (webviewPanel.active) {
-      setActiveFormatPoster(formatPoster);
-      setActiveDocFormatPoster(docFormatPoster);
+      setActivePanelPost(post);
       setActiveSwitchPoster(switchPoster);
     }
 
@@ -768,25 +749,24 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     });
     disposables.push(editorConfig);
 
-    // Active-edge tracking for the `quoll.format` command's forward target.
+    // Active-edge tracking for the host commands' forward target.
     // PR6 (#179) moved the status-bar + caret-apply active edge into
-    // createCaretHandoffWiring (above); this small listener owns ONLY the format
-    // poster — set while this panel is the active editor, clear otherwise. Both
+    // createCaretHandoffWiring (above); this small listener owns ONLY the
+    // active-panel latches (the host-command panel post and the switch poster)
+    // — set while this panel is the active editor, clear otherwise. Both
     // ops are idempotent (set overwrites the global; clear is identity-guarded),
     // so no inactive→active edge detection is needed. Kept separate from the
-    // caret wiring so the inline-format feature stays single-responsibility.
+    // caret wiring so command forwarding stays single-responsibility.
     webviewPanel.onDidChangeViewState(
       (e) => {
         if (disposed) {
           return;
         }
         if (e.webviewPanel.active) {
-          setActiveFormatPoster(formatPoster);
-          setActiveDocFormatPoster(docFormatPoster);
+          setActivePanelPost(post);
           setActiveSwitchPoster(switchPoster);
         } else {
-          clearActiveFormatPoster(formatPoster);
-          clearActiveDocFormatPoster(docFormatPoster);
+          clearActivePanelPost(post);
           clearActiveSwitchPoster(switchPoster);
         }
       },
@@ -1133,11 +1113,10 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       disposed = true;
       clearTimeout(startupTimer);
       startupTimer = undefined;
-      // Clear the format poster immediately so `quoll.format` can never forward
+      // Clear the panel post immediately so host commands can never forward
       // to a disposing panel. Primary guard; `post` (createEffectExecutor) is a
       // backstop that self-suppresses after dispose (effect-executor.ts).
-      clearActiveFormatPoster(formatPoster);
-      clearActiveDocFormatPoster(docFormatPoster);
+      clearActivePanelPost(post);
       clearActiveSwitchPoster(switchPoster);
       dispatch({ type: "disposed" });
       // Clear THIS document's lint diagnostics when its editor closes. The

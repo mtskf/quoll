@@ -512,6 +512,9 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
           contentWidth: message.contentWidth,
         });
         return;
+      case "paste-plain":
+        editor?.pastePlain(message.text);
+        return;
       case "format-command":
         editor?.runFormatCommand(message.action);
         return;

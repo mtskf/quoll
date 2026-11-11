@@ -1,21 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { commands, window } from "vscode"; // vitest-aliased to test/extension/vscode-stub.ts
 import {
-  __getActivePosterForTest,
-  clearActiveFormatPoster,
+  clearActivePanelPost,
+  getActivePanelPost,
+  setActivePanelPost,
+} from "../../../src/extension/commands/active-panel.js";
+import {
   normalizeFormatAction,
   registerFormatCommand,
   runFormatCommand,
-  setActiveFormatPoster,
 } from "../../../src/extension/commands/format-command.js";
-import { FORMAT_ACTIONS } from "../../../src/shared/protocol.js";
+import { FORMAT_ACTIONS, PROTOCOL_VERSION } from "../../../src/shared/protocol.js";
 
 /** Hand the module-singleton registry back empty, whatever the test left in it
  *  (the identity guard means only the currently-active poster can clear it). */
 function releaseActivePoster(): void {
-  const active = __getActivePosterForTest();
+  const active = getActivePanelPost();
   if (active !== null) {
-    clearActiveFormatPoster(active);
+    clearActivePanelPost(active);
   }
 }
 
@@ -36,35 +38,11 @@ describe("normalizeFormatAction", () => {
   });
 });
 
-describe("active poster tracker", () => {
-  // Every describe owns its own cleanup of the module-singleton registry, so no
-  // block's result depends on where it sits in the file (the identity-guard test
-  // below deliberately leaves `b` set).
-  afterEach(releaseActivePoster);
-
-  it("set then clear (same identity) removes it", () => {
-    const p = vi.fn();
-    setActiveFormatPoster(p);
-    expect(__getActivePosterForTest()).toBe(p);
-    clearActiveFormatPoster(p);
-    expect(__getActivePosterForTest()).toBeNull();
-  });
-  it("clear with a stale poster is a no-op (identity guard)", () => {
-    const a = vi.fn();
-    const b = vi.fn();
-    setActiveFormatPoster(a);
-    setActiveFormatPoster(b); // b is now active (panel switch)
-    clearActiveFormatPoster(a); // a's late clear must NOT wipe b
-    expect(__getActivePosterForTest()).toBe(b);
-  });
-});
-
 describe("runFormatCommand — the arms that used to be silent", () => {
   // The "no active panel" case below is only meaningful on an empty registry,
-  // and this block runs after one that sets posters — so assert the hand-off
-  // rather than trusting the previous block to have cleaned up after itself.
+  // so assert the hand-off rather than relying on test order.
   beforeEach(() => {
-    expect(__getActivePosterForTest()).toBeNull();
+    expect(getActivePanelPost()).toBeNull();
   });
 
   afterEach(() => {
@@ -74,12 +52,17 @@ describe("runFormatCommand — the arms that used to be silent", () => {
 
   it("forwards a known action to the active panel without a toast", () => {
     const post = vi.fn();
-    setActiveFormatPoster(post);
+    setActivePanelPost(post);
     const info = vi.spyOn(window, "showInformationMessage");
 
     runFormatCommand("bold");
 
-    expect(post).toHaveBeenCalledWith("bold");
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(post).toHaveBeenCalledWith({
+      protocol: PROTOCOL_VERSION,
+      type: "format-command",
+      action: "bold",
+    });
     expect(info).not.toHaveBeenCalled();
   });
 
@@ -87,7 +70,7 @@ describe("runFormatCommand — the arms that used to be silent", () => {
     // Pre-fix this fell off the end of the handler: no post, no log, no toast —
     // provably nothing, every time. Not reachable from the Command Palette:
     // package.json hides quoll.format there (see package-contributions.test.ts).
-    setActiveFormatPoster(vi.fn());
+    setActivePanelPost(vi.fn());
     const info = vi.spyOn(window, "showInformationMessage");
 
     runFormatCommand(undefined);
@@ -105,7 +88,7 @@ describe("runFormatCommand — the arms that used to be silent", () => {
     // A hand-edited keybindings.json can put anything in `args`. Routing these
     // through the misspelt-action wording used to print the value with String(),
     // so an object arrived as the useless "[object Object]".
-    setActiveFormatPoster(vi.fn());
+    setActivePanelPost(vi.fn());
     const info = vi.spyOn(window, "showInformationMessage");
 
     runFormatCommand(arg);
@@ -120,7 +103,7 @@ describe("runFormatCommand — the arms that used to be silent", () => {
   it("names the offending value when the argument is not a known action", () => {
     // Distinct from the missing-argument arm: the fix here is to correct the
     // action, not to add one, so the toast must not send the user hunting.
-    setActiveFormatPoster(vi.fn());
+    setActivePanelPost(vi.fn());
     const info = vi.spyOn(window, "showInformationMessage");
 
     runFormatCommand("underline");

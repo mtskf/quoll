@@ -2252,6 +2252,28 @@ describe("shell — format-command routing", () => {
   });
 });
 
+describe("shell — paste-plain routing", () => {
+  it("routes a paste-plain message to the editor and inserts the text verbatim", async () => {
+    // The webview end of the plain-paste chord path: message arm -> the editor
+    // handle -> clipboardPaste.pastePlain. The host end stops at the wire
+    // (test/extension/e2e), so this is the only pin on shell.ts's forwarding.
+    // A URL over a selection would become `[word](url)` on a normal paste; plain
+    // paste must replace the selection byte-for-byte.
+    // Reverting shell.ts's `case "paste-plain"` leaves "word" in place.
+    await mount();
+    deliver(buildDocument({ docVersion: 1, content: "word\n" }));
+
+    const view = mountedView();
+    view.dispatch({ selection: { anchor: 0, head: 4 } });
+    // Same focus-stub technique (and reason) as the format-command test above.
+    Object.defineProperty(view, "hasFocus", { get: () => true, configurable: true });
+
+    deliver({ protocol: PROTOCOL_VERSION, type: "paste-plain", text: "https://example.com" });
+
+    expect(view.state.doc.toString()).toBe("https://example.com\n");
+  });
+});
+
 describe("shell — editor-config routing", () => {
   it("routes every editor-config field to its own applied outcome", async () => {
     // This pins two separate risks under one `editor-config` delivery pipeline:

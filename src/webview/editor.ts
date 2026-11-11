@@ -242,6 +242,8 @@ export type EditorHandle = {
   /** Run an inline-format action on the current selection. Rides the normal
    *  dispatch -> edit-sync pipeline; a no-op when the view is read-only. */
   runFormatCommand(action: FormatAction): void;
+  /** Insert plain text over the focused editor's current main selection. */
+  pastePlain(text: string): void;
   /** Run the whole-document Format command as ONE transaction (single undo
    *  step). Rides the normal dispatch -> edit-sync pipeline; a no-op when the
    *  view is read-only or the document is already in normal form. Returns what
@@ -1373,6 +1375,9 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       // unchanged snapshot). Fresh object each time ⇒ field identity changes ⇒
       // outline update() runs syncFromState(). Idempotent applier, no ping-pong.
       view.dispatch({ effects: setEditorPrefsEffect.of(prefs) });
+    },
+    pastePlain(text) {
+      clipboardPaste.pastePlain(view, text);
     },
     runFormatCommand(action) {
       runInlineFormat(view, action);
