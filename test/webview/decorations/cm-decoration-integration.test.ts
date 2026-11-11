@@ -13,6 +13,7 @@ import {
   syntaxRevealProviders,
 } from "../../../src/webview/cm/decorations/index.js";
 import { linkReveal } from "../../../src/webview/cm/decorations/link-reveal.js";
+import { numericEntityReveal } from "../../../src/webview/cm/decorations/numeric-entity-reveal.js";
 import { quollHighlighting, quollTokenMarkers } from "../../../src/webview/cm/theme.js";
 import { mountEditor } from "../../../src/webview/editor.js";
 import { initialState, type WebviewState } from "../../../src/webview/state.js";
@@ -396,6 +397,43 @@ describe("numeric entity integration", () => {
           view.destroy();
         }
       }
+    }
+  });
+  it("one highlight span's classes reach every numeric entity it covers", () => {
+    const view = mount("**&#97;&#98;**");
+    try {
+      const widgets = view.dom.querySelectorAll(".quoll-numeric-entity");
+      expect(Array.from(widgets, (e) => e.textContent)).toEqual(["a", "b"]);
+      for (const widget of widgets) {
+        expect(widget.classList.contains("quoll-tok-strong")).toBe(true);
+      }
+    } finally {
+      view.destroy();
+    }
+  });
+  it("numeric entities in separate visible ranges each inherit their own emphasis", () => {
+    const doc = "**&#97;**\n\nfolded gap\n\n*&#98;*";
+    const view = mount(doc);
+    try {
+      const set = numericEntityReveal.build({
+        state: view.state,
+        selection: view.state.selection,
+        visibleRanges: [
+          { from: 0, to: 9 },
+          { from: doc.length - 7, to: doc.length },
+        ],
+        tree: fullTree(view.state),
+      });
+      const classes: string[] = [];
+      for (const cursor = set.iter(); cursor.value; cursor.next()) {
+        classes.push(cursor.value.spec.widget.highlightClass);
+      }
+      expect(classes).toHaveLength(2);
+      expect(classes[0]).toContain("quoll-tok-strong");
+      expect(classes[1]).toContain(highlightingFor(view.state, [t.emphasis]));
+      expect(classes[1]).not.toContain("quoll-tok-strong");
+    } finally {
+      view.destroy();
     }
   });
   it("numeric entity replacements inherit surrounding emphasis", () => {

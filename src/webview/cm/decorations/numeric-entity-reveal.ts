@@ -63,27 +63,32 @@ export const numericEntityReveal: DecorationProvider = {
     }
     // The classes the active highlighters assign to each entity's source text,
     // inherited emphasis included — the same walk syntaxHighlighting() runs. One
-    // walk over the entities' span (not one per entity) keeps the build linear.
+    // walk per visible range, over only that range's entities (not one per entity,
+    // and never across the folded gap between ranges), keeps the build linear.
     out.sort((a, b) => a.from - b.from);
-    if (out.length > 0) {
+    for (const range of ctx.visibleRanges) {
+      const entries = out.filter((e) => e.from < range.to && range.from < e.to);
+      if (entries.length === 0) {
+        continue;
+      }
       let next = 0;
       highlightTree(
         ctx.tree,
         { style: (tags) => highlightingFor(ctx.state, tags) },
         (from, to, cls) => {
-          while (next < out.length && out[next].to <= from) {
+          while (next < entries.length && entries[next].to <= from) {
             next++;
           }
-          for (let i = next; i < out.length && out[i].from < to; i++) {
+          for (let i = next; i < entries.length && entries[i].from < to; i++) {
             for (const c of cls.split(" ")) {
               if (c) {
-                out[i].classes.add(c);
+                entries[i].classes.add(c);
               }
             }
           }
         },
-        out[0].from,
-        out[out.length - 1].to
+        entries[0].from,
+        entries[entries.length - 1].to
       );
     }
     return buildSortedRangeSet(out, (entry) => [
