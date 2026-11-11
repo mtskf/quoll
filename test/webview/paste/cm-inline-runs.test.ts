@@ -246,6 +246,24 @@ describe("repair cap", () => {
     expect(spent([link([t("x", 0)], 0, big), t("Note:", B), t("a", 0)])).toBeGreaterThan(100_000);
   });
 
+  it("batches independent repairs into one pass", () => {
+    const line = [t("Note:", B), t("text here", 0), br()];
+    const spent = (atoms: InlineAtom[]): number => {
+      const probe = { remaining: 1e9 };
+      serializeInlineRuns(atoms, {
+        trimEdges: false,
+        escapeText: escapeInline,
+        repairBudget: probe,
+      });
+      return 1e9 - probe.remaining;
+    };
+    // One pass per repair would grow with the square of the line count; batched,
+    // 600 lines cost what 600 single lines cost apart.
+    expect(spent(Array.from({ length: 600 }, () => line).flat())).toBeLessThanOrEqual(
+      600 * spent(line)
+    );
+  });
+
   it("does not spend a repair on checking a settled result", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const probe = { remaining: 1_000_000 };

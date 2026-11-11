@@ -87,8 +87,9 @@ const MAX_HTML_INPUT_CHARS = 2 * 1024 * 1024; // 2 MiB source HTML
 const MAX_OUTPUT_CHARS = 4 * 1024 * 1024; // bound total emitted Markdown (checked incrementally)
 const MAX_NODES = 50_000; // total element visits
 // Total emphasis-repair work per conversion, in chars re-serialised (see
-// `RepairBudget`). Real pastes need a handful of repairs; this bounds a crafted
-// run of thousands to well under a second before the plain-text fallback.
+// `RepairBudget`). Independent repairs are batched per pass, so the cost scales
+// with cascade depth x run length: ordinary pastes settle in one or two passes,
+// and this bounds a crafted cascade before the plain-text fallback.
 const MAX_REPAIR_WORK = 4_000_000;
 // Recursion depth cap for BOTH inline and block walks. 32 is far beyond any real
 // document (nobody nests 32 blockquotes/lists or 32 inline emphasis spans), yet

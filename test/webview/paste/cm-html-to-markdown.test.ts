@@ -437,6 +437,16 @@ describe("htmlToMarkdown — block constructs", () => {
       expect(warn).toHaveBeenCalledTimes(1);
       expect(warn).toHaveBeenCalledWith(CAP_WARNING);
     });
+    it("converts a long run of independent repairs (one per line)", () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      // 600 `Note:` colons each need a demotion. Repaired one per pass, that is
+      // 600 re-serialisations of the whole run, over the cap; batched, it is one.
+      const md = convert(`<p>${"<b>Note:</b>text here<br>".repeat(600)}</p>`);
+      expect(md).not.toBeNull();
+      expect(md?.split("**Note**:text here").length).toBe(601);
+      expect(parsesToNode(md ?? "", "StrongEmphasis")).toBe(true);
+      expect(warn).not.toHaveBeenCalled();
+    });
   });
 });
 

@@ -424,8 +424,7 @@ function demotePunctuation(
   }
   const demoted: Unit = { kind: "text", text: ch, style: u.style, neutral: true };
   const remaining: Unit[] = rest === "" ? [] : [textUnit(rest, u.style)];
-  const replacement = edge === "end" ? [...remaining, demoted] : [demoted, ...remaining];
-  return [...units.slice(0, idx), ...replacement, ...units.slice(idx + 1)];
+  return edge === "end" ? [...remaining, demoted] : [demoted, ...remaining];
 }
 
 /** Repair (a), link edge: the punctuation next to the failing group is a styled
@@ -443,8 +442,7 @@ function transferLinkStyle(
     return null;
   }
   const label = u.label.map((a) => ({ ...a, style: a.style | u.style }));
-  const moved = linkUnit(label, u.destination, 0, opts);
-  return [...units.slice(0, idx), moved, ...units.slice(idx + 1)];
+  return [linkUnit(label, u.destination, 0, opts)];
 }
 
 /** Repair (c), entity fallback: nothing on the punctuation side can move (a code
@@ -471,37 +469,53 @@ function encodeWordNeighbour(
     style: u.style,
   };
   const remaining: Unit[] = rest === "" ? [] : [textUnit(rest, u.style)];
-  const replacement = edge === "start" ? [entity, ...remaining] : [...remaining, entity];
-  return [...units.slice(0, idx), ...replacement, ...units.slice(idx + 1)];
+  return edge === "start" ? [entity, ...remaining] : [...remaining, entity];
 }
 
-/** Apply the first applicable repair to the first failing group that has one, in
- *  output order. The link-edge and demotion preconditions are disjoint (a link
+/** One repair pass: walk the failing groups in output order and repair each with
+ *  the first applicable branch, batching every independent repair into ONE
+ *  re-serialisation — otherwise k failing groups in a long run (one `Note:` per
+ *  line) cost k full passes. Independent means the group's two neighbour units
+ *  (`at - 1`, `at`) are untouched by an earlier repair in this pass: a repair
+ *  only edits one of them and only reads the state around its own boundary, so a
+ *  group next to an edited unit waits for the next pass, which re-reads the
+ *  repaired output. The link-edge and demotion preconditions are disjoint (a link
  *  unit vs a text unit on the punctuation side), so their order is immaterial. A
- *  failing group no branch can repair is skipped unchanged (never retried). Null
- *  when nothing applies — the fixpoint. */
-function repairOnce(
+ *  failing group no branch can repair is skipped unchanged. Null when nothing
+ *  applies — the fixpoint. */
+function repairPass(
   units: readonly Unit[],
   styles: readonly StyleMask[],
   emission: Emission,
   opts: InlineRunOptions
 ): Unit[] | null {
+  const touched = new Set<number>();
+  const edits = new Map<number, Unit[]>();
   for (const g of emission.groups) {
     const side = failingSide(emission.markdown, g);
-    if (side === null) {
+    if (side === null || touched.has(g.at - 1) || touched.has(g.at)) {
       continue;
     }
     const punctIdx = side === "before" ? g.at - 1 : g.at;
     const wordIdx = side === "before" ? g.at : g.at - 1;
-    const repaired =
+    const fromPunct =
       transferLinkStyle(units, punctIdx, opts) ??
-      demotePunctuation(units, styles, punctIdx, side === "before" ? "end" : "start") ??
-      encodeWordNeighbour(units, wordIdx, side === "before" ? "start" : "end");
-    if (repaired !== null) {
-      return repaired;
+      demotePunctuation(units, styles, punctIdx, side === "before" ? "end" : "start");
+    const [idx, replacement] =
+      fromPunct !== null
+        ? [punctIdx, fromPunct]
+        : [wordIdx, encodeWordNeighbour(units, wordIdx, side === "before" ? "start" : "end")];
+    if (replacement === null) {
+      continue;
     }
+    edits.set(idx, replacement);
+    touched.add(g.at - 1);
+    touched.add(g.at);
   }
-  return null;
+  if (edits.size === 0) {
+    return null;
+  }
+  return units.flatMap((u, i) => edits.get(i) ?? [u]);
 }
 
 /** The chars one serialisation pass renders, so a large code span or link in a
@@ -531,9 +545,9 @@ function unitCharCount(units: readonly Unit[]): number {
 
 /** Serialise styled inline atoms to Markdown. Pure: no DOM, no logging.
  *
- *  Serialise, find the first marker group that does not flank on the side it
- *  needs, repair it at unit level, and re-serialise from the units, until no
- *  group can be repaired. Each repair is one-way (a link's outer style is cleared,
+ *  Serialise, find the marker groups that do not flank on the side they need,
+ *  repair the independent ones at unit level, and re-serialise from the units,
+ *  until no group can be repaired. Each repair is one-way (a link's outer style is cleared,
  *  one char is demoted, or one char becomes an entity), so the loop terminates. */
 export function serializeInlineRuns(
   atoms: readonly InlineAtom[],
@@ -546,11 +560,11 @@ export function serializeInlineRuns(
   for (;;) {
     const styles = effectiveStyles(units);
     const emission = emit(units, styles, opts);
-    const repaired = repairOnce(units, styles, emission, opts);
+    const repaired = repairPass(units, styles, emission, opts);
     if (repaired === null) {
       return { markdown: emission.markdown, emittedSyntax: emission.emittedSyntax };
     }
-    // Charge the re-serialisation this repair forces (at least 1, so even an
+    // Charge the re-serialisation this pass forces (at least 1, so even an
     // empty run cannot loop for free).
     opts.repairBudget.remaining -= Math.max(1, unitCharCount(repaired));
     if (opts.repairBudget.remaining < 0) {
