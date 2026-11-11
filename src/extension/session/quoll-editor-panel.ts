@@ -157,6 +157,26 @@ function readSpellcheckEnabled(): boolean {
   return workspace.getConfiguration().get<boolean>(SPELLCHECK_CONFIG_KEY, true);
 }
 
+export async function postSwitchAborted(
+  send: () => Thenable<boolean>,
+  isDisposed: () => boolean,
+  showError: (message: string) => void
+): Promise<void> {
+  if (isDisposed()) {
+    return;
+  }
+  try {
+    if (await send()) {
+      return;
+    }
+  } catch {
+    // Treat a detached transport like a refused delivery.
+  }
+  if (!isDisposed()) {
+    showError("Quoll: could not unlock the editor after switching. Please reload the window.");
+  }
+}
+
 export class QuollEditorPanel implements CustomTextEditorProvider {
   public static register(context: ExtensionContext, harness?: TestHarness): Disposable {
     return window.registerCustomEditorProvider(
@@ -992,7 +1012,23 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
               }
             },
             finalize: () => finalizeForwardSwap(document.uri, sourceTab),
-            postAborted: () => post(buildSwitchAbortedMessage()),
+            postAborted: () => {
+              void postSwitchAborted(
+                async () => {
+                  const message = buildSwitchAbortedMessage();
+                  const send =
+                    this.harness?.webviewPostMessageOverride ??
+                    ((m) => webviewPanel.webview.postMessage(m));
+                  const delivered = await send(message);
+                  if (delivered && !disposed) {
+                    this.harness?.recordEvent(message, document.uri.toString());
+                  }
+                  return delivered;
+                },
+                () => disposed,
+                showError
+              );
+            },
             onError: (err) => {
               showSafely(
                 window.showErrorMessage(
