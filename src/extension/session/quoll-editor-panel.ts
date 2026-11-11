@@ -53,6 +53,7 @@ import { perfReport } from "../../shared/perf.js";
 import {
   buildFormatCommandMessage,
   buildFormatDocumentMessage,
+  buildSwitchCommandMessage,
   type FormatCommandMessage,
   isWebviewToHost,
 } from "../../shared/protocol.js";
@@ -88,6 +89,11 @@ import {
 import { createRevertRescueWiring } from "../surface/revert-rescue-wiring.js";
 import { showSafely } from "../surface/show-safely.js";
 import { finalizeForwardSwap, findSourceTab } from "../surface/surface-swap.js";
+import {
+  clearActiveSwitchPoster,
+  type SwitchPoster,
+  setActiveSwitchPoster,
+} from "../surface/switch-poster.js";
 import { rescueUnsavedDraft, type UnsavedDraft } from "../surface/unsaved-draft-rescue.js";
 import type { PanelControls, TestHarness } from "../test-harness.js";
 import {
@@ -543,12 +549,26 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     const docFormatPoster = (): void => {
       post(buildFormatDocumentMessage());
     };
+    let webviewReady = false;
+    let pendingSwitch = false;
+    const switchPoster: SwitchPoster = (uriKey) => {
+      if (uriKey !== document.uri.toString()) {
+        return false;
+      }
+      if (webviewReady) {
+        post(buildSwitchCommandMessage());
+      } else {
+        pendingSwitch = true;
+      }
+      return true;
+    };
     // onDidChangeViewState does NOT fire for the initial active state, so
     // register once here if this panel opens active (the edge handler owns it
     // thereafter). This runs after `post`/`formatPoster` are defined.
     if (webviewPanel.active) {
       setActiveFormatPoster(formatPoster);
       setActiveDocFormatPoster(docFormatPoster);
+      setActiveSwitchPoster(switchPoster);
     }
 
     // Image-write executor. Orthogonal to the document-text write lock (it writes
@@ -745,9 +765,11 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         if (e.webviewPanel.active) {
           setActiveFormatPoster(formatPoster);
           setActiveDocFormatPoster(docFormatPoster);
+          setActiveSwitchPoster(switchPoster);
         } else {
           clearActiveFormatPoster(formatPoster);
           clearActiveDocFormatPoster(docFormatPoster);
+          clearActiveSwitchPoster(switchPoster);
         }
       },
       undefined,
@@ -830,6 +852,11 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           editorConfig.push();
           // Reverse switch caret restore (one-shot; see caret-handoff-wiring.ts).
           caretWiring.applySwitchCaretOnReady();
+          webviewReady = true;
+          if (pendingSwitch) {
+            pendingSwitch = false;
+            post(buildSwitchCommandMessage());
+          }
           return;
         case "edit":
           // Snapshot the live VS Code inputs the core needs to decide the
@@ -1108,6 +1135,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       // backstop that self-suppresses after dispose (effect-executor.ts).
       clearActiveFormatPoster(formatPoster);
       clearActiveDocFormatPoster(docFormatPoster);
+      clearActiveSwitchPoster(switchPoster);
       dispatch({ type: "disposed" });
       // Clear THIS document's lint diagnostics when its editor closes. The
       // collection itself outlives the panel (disposed via context.subscriptions on
