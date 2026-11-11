@@ -2819,3 +2819,175 @@ describe("shell — local send failure", () => {
     expect(container?.querySelector(".quoll-banner.error")).toBeNull();
   });
 });
+
+describe("shell — switch with unsent edits", () => {
+  const switchPosts = () =>
+    postMessage.mock.calls.filter(([m]) => (m as { type?: string }).type === "switch-to-text");
+
+  function requestSwitch(entry: string): void {
+    if (entry === "button") {
+      container?.querySelector<HTMLButtonElement>(".quoll-switch-editor-toggle")?.click();
+    } else if (entry === "chord") {
+      mountedView().contentDOM.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          code: "KeyE",
+          key: "Dead",
+          metaKey: true,
+          altKey: true,
+        })
+      );
+    } else {
+      deliver({ protocol: PROTOCOL_VERSION, type: "switch-command" });
+    }
+  }
+
+  it.each(["abort", "post failure"])("restores editing and retries after %s", async (failure) => {
+    await mount();
+    vi.useFakeTimers();
+    deliver(buildDocument({ content: "seed" }));
+    let fail = failure === "post failure";
+    postMessage.mockImplementation((message: unknown) => {
+      if ((message as { type?: string }).type === "switch-to-text" && fail) {
+        throw new Error("switch transport failed");
+      }
+    });
+    requestSwitch("button");
+    await vi.advanceTimersByTimeAsync(0);
+    if (failure === "abort") {
+      deliver({ protocol: PROTOCOL_VERSION, type: "switch-aborted" });
+    }
+    expect(container?.querySelector(".quoll-notice-switch-unsynced")).not.toBeNull();
+    typeAtEnd("x");
+    expect(viewText()).toBe("seedx");
+    fail = false;
+    requestSwitch("button");
+    deliver(buildDocument({ docVersion: 2, content: "seedx" }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(switchPosts()).toHaveLength(2);
+    requestSwitch("button");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(switchPosts()).toHaveLength(2);
+  });
+
+  it("keeps a host read-only editor read-only after an abort", async () => {
+    await mount();
+    vi.useFakeTimers();
+    deliver(buildDocument({ content: "seed", canWrite: false }));
+    requestSwitch("button");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(switchPosts()).toHaveLength(1);
+    deliver({ protocol: PROTOCOL_VERSION, type: "switch-aborted" });
+    expect(mountedView().state.readOnly).toBe(true);
+    expect(mountedView().state.facet(EditorView.editable)).toBe(false);
+    requestSwitch("button");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(switchPosts()).toHaveLength(2);
+  });
+
+  it("allows retry when the switch post fails", async () => {
+    await mount();
+    deliver(buildDocument({ content: "seed" }));
+    let fail = true;
+    postMessage.mockImplementation((message: unknown) => {
+      if ((message as { type?: string }).type === "switch-to-text" && fail) {
+        throw new Error("switch transport failed");
+      }
+    });
+    requestSwitch("button");
+    await vi.waitFor(() => expect(switchPosts()).toHaveLength(1));
+    expect(container?.querySelector(".quoll-notice-switch-unsynced")).not.toBeNull();
+    fail = false;
+    requestSwitch("button");
+    await vi.waitFor(() => expect(switchPosts()).toHaveLength(2));
+  });
+
+  it("ignores repeated requests while waiting and shows a switch notice on timeout", async () => {
+    await mount();
+    vi.useFakeTimers();
+    deliver(buildDocument({ content: "seed" }));
+    typeAtEnd("x");
+    requestSwitch("button");
+    requestSwitch("command");
+    expect(editMessages()).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(switchPosts()).toHaveLength(0);
+    expect(container?.querySelector(".quoll-notice-switch-unsynced")?.textContent).toContain(
+      "stayed in Quoll"
+    );
+    deliver(buildDocument({ docVersion: 2, content: "seedx" }));
+    requestSwitch("command");
+    await vi.advanceTimersByTimeAsync(0);
+    requestSwitch("button");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(switchPosts()).toHaveLength(1);
+  });
+
+  it.each([
+    "button",
+    "chord",
+    "command",
+  ])("blocks %s for oversized content and retries", async (entry) => {
+    await mount();
+    vi.useFakeTimers();
+    deliver(buildDocument({ content: "seed" }));
+    const oversized = "x".repeat(MAX_CONTENT_LENGTH + 1);
+    const view = mountedView();
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: oversized } });
+    requestSwitch(entry);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(viewText()).toBe(oversized);
+    expect(container?.querySelector(".quoll-banner.error")?.textContent).toContain(
+      "too large to send"
+    );
+    expect(switchPosts()).toHaveLength(0);
+
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: "recovered" },
+      selection: { anchor: 9 },
+    });
+    requestSwitch(entry);
+    deliver(buildDocument({ docVersion: 2, content: "recovered" }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(switchPosts()).toHaveLength(1);
+    const types = postMessage.mock.calls.map(([m]) => (m as { type?: string }).type);
+    expect(types.lastIndexOf("caret-report")).toBeLessThan(types.lastIndexOf("switch-to-text"));
+    expect(types).toContain("caret-report");
+  });
+
+  it.each([
+    "button",
+    "chord",
+    "command",
+  ])("blocks %s when edit transport fails and retries", async (entry) => {
+    await mount();
+    vi.useFakeTimers();
+    deliver(buildDocument({ content: "seed" }));
+    let fail = true;
+    postMessage.mockImplementation((message: unknown) => {
+      if ((message as { type?: string }).type === "edit" && fail) {
+        throw new Error("transport failed");
+      }
+    });
+    typeAtEnd("x");
+    requestSwitch(entry);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(viewText()).toBe("seedx");
+    expect(container?.querySelector(".quoll-banner.error")?.textContent).toContain(
+      "transport failed"
+    );
+    expect(switchPosts()).toHaveLength(0);
+
+    fail = false;
+    typeAtEnd("y");
+    mountedView().dispatch({ selection: { anchor: 6 } });
+    requestSwitch(entry);
+    deliver(buildDocument({ docVersion: 2, content: "seedxy" }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(switchPosts()).toHaveLength(1);
+    const types = postMessage.mock.calls.map(([m]) => (m as { type?: string }).type);
+    expect(types.lastIndexOf("caret-report")).toBeLessThan(types.lastIndexOf("switch-to-text"));
+    expect(types).toContain("caret-report");
+  });
+});

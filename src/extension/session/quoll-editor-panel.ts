@@ -50,7 +50,11 @@ import {
 } from "vscode";
 
 import { perfReport } from "../../shared/perf.js";
-import { isWebviewToHost } from "../../shared/protocol.js";
+import {
+  buildSwitchAbortedMessage,
+  buildSwitchCommandMessage,
+  isWebviewToHost,
+} from "../../shared/protocol.js";
 import { clearActivePanelPost, setActivePanelPost } from "../commands/active-panel.js";
 import { createEditorConfigWiring } from "../config/editor-config-wiring.js";
 import { isRelevantConfigChange, readEditorPrefs } from "../config/editor-prefs-config.js";
@@ -78,7 +82,12 @@ import {
 } from "../surface/reveal-code-reference.js";
 import { createRevertRescueWiring } from "../surface/revert-rescue-wiring.js";
 import { showSafely } from "../surface/show-safely.js";
-import { finalizeForwardSwap, findSourceTab } from "../surface/surface-swap.js";
+import { finalizeForwardSwap, findSourceTab, runForwardSwitch } from "../surface/surface-swap.js";
+import {
+  clearActiveSwitchPoster,
+  type SwitchPoster,
+  setActiveSwitchPoster,
+} from "../surface/switch-poster.js";
 import { rescueUnsavedDraft, type UnsavedDraft } from "../surface/unsaved-draft-rescue.js";
 import type { PanelControls, TestHarness } from "../test-harness.js";
 import {
@@ -523,11 +532,42 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         }),
     });
 
+    let webviewReady = false;
+    let pendingSwitch = false;
+    let startupNoticeShown = false;
+    let startupTimer: ReturnType<typeof setTimeout> | undefined;
+    const switchPoster: SwitchPoster = (uriKey) => {
+      if (uriKey !== document.uri.toString()) {
+        return false;
+      }
+      if (webviewReady) {
+        post(buildSwitchCommandMessage());
+      } else {
+        pendingSwitch = true;
+        if (!startupNoticeShown && startupTimer === undefined) {
+          startupTimer = setTimeout(() => {
+            startupTimer = undefined;
+            if (disposed || webviewReady || !pendingSwitch) {
+              return;
+            }
+            startupNoticeShown = true;
+            showSafely(
+              window.showWarningMessage(
+                "Quoll: the editor has not finished starting, so the switch to text is waiting. If this persists, reload the window."
+              ),
+              "showWarningMessage"
+            );
+          }, 5000);
+        }
+      }
+      return true;
+    };
     // onDidChangeViewState does NOT fire for the initial active state, so
     // register once here if this panel opens active (the edge handler owns it
     // thereafter). This runs after `post` is defined.
     if (webviewPanel.active) {
       setActivePanelPost(post);
+      setActiveSwitchPoster(switchPoster);
     }
 
     // Image-write executor. Orthogonal to the document-text write lock (it writes
@@ -723,8 +763,10 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         }
         if (e.webviewPanel.active) {
           setActivePanelPost(post);
+          setActiveSwitchPoster(switchPoster);
         } else {
           clearActivePanelPost(post);
+          clearActiveSwitchPoster(switchPoster);
         }
       },
       undefined,
@@ -807,6 +849,13 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           editorConfig.push();
           // Reverse switch caret restore (one-shot; see caret-handoff-wiring.ts).
           caretWiring.applySwitchCaretOnReady();
+          webviewReady = true;
+          clearTimeout(startupTimer);
+          startupTimer = undefined;
+          if (pendingSwitch) {
+            pendingSwitch = false;
+            post(buildSwitchCommandMessage());
+          }
           return;
         case "edit":
           // Snapshot the live VS Code inputs the core needs to decide the
@@ -918,64 +967,45 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           });
           return;
         case "switch-to-text": {
-          // Pure side channel: reopen THIS document in the built-in text editor.
-          // Never enters the host-session core (no write lock, no document
-          // mutation). The panel owns document.uri, so no path crosses the wire.
-          //
-          // Edit-applied barrier: if a flushed edit is still applying, DEFER the
-          // switch so the reopened text editor shows the applied content (and
-          // the caret handoff clamps against the applied document). Runs
-          // immediately when the lock is free.
-          //
-          // Forward in-place swap. openInTextEditor (vscode.openWith … "default")
-          // opens the text editor as a SECOND tab beside THIS Quoll custom tab —
-          // it does NOT replace it (E2E-probed 2026-07-10). We capture the
-          // source custom tab now (before the barrier defers / the target
-          // opens), apply the stashed caret to the freshly-opened text editor,
-          // then finalizeForwardSwap saves-if-dirty and closes the Quoll tab so
-          // only one surface remains. Closing disposes THIS panel, so it is the
-          // last action; caret apply + document.uri are closure locals, safe
-          // across the dispose. finalizeForwardSwap never throws and refuses to
-          // close a doc it could not make clean (no revert / no data loss).
+          // Wait for any applying edit before opening the second tab. Finalize
+          // never throws and closes the Quoll tab only after a safe save; every
+          // stopped switch reports an abort so the webview releases its lock.
           const sourceTab = findSourceTab(
             document.uri.toString(),
             "quoll",
             QuollEditorPanel.viewType
           );
-          editSettledBarrier.run(() => {
-            const caret = caretWiring.getCaret();
-            void openInTextEditor(document.uri).then(
-              () => {
-                // finalizeForwardSwap records the swap OUTCOME in surface memory
-                // LAST, after finalization settles ("text" only if the source
-                // closed), because the restore watcher already sibling-adopted
-                // "text" when the text tab opened (a failed open records nothing).
-                // applyCaretToTextEditor never throws, so a failed caret restore
-                // cannot skip that finalize.
-                if (caret !== null) {
-                  const editor = window.visibleTextEditors.find(
-                    (e) => e.document.uri.toString() === document.uri.toString()
-                  );
-                  if (editor) {
-                    caretWiring.applyCaretToTextEditor(editor, caret);
-                  }
-                }
-                void finalizeForwardSwap(document.uri, sourceTab);
-              },
-              (err: unknown) => {
-                // Symmetric with quoll.toggleEditor's forward error toast (a
-                // silent console-only failure would make the button look dead).
-                console.error("[quoll] switch-to-text openWith rejected", err);
-                showSafely(
-                  window.showErrorMessage(
-                    `Quoll: could not open the text editor: ${
-                      err instanceof Error ? err.message : String(err)
-                    }`
-                  ),
-                  "showErrorMessage"
+          runForwardSwitch({
+            barrier: editSettledBarrier,
+            open: async () => await openInTextEditor(document.uri),
+            restoreCaret: () => {
+              const caret = caretWiring.getCaret();
+              if (caret !== null) {
+                const editor = window.visibleTextEditors.find(
+                  (e) => e.document.uri.toString() === document.uri.toString()
                 );
+                if (editor) {
+                  caretWiring.applyCaretToTextEditor(editor, caret);
+                }
               }
-            );
+            },
+            finalize: () => finalizeForwardSwap(document.uri, sourceTab),
+            postAborted: () =>
+              post(buildSwitchAbortedMessage(), () =>
+                showError(
+                  "Quoll: could not unlock the editor after switching. Please reload the window."
+                )
+              ),
+            onError: (err) => {
+              showSafely(
+                window.showErrorMessage(
+                  `Quoll: could not open the text editor: ${
+                    err instanceof Error ? err.message : String(err)
+                  }`
+                ),
+                "showErrorMessage"
+              );
+            },
           });
           return;
         }
@@ -1080,10 +1110,13 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       // channels by its own verdict (`isEditApplied`). Flag-first stays as the
       // defence for a `disposed` transition that throws.
       disposed = true;
+      clearTimeout(startupTimer);
+      startupTimer = undefined;
       // Clear the panel post immediately so host commands can never forward
       // to a disposing panel. Primary guard; `post` (createEffectExecutor) is a
       // backstop that self-suppresses after dispose (effect-executor.ts).
       clearActivePanelPost(post);
+      clearActiveSwitchPoster(switchPoster);
       dispatch({ type: "disposed" });
       // Clear THIS document's lint diagnostics when its editor closes. The
       // collection itself outlives the panel (disposed via context.subscriptions on

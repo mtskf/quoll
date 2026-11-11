@@ -16,6 +16,7 @@ import {
   window,
   workspace,
 } from "vscode";
+import type { EditSettledBarrier } from "../session/edit-settled-barrier.js";
 import { showSafely } from "./show-safely.js";
 import { noteSurface } from "./surface-memory.js";
 
@@ -226,9 +227,40 @@ export async function finalizeForwardSwap(
   uri: Uri,
   sourceTab: Tab | undefined,
   deps: FinalizeSwapDeps = REAL_SWAP_DEPS
-): Promise<void> {
+): Promise<boolean> {
   const completed = await finalizeSurfaceSwap(uri, sourceTab, deps);
   noteSurface(uri.toString(), completed ? "text" : "quoll");
+  return completed;
+}
+
+/** Forward switch body for the panel's `switch-to-text` arm. One try/catch around
+ *  open → caret restore → finalize, so a throw anywhere (including a synchronous
+ *  one from `open`) still reports `postAborted`; a refused finalize and a barrier
+ *  drop report it too. Every stopped switch must release the webview's lock. */
+export function runForwardSwitch(deps: {
+  barrier: Pick<EditSettledBarrier, "run">;
+  open: () => Promise<unknown>;
+  restoreCaret: () => void;
+  finalize: () => Promise<boolean>;
+  postAborted: () => void;
+  onError?: (err: unknown) => void;
+}): void {
+  const op = async (): Promise<void> => {
+    try {
+      await deps.open();
+      deps.restoreCaret();
+      if (!(await deps.finalize())) {
+        deps.postAborted();
+      }
+    } catch (err) {
+      console.error("[quoll] switch-to-text failed", err);
+      deps.postAborted();
+      deps.onError?.(err);
+    }
+  };
+  deps.barrier.run(() => {
+    void op();
+  }, deps.postAborted);
 }
 
 /** Close the pre-captured `sourceTab` ONLY if the shared doc is currently clean.

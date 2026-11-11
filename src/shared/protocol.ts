@@ -404,6 +404,18 @@ export function buildPastePlainMessage(text: string): PastePlainMessage {
   return { protocol: PROTOCOL_VERSION, type: "paste-plain", text };
 }
 
+export type SwitchCommandMessage = Envelope & { type: "switch-command" };
+
+export function buildSwitchCommandMessage(): SwitchCommandMessage {
+  return { protocol: PROTOCOL_VERSION, type: "switch-command" };
+}
+
+export type SwitchAbortedMessage = Envelope & { type: "switch-aborted" };
+
+export function buildSwitchAbortedMessage(): SwitchAbortedMessage {
+  return { protocol: PROTOCOL_VERSION, type: "switch-aborted" };
+}
+
 export type HostToWebview =
   | DocumentMessage
   | ThemeMessage
@@ -412,7 +424,9 @@ export type HostToWebview =
   | CaretApplyMessage
   | FormatCommandMessage
   | FormatDocumentMessage
-  | PastePlainMessage;
+  | PastePlainMessage
+  | SwitchCommandMessage
+  | SwitchAbortedMessage;
 
 // ---------- Webview → Host ----------
 
@@ -776,6 +790,9 @@ export function isHostToWebview(value: unknown): value is HostToWebview {
       return typeof v.text === "string";
     case "format-document":
       return true; // no payload beyond the validated envelope/protocol
+    case "switch-command":
+    case "switch-aborted":
+      return Object.keys(v).every((key) => key === "protocol" || key === "type");
     default:
       return false;
   }

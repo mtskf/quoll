@@ -2146,7 +2146,7 @@ describe("caret handoff (applyRemoteCaret + caret-report)", () => {
   // editors INSIDE the debounce window must still deliver the final caret —
   // and BEFORE switch-to-text (FIFO), so the host applies the just-moved caret
   // to the reopened text editor rather than a stale one.
-  it("flushes the pending caret-report BEFORE switch-to-text on the editor switch", () => {
+  it("flushes the pending caret-report BEFORE switch-to-text on the editor switch", async () => {
     vi.useFakeTimers();
     const { handle, view } = mount();
     handle.applyDocument({
@@ -2162,6 +2162,8 @@ describe("caret handoff (applyRemoteCaret + caret-report)", () => {
     const button = container?.querySelector<HTMLButtonElement>(".quoll-switch-editor-toggle");
     expect(button).not.toBeNull();
     button?.click();
+    // The switch gate awaits edit settlement before posting; let it resolve.
+    await vi.advanceTimersByTimeAsync(0);
     // FIFO: the force-posted caret-report lands before switch-to-text.
     const order = postMessage.mock.calls
       .map((c) => (c[0] as { type?: string })?.type)

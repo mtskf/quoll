@@ -25,10 +25,10 @@ import { commands, TabInputCustom, TabInputText, type TextEditor, window, worksp
 import { stashSwitchCaret, takeSwitchCaret } from "../handoff/editor-switch-caret.js";
 import { QuollEditorPanel } from "../session/quoll-editor-panel.js";
 import { canEditWith } from "./can-edit-with.js";
-import { openInTextEditor } from "./reopen-text-editor.js";
 import { showSafely } from "./show-safely.js";
 import { noteSurface } from "./surface-memory.js";
-import { finalizeForwardSwap, finalizeSurfaceSwap, findSourceTab } from "./surface-swap.js";
+import { finalizeSurfaceSwap, findSourceTab } from "./surface-swap.js";
+import { getActiveSwitchPoster } from "./switch-poster.js";
 
 export type SwitchTarget = "to-text" | "to-quoll" | "none";
 
@@ -62,34 +62,16 @@ function surfaceError(prefix: string, err: unknown): void {
   );
 }
 
-/** Forward swap: reopen the active Quoll custom tab in the built-in text editor,
- *  then close the Quoll source tab (save-then-swap; see surface-swap.ts). No-op
- *  if the active tab is not a Quoll custom tab.
- *  Caret is NOT preserved on this
- *  path — the caret-preserving forward affordances are the in-editor button + the
- *  ⌘⌥E / Ctrl+Alt+E chord (they post `switch-to-text` to the panel, which owns
- *  lastKnownCaret). Shared by `quoll.toggleEditor` (to-text case) and the
- *  title-bar `quoll.reopenInTextEditor` button so both directions drive one swap
- *  path — no duplicated surface-swap logic. */
+/** Ask the active Quoll panel to switch through its edit-sync and caret gate.
+ *  Shared by `quoll.toggleEditor` and `quoll.reopenInTextEditor`. */
 export async function reopenActiveQuollTabAsText(): Promise<void> {
   const input = window.tabGroups.activeTabGroup.activeTab?.input;
   if (!(input instanceof TabInputCustom) || input.viewType !== QuollEditorPanel.viewType) {
     return;
   }
-  const uri = input.uri;
-  const sourceTab = findSourceTab(uri.toString(), "quoll", QuollEditorPanel.viewType);
-  // Observability for the documented caret non-preservation on this path.
-  console.info(
-    "[quoll] forward: caret not preserved (use the in-editor button or ⌘⌥E / Ctrl+Alt+E)"
-  );
-  try {
-    await openInTextEditor(uri);
-    // finalizeForwardSwap records the outcome after finalization settles
-    // ("text" only if the source closed), overriding the restore watcher's
-    // sibling-adopt write (a failed open records nothing).
-    await finalizeForwardSwap(uri, sourceTab);
-  } catch (err) {
-    surfaceError("could not open the text editor", err);
+  const poster = getActiveSwitchPoster();
+  if (poster === null || !poster(input.uri.toString())) {
+    console.warn("[quoll] forward: no Quoll panel for the active tab; switch not sent");
   }
 }
 
@@ -164,8 +146,7 @@ export function registerToggleEditor(): { dispose(): void } {
         // The active tab is the Quoll custom editor here (onQuollTab). Delegate
         // to the shared forward-swap helper — also the title-bar
         // `quoll.reopenInTextEditor` handler — so both drive one swap path. This
-        // is the Command-Palette forward entry; caret is not preserved (a rare,
-        // acceptable gap — see reopenActiveQuollTabAsText).
+        // is the Command-Palette forward entry; the webview reports the caret.
         await reopenActiveQuollTabAsText();
         return;
       }

@@ -169,6 +169,8 @@ export type FormatCommandMessageShape = EnvelopeShape & {
 };
 
 export type FormatDocumentMessageShape = EnvelopeShape & { type: "format-document" };
+export type SwitchCommandMessageShape = EnvelopeShape & { type: "switch-command" };
+export type SwitchAbortedMessageShape = EnvelopeShape & { type: "switch-aborted" };
 
 export type PastePlainMessageShape = EnvelopeShape & { type: "paste-plain"; text: string };
 
@@ -181,7 +183,9 @@ export type HostToWebviewShape =
   | CaretApplyMessageShape
   | FormatCommandMessageShape
   | FormatDocumentMessageShape
-  | PastePlainMessageShape;
+  | PastePlainMessageShape
+  | SwitchCommandMessageShape
+  | SwitchAbortedMessageShape;
 
 export type WebviewToHostShape =
   | ReadyMessageShape

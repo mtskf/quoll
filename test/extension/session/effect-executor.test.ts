@@ -55,6 +55,40 @@ function makeDeps(over: Partial<EffectExecutorDeps<FakeEdit>> = {}): EffectExecu
 }
 
 describe("effect-executor post()", () => {
+  it.each(["false", "reject", "throw"])("calls onUndelivered on %s", async (failure) => {
+    const onUndelivered = vi.fn();
+    const send = () => {
+      if (failure === "throw") {
+        throw new Error("detached");
+      }
+      return failure === "reject" ? Promise.reject(new Error("detached")) : Promise.resolve(false);
+    };
+    const { post } = createEffectExecutor(makeDeps({ send }));
+    post(themeMsg, onUndelivered);
+    await Promise.resolve();
+    expect(onUndelivered).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    true,
+    false,
+    "reject",
+  ] as const)("does not call onUndelivered on success or after disposal: %s", async (result) => {
+    let disposed = false;
+    let settle!: () => void;
+    const send = () =>
+      new Promise<boolean>((resolve, reject) => {
+        settle = () => (result === "reject" ? reject(new Error("detached")) : resolve(result));
+      });
+    const onUndelivered = vi.fn();
+    const { post } = createEffectExecutor(makeDeps({ send, isDisposed: () => disposed }));
+    post(themeMsg, onUndelivered);
+    disposed = result !== true;
+    settle();
+    await Promise.resolve();
+    expect(onUndelivered).not.toHaveBeenCalled();
+  });
+
   it("disposed: never calls send, never records", () => {
     const send = vi.fn(async () => true);
     const recordEvent = vi.fn();

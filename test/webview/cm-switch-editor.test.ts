@@ -1,17 +1,130 @@
 // @vitest-environment happy-dom
+
+import { insertNewline, redo, undo } from "@codemirror/commands";
 import { EditorState, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { hostDocumentReseed } from "../../src/webview/cm/host-reseed.js";
+import {
+  matchesSwitchEditorChord,
+  quollSwitchEditor,
+  setSwitchLock,
+} from "../../src/webview/cm/switch-editor.js";
+import { type EditorHandle, mountEditor } from "../../src/webview/editor.js";
+import { initialState } from "../../src/webview/state.js";
 
-import { PROTOCOL_VERSION } from "../../src/shared/protocol.js";
-import { matchesSwitchEditorChord, quollSwitchEditor } from "../../src/webview/cm/switch-editor.js";
+const postMessage = vi.fn();
+vi.mock("../../src/webview/host.js", () => ({
+  getHost: () => ({ postMessage }),
+  readPersistedState: () => ({}),
+  patchPersistedState: () => {},
+}));
 
 let view: EditorView | null = null;
+let editor: EditorHandle | null = null;
 
 afterEach(() => {
-  view?.destroy();
+  if (editor) {
+    editor.dispose();
+    editor = null;
+  } else {
+    view?.destroy();
+  }
   view = null;
   document.body.textContent = "";
+  vi.useRealTimers();
+  postMessage.mockReset();
+});
+
+describe("switch edit lock", () => {
+  function mountRealEditor(): { handle: EditorHandle; view: EditorView } {
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const handle = mountEditor({
+      parent,
+      nonce: "test",
+      getState: () => ({ ...initialState, ready: true, canWrite: true, docVersion: 1 }),
+      dispatch: () => {},
+    });
+    editor = handle;
+    const mountedView = EditorView.findFromDOM(
+      parent.querySelector(".quoll-editor") as HTMLElement
+    );
+    if (!mountedView) {
+      throw new Error("EditorView not found");
+    }
+    view = mountedView;
+    handle.applyDocument({
+      content: "seed",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 1,
+      externalEpoch: 0,
+      epochGeneration: 1,
+      settledEditId: 0,
+    });
+    return { handle, view: mountedView };
+  }
+
+  const switchPosts = () => postMessage.mock.calls.filter(([m]) => m.type === "switch-to-text");
+
+  it("blocks raw document changes after posting", async () => {
+    const mounted = mountRealEditor();
+    await mounted.handle.requestSwitch();
+    expect(switchPosts()).toHaveLength(1);
+    mounted.view.dispatch({ changes: { from: 0, insert: "x" }, userEvent: "input.type" });
+    expect(mounted.view.state.doc.toString()).toBe("seed");
+  });
+
+  it("blocks editing commands after posting", async () => {
+    const mounted = mountRealEditor();
+    await mounted.handle.requestSwitch();
+    insertNewline(mounted.view);
+    expect(mounted.view.state.doc.toString()).toBe("seed");
+  });
+
+  it("blocks undo while locked", () => {
+    const mounted = mountRealEditor();
+    mounted.view.dispatch({ changes: { from: 4, insert: "x" } });
+    mounted.view.dispatch({ effects: setSwitchLock.of(true) });
+    expect(undo(mounted.view)).toBe(true);
+    expect(mounted.view.state.doc.toString()).toBe("seedx");
+  });
+
+  it("blocks redo while locked", () => {
+    const mounted = mountRealEditor();
+    mounted.view.dispatch({ changes: { from: 4, insert: "x" } });
+    expect(undo(mounted.view)).toBe(true);
+    mounted.view.dispatch({ effects: setSwitchLock.of(true) });
+    expect(redo(mounted.view)).toBe(true);
+    expect(mounted.view.state.doc.toString()).toBe("seed");
+  });
+
+  it("allows selection and host reseeds while ignoring another request", async () => {
+    const mounted = mountRealEditor();
+    await mounted.handle.requestSwitch();
+    mounted.view.dispatch({ selection: { anchor: 2 } });
+    expect(mounted.view.state.selection.main.head).toBe(2);
+    mounted.view.dispatch({
+      changes: { from: 0, to: 4, insert: "host" },
+      annotations: hostDocumentReseed.of(true),
+    });
+    expect(mounted.view.state.doc.toString()).toBe("host");
+    await mounted.handle.requestSwitch();
+    expect(switchPosts()).toHaveLength(1);
+  });
+
+  it("does not post when disposed during settlement", async () => {
+    vi.useFakeTimers();
+    const mounted = mountRealEditor();
+    mounted.view.dispatch({ changes: { from: 4, insert: "x" } });
+    const pending = mounted.handle.requestSwitch();
+    mounted.handle.dispose();
+    editor = null;
+    view = null;
+    await pending;
+    expect(switchPosts()).toHaveLength(0);
+  });
 });
 
 function mount(extensions: Extension[]): HTMLElement {
@@ -27,8 +140,6 @@ function dispatchKeydown(init: KeyboardEventInit): void {
     new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init })
   );
 }
-
-const EXPECTED = { protocol: PROTOCOL_VERSION, type: "switch-to-text" };
 
 describe("matchesSwitchEditorChord", () => {
   // The regression this pins: on macOS Option+E is the acute-accent DEAD KEY, so a
@@ -72,51 +183,28 @@ describe("matchesSwitchEditorChord", () => {
 });
 
 describe("quollSwitchEditor chord (keydown)", () => {
-  it("posts switch-to-text for the macOS dead-key ⌘⌥E keydown (reproduces + fixes the regression)", () => {
-    const postMessage = vi.fn();
-    mount([quollSwitchEditor({ postMessage }, () => {})]);
+  it("requests a switch for the macOS dead-key chord", () => {
+    const requestSwitch = vi.fn(async () => {});
+    mount([quollSwitchEditor(requestSwitch)]);
     dispatchKeydown({ key: "Dead", code: "KeyE", metaKey: true, altKey: true });
-    expect(postMessage).toHaveBeenCalledWith(EXPECTED);
-  });
-
-  it("flushes pending edits before posting (no data loss on type-then-switch)", () => {
-    const calls: string[] = [];
-    const flush = vi.fn(() => calls.push("flush"));
-    const postMessage = vi.fn(() => calls.push("post"));
-    mount([quollSwitchEditor({ postMessage }, flush)]);
-    dispatchKeydown({ key: "Dead", code: "KeyE", metaKey: true, altKey: true });
-    expect(calls).toEqual(["flush", "post"]);
-  });
-
-  it("does not throw out of the keydown handler when postMessage throws", () => {
-    const postMessage = vi.fn(() => {
-      throw new Error("transport gone");
-    });
-    mount([quollSwitchEditor({ postMessage }, () => {})]);
-    expect(() =>
-      dispatchKeydown({ key: "Dead", code: "KeyE", metaKey: true, altKey: true })
-    ).not.toThrow();
+    expect(requestSwitch).toHaveBeenCalledOnce();
   });
 
   it("ignores a non-chord keydown", () => {
-    const postMessage = vi.fn();
-    mount([quollSwitchEditor({ postMessage }, () => {})]);
+    const requestSwitch = vi.fn(async () => {});
+    mount([quollSwitchEditor(requestSwitch)]);
     dispatchKeydown({ key: "a", code: "KeyA" });
-    expect(postMessage).not.toHaveBeenCalled();
+    expect(requestSwitch).not.toHaveBeenCalled();
   });
 });
 
 describe("quollSwitchEditor button", () => {
-  it("renders a top-right toggle button inside the .quoll-editor host", () => {
-    const postMessage = vi.fn();
-    const host = mount([quollSwitchEditor({ postMessage }, () => {})]);
-    expect(host.querySelector(".quoll-switch-editor-toggle")).not.toBeNull();
-  });
-
-  it("posts switch-to-text when the button is clicked", () => {
-    const postMessage = vi.fn();
-    const host = mount([quollSwitchEditor({ postMessage }, () => {})]);
-    host.querySelector<HTMLButtonElement>(".quoll-switch-editor-toggle")?.click();
-    expect(postMessage).toHaveBeenCalledWith(EXPECTED);
+  it("renders a toggle and requests a switch when clicked", () => {
+    const requestSwitch = vi.fn(async () => {});
+    const host = mount([quollSwitchEditor(requestSwitch)]);
+    const button = host.querySelector<HTMLButtonElement>(".quoll-switch-editor-toggle");
+    expect(button).not.toBeNull();
+    button?.click();
+    expect(requestSwitch).toHaveBeenCalledOnce();
   });
 });

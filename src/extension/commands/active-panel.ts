@@ -1,21 +1,18 @@
 import type { HostToWebview } from "../../shared/protocol.js";
+import { createActivePoster } from "./active-poster.js";
 
-// A single-slot "active panel post" latch with identity-guarded clear: a
-// panel that lost focus AFTER another became active must not wipe the newer
-// post. Shared by the inline-format and format-document commands so the latch
-// semantics live in exactly one place.
-let active: ((message: HostToWebview) => void) | null = null;
+// The active panel's `post`: host commands (inline format, format document,
+// plain paste) forward their message to the focused Quoll webview through it.
+const registry = createActivePoster<(message: HostToWebview) => void>();
 
 export function setActivePanelPost(post: (message: HostToWebview) => void): void {
-  active = post;
+  registry.set(post);
 }
 
 export function clearActivePanelPost(post: (message: HostToWebview) => void): void {
-  if (active === post) {
-    active = null;
-  }
+  registry.clear(post);
 }
 
 export function getActivePanelPost(): ((message: HostToWebview) => void) | null {
-  return active;
+  return registry.get();
 }

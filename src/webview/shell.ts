@@ -187,6 +187,7 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
     "format-failed": "Format Document failed. Review the document before continuing.",
     "paste-failed":
       "Paste could not be completed in full. Review the document before trying again.",
+    "switch-unsynced": "Quoll could not confirm your latest edits; stayed in Quoll. Try again.",
     "handoff-unsynced":
       "Quoll could not confirm that your latest edits were saved, so nothing was sent to the assistant. Try again — after your next edit if this repeats.",
   } as const;
@@ -211,6 +212,7 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
     "format-failed": 0,
     "paste-failed": 0,
     "handoff-unsynced": 0,
+    "switch-unsynced": 0,
   };
   let noticeKind: NoticeKind | null = null;
   let stormNoticeShown = false;
@@ -480,6 +482,9 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
       showNotice("unsaved");
     },
     onHandoffSynced: showHandoffSynced,
+    onSwitchFailed: () => {
+      showNotice("switch-unsynced");
+    },
   });
 
   const unsubscribe = subscribeToHost((message) => {
@@ -588,6 +593,12 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
         });
         return;
       }
+      case "switch-command":
+        void editor?.requestSwitch();
+        return;
+      case "switch-aborted":
+        editor?.abortSwitch();
+        return;
       default: {
         // Exhaustiveness guard — when a new HostToWebview variant is added
         // without a case here, TS flags the assignment as `never` at

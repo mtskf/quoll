@@ -11,29 +11,20 @@ vi.mock("../../../src/extension/session/quoll-editor-panel.js", () => ({
   QuollEditorPanel: { viewType: "quoll.editMarkdown" },
 }));
 
-// Keep the REAL findSourceTab (active-tab-first) and replace only the forward
-// wrapper, so the command's wiring — not the wrapper's own mapping, pinned in
-// surface-swap.test.ts — is what these cases observe.
-vi.mock("../../../src/extension/surface/surface-swap.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../src/extension/surface/surface-swap.js")>()),
-  finalizeForwardSwap: vi.fn(async () => undefined),
-}));
-
-vi.mock("../../../src/extension/surface/reopen-text-editor.js", () => ({
-  openInTextEditor: vi.fn(async () => undefined),
-}));
-
+import { commands } from "vscode";
 import { openInTextEditor } from "../../../src/extension/surface/reopen-text-editor.js";
 import {
-  __clearSurfaceMemoryForTest,
-  __getRememberedSurfaceForTest,
-  noteSurface,
-} from "../../../src/extension/surface/surface-memory.js";
-import { finalizeForwardSwap } from "../../../src/extension/surface/surface-swap.js";
+  clearActiveSwitchPoster,
+  setActiveSwitchPoster,
+} from "../../../src/extension/surface/switch-poster.js";
 import {
   decideSwitchTarget,
   reopenActiveQuollTabAsText,
 } from "../../../src/extension/surface/toggle-editor.js";
+
+vi.mock("../../../src/extension/surface/reopen-text-editor.js", () => ({
+  openInTextEditor: vi.fn(async () => undefined),
+}));
 
 describe("decideSwitchTarget", () => {
   it("switches to the text editor when the active tab is Quoll (forward wins)", () => {
@@ -54,44 +45,48 @@ describe("decideSwitchTarget", () => {
 });
 
 describe("reopenActiveQuollTabAsText (forward command wiring)", () => {
-  const KEY = "file:///a.md";
-  const uri = { toString: () => KEY, path: "/a.md", scheme: "file" } as never;
+  const key = "file:///a.md";
+  const uri = { toString: () => key, path: "/a.md", scheme: "file" } as never;
   const activeTabGroup = window.tabGroups.activeTabGroup as { activeTab: unknown };
-  const finalizeMock = vi.mocked(finalizeForwardSwap);
-  const openMock = vi.mocked(openInTextEditor);
-  let sourceTab: { input: TabInputCustom };
   let savedActiveTab: unknown;
+  const poster = vi.fn((_uriKey: string) => true);
 
   beforeEach(() => {
     vi.clearAllMocks();
-    __clearSurfaceMemoryForTest();
     savedActiveTab = activeTabGroup.activeTab;
-    sourceTab = { input: new TabInputCustom(uri, "quoll.editMarkdown") };
-    activeTabGroup.activeTab = sourceTab;
+    activeTabGroup.activeTab = { input: new TabInputCustom(uri, "quoll.editMarkdown") };
   });
 
   afterEach(() => {
+    clearActiveSwitchPoster(poster);
     activeTabGroup.activeTab = savedActiveTab;
+    vi.restoreAllMocks();
   });
 
-  it("hands the swap to finalizeForwardSwap once, with the captured source tab", async () => {
+  it("forwards to the active panel without opening text", async () => {
+    setActiveSwitchPoster(poster);
+    const execute = vi.spyOn(commands, "executeCommand");
     await reopenActiveQuollTabAsText();
-    expect(openMock).toHaveBeenCalledTimes(1);
-    expect(finalizeMock).toHaveBeenCalledTimes(1);
-    const [calledUri, calledTab] = finalizeMock.mock.calls[0] ?? [];
-    expect(calledUri).toBe(uri);
-    expect(calledTab).toBe(sourceTab);
-    // The command itself writes nothing on this path — the wrapper owns it.
-    expect(__getRememberedSurfaceForTest(KEY)).toBeUndefined();
+    expect(openInTextEditor).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+    expect(poster).toHaveBeenCalledExactlyOnceWith(key);
   });
 
-  it("writes nothing and skips the wrapper when the open itself fails", async () => {
-    noteSurface(KEY, "text");
-    openMock.mockImplementationOnce(async () => {
-      throw new Error("openWith failed");
-    });
+  it.each(["no panel", "different panel"])("logs and opens nothing with %s", async (scenario) => {
+    if (scenario === "different panel") {
+      poster.mockReturnValueOnce(false);
+      setActiveSwitchPoster(poster);
+    }
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const execute = vi.spyOn(commands, "executeCommand");
     await reopenActiveQuollTabAsText();
-    expect(__getRememberedSurfaceForTest(KEY)).toBe("text");
-    expect(finalizeMock).not.toHaveBeenCalled();
+    expect(openInTextEditor).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      "[quoll] forward: no Quoll panel for the active tab; switch not sent"
+    );
+    if (scenario === "different panel") {
+      expect(poster).toHaveBeenCalledExactlyOnceWith(key);
+    }
   });
 });

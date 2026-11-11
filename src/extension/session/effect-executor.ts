@@ -108,7 +108,7 @@ export interface EffectExecutorDeps<TEdit> {
 export interface EffectExecutor {
   /** Side-channel outbound (also used internally). disposed guard + sync-throw
    *  guard + ok/false/reject arms + perf. */
-  post: (message: HostToWebview) => void;
+  post: (message: HostToWebview, onUndelivered?: () => void) => void;
   /** Run each core EFFECT as a real side effect. */
   runEffects: (effects: readonly HostSessionEffect[]) => void;
 }
@@ -264,7 +264,7 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
   // The webview-side outbound handler does not expose an equivalent
   // delivery signal, so the host log is the only place this gap is
   // observable.
-  const post = (message: HostToWebview): void => {
+  const post = (message: HostToWebview, onUndelivered?: () => void): void => {
     if (deps.isDisposed()) {
       return;
     }
@@ -287,6 +287,9 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
           type: message.type,
         })
       );
+      if (!deps.isDisposed()) {
+        onUndelivered?.();
+      }
       return;
     }
     if (QUOLL_PERF) {
@@ -304,9 +307,15 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
         console.warn("[quoll] host→webview postMessage resolved false", {
           type: message.type,
         });
+        if (!deps.isDisposed()) {
+          onUndelivered?.();
+        }
       },
       (err: unknown) => {
         console.error("[quoll] host→webview postMessage rejected", err);
+        if (!deps.isDisposed()) {
+          onUndelivered?.();
+        }
       }
     );
   };
