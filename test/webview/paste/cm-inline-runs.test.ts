@@ -229,6 +229,19 @@ describe("repair cap", () => {
     expect(capped({ remaining: 1_000_000 - probe.remaining - 1 })).toThrow(InlineRepairCapExceeded);
   });
 
+  it("charges a large code span or link for every pass that re-renders it", () => {
+    const big = "x".repeat(100_000);
+    const spent = (atoms: InlineAtom[]): number => {
+      const probe = { remaining: 1_000_000 };
+      serializeInlineRuns(atoms, { trimEdges: false, escapeText: escapeInline, repairBudget: probe });
+      return 1_000_000 - probe.remaining;
+    };
+    // One repair (the `Note:` colon is demoted), so one re-serialisation pass.
+    expect(spent([code(`\`${big}\``, 0), t("Note:", B), t("a", 0)])).toBeGreaterThan(100_000);
+    expect(spent([link([t(big, 0)]), t("Note:", B), t("a", 0)])).toBeGreaterThan(100_000);
+    expect(spent([link([t("x", 0)], 0, big), t("Note:", B), t("a", 0)])).toBeGreaterThan(100_000);
+  });
+
   it("does not spend a repair on checking a settled result", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const probe = { remaining: 1_000_000 };

@@ -503,11 +503,27 @@ function repairOnce(
   return null;
 }
 
-/** Text chars plus one per non-text unit: the cost of one serialisation pass. */
+/** The chars one serialisation pass renders, so a large code span or link in a
+ *  repaired run is charged for every re-render, not as one unit. A text unit is
+ *  counted before escaping and a link as its brackets, label and destination. */
 function unitCharCount(units: readonly Unit[]): number {
   let n = 0;
   for (const u of units) {
-    n += u.kind === "text" ? u.text.length : 1;
+    switch (u.kind) {
+      case "text":
+      case "entity":
+        n += u.text.length;
+        break;
+      case "code":
+        n += u.markdown.length;
+        break;
+      case "break":
+        n += HARD_BREAK.length;
+        break;
+      case "link":
+        n += u.labelMarkdown.length + u.destination.length + 4;
+        break;
+    }
   }
   return n;
 }
