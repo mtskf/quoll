@@ -39,6 +39,13 @@ describe("findHeadingBySlug", () => {
     expect(lookup("# One\n\ntext\n", "two")).toBeNull();
   });
 
+  it("resolves numeric references and counts decoded duplicate headings", () => {
+    expect(lookup("# A&#8288;B", "ab")).toBe(0);
+    const doc = "# AB\n\n# A&#8288;B";
+    expect(lookup(doc, "ab")).toBe(0);
+    expect(lookup(doc, "ab-1")).toBe(doc.indexOf("# A&#8288;B"));
+  });
+
   it("gives duplicate heading text GitHub-style -1 / -2 suffixes in document order", () => {
     const doc = "# Notes\n\na\n\n# Notes\n\nb\n\n# Notes\n\nc\n";
     expect(lookup(doc, "notes")).toBe(0);

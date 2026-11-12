@@ -14,6 +14,7 @@
 
 import type { syntaxTree } from "@codemirror/language";
 import type { EditorState } from "@codemirror/state";
+import { decodeNumericEntity } from "../../markdown/numeric-entity.js";
 
 type Tree = ReturnType<typeof syntaxTree>;
 
@@ -76,11 +77,10 @@ export function headingText(raw: string): string {
  *  `# A <em>x</em> B` is `a-x-b` on GitHub and an anchor a reader copies from
  *  GitHub has to resolve here.
  *
- *  Parity is close, not exact: HTML ENTITIES are not decoded, so `# A &amp; B`
+ *  Parity is close, not exact: named entities are not decoded, so `# A &amp; B`
  *  slugs `a-amp-b` where GitHub resolves the entity first and drops the `&` as
- *  punctuation. Dropping `Entity` wholesale would be no better — it would also
- *  swallow `&eacute;`, which GitHub keeps as a letter — so the honest fix is
- *  decoding, and that is not worth carrying for a shape this rare.
+ *  punctuation. Numeric references are decoded with the same decoder as the
+ *  display widget, so their slugs match what Quoll shows.
  *
  *  Membership measured against the real Lezer GFM tree: `HeaderMark` covers the
  *  opener AND the closing `#` run (which is why headingSlugSource needs no ATX
@@ -117,7 +117,8 @@ const SLUG_EXCLUDED_NODES = new Set([
 const URL_DESTINATION_PARENTS = new Set(["Link", "Image"]);
 
 /** The heading at `[from, to)` with its inline MARKUP ranges removed and the
- *  gaps stitched back together — the text GitHub would slug. This, not the raw
+ *  gaps stitched back together and numeric references decoded (named entities
+ *  remain literal) — the text to slug. This, not the raw
  *  source, is what the fragment-link resolver slugs, so `# A [link](b)` is
  *  addressable as `#a-link` (GitHub's answer, and also what a reader of a Quoll
  *  document sees once the syntax is hidden) instead of `#a-linkb`.
@@ -152,6 +153,19 @@ export function headingSlugSource(
     from,
     to,
     enter: (node) => {
+      // Numeric references render as their character (numeric-entity-reveal),
+      // so the slug uses it too. `node.from >= cursor` skips an entity inside an
+      // already-dropped range (a link title or destination).
+      if (node.name === "Entity") {
+        if (node.from >= cursor && node.to <= to) {
+          const decoded = decodeNumericEntity(state.doc.sliceString(node.from, node.to));
+          if (decoded !== null) {
+            text += state.doc.sliceString(cursor, node.from) + decoded;
+            cursor = node.to;
+          }
+        }
+        return;
+      }
       if (!SLUG_EXCLUDED_NODES.has(node.name)) {
         return;
       }
