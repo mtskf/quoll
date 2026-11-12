@@ -6,7 +6,9 @@
 // Deliberately independent of the converter: it reads the HTML with its own DOM
 // walk and the Markdown with the parser, and shares no code with either side of
 // the conversion except the StyleMask bits.
+
 import type { SyntaxNode } from "@lezer/common";
+import { Parser } from "commonmark";
 import { gfmParser } from "../../../src/markdown/gfm-parser.js";
 import { BOLD, ITALIC, type StyleMask } from "../../../src/webview/cm/paste/inline-runs.js";
 
@@ -134,6 +136,14 @@ export function markdownStyledChars(md: string): StyledChar[] {
         pushChars(out, md.slice(child.from + 1, child.to), style);
       } else if (child.name === "Entity") {
         pushChars(out, decodeEntity(md.slice(child.from, child.to)), style);
+      } else if (child.name === "InlineCode") {
+        const first = child.firstChild;
+        const last = child.lastChild;
+        let content = md.slice(first?.to ?? child.from, last?.from ?? child.to).replace(/\n/g, " ");
+        if (content.startsWith(" ") && content.endsWith(" ") && /[^ ]/.test(content)) {
+          content = content.slice(1, -1);
+        }
+        pushChars(out, content, style);
       } else if (child.name === "StrongEmphasis") {
         walk(child, (style | BOLD) as StyleMask);
       } else if (child.name === "Emphasis") {
@@ -145,6 +155,33 @@ export function markdownStyledChars(md: string): StyledChar[] {
     pushChars(out, md.slice(pos, node.to), style);
   };
   walk(block, 0);
+  return normalise(out);
+}
+
+/** Read the first paragraph or heading with the independent CommonMark parser. */
+export function commonmarkStyledChars(md: string): StyledChar[] {
+  const doc = new Parser().parse(md);
+  let block = doc.firstChild;
+  while (block !== null && block.type !== "paragraph" && block.type !== "heading") {
+    block = block.next;
+  }
+  const out: StyledChar[] = [];
+  const walk = (node: NonNullable<typeof block>, style: StyleMask): void => {
+    const own = (style |
+      (node.type === "strong" ? BOLD : node.type === "emph" ? ITALIC : 0)) as StyleMask;
+    if (node.type === "text" || node.type === "code") {
+      pushChars(out, node.literal ?? "", own);
+    } else if (node.type === "softbreak") {
+      pushChars(out, "\n", own);
+    } else if (node.type !== "linebreak") {
+      for (let child = node.firstChild; child !== null; child = child.next) {
+        walk(child, own);
+      }
+    }
+  };
+  if (block !== null) {
+    walk(block, 0);
+  }
   return normalise(out);
 }
 
@@ -194,38 +231,47 @@ const show = (chars: readonly StyledChar[]): string =>
   chars.map((c) => `${c.ch}:${c.style}`).join(" ");
 
 /** Throw unless `md`, re-parsed, styles the same chars as `html` (decision 7). */
-export function assertStyleParity(html: string, md: string): void {
+export function assertStyleParity(html: string, md: string, only?: "Lezer" | "CommonMark"): void {
   const src = htmlStyledChars(html);
-  const got = markdownStyledChars(md);
-  const fail = (why: string): never => {
-    throw new Error(`style parity: ${why}\n  html: ${show(src)}\n  md:   ${show(got)}`);
-  };
-  if (src.map((c) => c.ch).join("") !== got.map((c) => c.ch).join("")) {
-    fail("text differs");
-  }
-  src.forEach((h, i) => {
-    const m = got[i];
-    switch (classify(h.ch)) {
-      case "word":
-        if (m.style !== h.style) {
-          fail(`word char ${i} restyled`);
-        }
-        return;
-      case "space":
-        if (m.style & ~h.style) {
-          fail(`space ${i} gained a style`);
-        }
-        return;
-      case "punct": {
-        if (m.style & ~h.style) {
-          fail(`punctuation ${i} gained a style`);
-        }
-        for (const s of [BOLD, ITALIC] as const) {
-          if (h.style & s && !(m.style & s) && !dropForced(src, i, s)) {
-            fail(`punctuation ${i} lost style ${s} without a forced demotion`);
+  for (const [parser, got] of [
+    ["Lezer", markdownStyledChars(md)],
+    ["CommonMark", commonmarkStyledChars(md)],
+  ] as const) {
+    if (only !== undefined && only !== parser) {
+      continue;
+    }
+    const fail = (why: string): never => {
+      throw new Error(
+        `style parity (${parser}): ${why}\n  html: ${show(src)}\n  md:   ${show(got)}`
+      );
+    };
+    if (src.map((c) => c.ch).join("") !== got.map((c) => c.ch).join("")) {
+      fail("text differs");
+    }
+    src.forEach((h, i) => {
+      const m = got[i];
+      switch (classify(h.ch)) {
+        case "word":
+          if (m.style !== h.style) {
+            fail(`word char ${i} restyled`);
+          }
+          return;
+        case "space":
+          if (m.style & ~h.style) {
+            fail(`space ${i} gained a style`);
+          }
+          return;
+        case "punct": {
+          if (m.style & ~h.style) {
+            fail(`punctuation ${i} gained a style`);
+          }
+          for (const s of [BOLD, ITALIC] as const) {
+            if (h.style & s && !(m.style & s) && !dropForced(src, i, s)) {
+              fail(`punctuation ${i} lost style ${s} without a forced demotion`);
+            }
           }
         }
       }
-    }
-  });
+    });
+  }
 }

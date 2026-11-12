@@ -1043,7 +1043,11 @@ describe("no file in any tsc program switches its whole file off", () => {
     // `quoll-perf-flag.d.ts` is an ambient declaration for a build-time flag;
     // it declares, it does not assert. Any addition to this list is a conscious
     // exemption made here rather than a file that drifted in.
-    expect(swept.declarations).toEqual(["src/shared/quoll-perf-flag.d.ts"]);
+    expect(swept.declarations).toEqual([
+      "src/shared/quoll-perf-flag.d.ts",
+      // Test-only CommonMark AST surface; runtime reader tests exercise this declaration.
+      "test/webview/paste/commonmark.d.ts",
+    ]);
   });
 
   it("gets a non-empty program from every project it discovered", () => {

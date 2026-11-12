@@ -200,8 +200,9 @@ function effectiveStyles(units: readonly Unit[]): StyleMask[] {
       shared &= units[j].style;
       j++;
     }
-    shared &= j < units.length ? units[j].style : 0;
-    styles.fill(shared, i, j);
+    const next = j < units.length ? units[j].style : 0;
+    shared &= next;
+    styles.fill(shared === next ? shared : 0, i, j);
     i = j;
   }
   return styles;
@@ -222,17 +223,7 @@ function render(u: Unit, opts: InlineRunOptions): string {
   }
 }
 
-const MARKER: Record<number, string> = { [BOLD]: "**", [ITALIC]: "*" };
-const STYLES = [BOLD, ITALIC] as const;
-
-/** How many consecutive units, starting at `from`, carry style `s`. */
-function extent(styles: readonly StyleMask[], from: number, s: StyleMask): number {
-  let i = from;
-  while (i < styles.length && styles[i] & s) {
-    i++;
-  }
-  return i - from;
-}
+const MARKER: Record<number, string> = { [BOLD]: "**", [ITALIC]: "*", [BOLD | ITALIC]: "***" };
 
 /** One maximal run of consecutive emitted `*` delimiters, all emitted at ONE unit
  *  boundary: between unit `at - 1` and unit `at` (`at === units.length` for the
@@ -251,89 +242,55 @@ interface Emission {
   groups: MarkerGroup[];
 }
 
-/** Emit markers with an open-stack. At each unit, close from the top of the stack
- *  down to the deepest open style the unit does not carry, then open the styles it
- *  is missing, the one that runs furthest outermost (so `***A**B***C**`, not a
- *  close-and-reopen per element). A NEUTRAL unit never opens anything: an opener
- *  right before whitespace is not left-flanking, so it is emitted with whatever is
- *  still open and its missing styles open at the next non-neutral unit
- *  (`**a*a*** *a*`, not `**a*a**** a*`). */
+/** Emit one complete pair per equal-mask region. Neutral units cannot open a region. */
 function emit(
   units: readonly Unit[],
   styles: readonly StyleMask[],
   opts: InlineRunOptions
 ): Emission {
   let out = "";
-  const stack: StyleMask[] = [];
+  let active = 0;
   const groups: MarkerGroup[] = [];
   let emittedSyntax = false;
-  const boundary = (at: number, closeDepth: number, opens: readonly StyleMask[]): void => {
+  const marker = (mask: StyleMask, at: number, open: boolean): void => {
     const from = out.length;
-    const hasClose = stack.length > closeDepth;
-    while (stack.length > closeDepth) {
-      out += MARKER[stack.pop() as StyleMask];
-    }
-    for (const s of opens) {
-      out += MARKER[s];
-      stack.push(s);
-    }
-    if (out.length > from) {
-      emittedSyntax = true;
-      groups.push({ from, to: out.length, at, hasOpen: opens.length > 0, hasClose });
-    }
+    out += MARKER[mask];
+    groups.push({ from, to: out.length, at, hasOpen: open, hasClose: !open });
+    emittedSyntax = true;
   };
   units.forEach((u, i) => {
     if (u.kind === "link" && u.labelSyntax) {
       emittedSyntax = true;
     }
     const target = styles[i];
-    const deepest = stack.findIndex((s) => !(target & s));
-    const closeDepth = deepest >= 0 ? deepest : stack.length;
-    const kept = stack.slice(0, closeDepth);
-    const opens = isNeutral(u)
-      ? []
-      : STYLES.filter((s) => target & s && !kept.includes(s)).sort(
-          (a, b) => extent(styles, i, b) - extent(styles, i, a)
-        );
-    boundary(i, closeDepth, opens);
-    // A `!` right before a link's `[` turns the link into an image. Test the
-    // emitted bytes, not unit adjacency: merging same-style runs can put the two
-    // together (`**![x](u)**`), and a marker between them (`!**[x](u)**`) already
-    // keeps them apart. Escaping only here keeps every other `!` unescaped. The
-    // `!` is a raw text byte (escapeText never escapes it, and every escaped
-    // backslash comes in pairs), and swapping it for `\!` keeps a group's
-    // punctuation neighbour punctuation.
+    const close = active !== 0 && active !== target;
+    const open = !isNeutral(u) && target !== 0 && active !== target;
+    if (close) {
+      marker(active, i, false);
+      active = 0;
+    }
+    if (open) {
+      if (close) {
+        out += "&#8288;";
+      }
+      marker(target, i, true);
+      active = target;
+    }
+    // Merging can put a literal exclamation immediately before a link.
     if (u.kind === "link" && out.endsWith("!")) {
       out = `${out.slice(0, -1)}\\!`;
     }
     out += render(u, opts);
   });
-  boundary(units.length, 0, []);
+  if (active) {
+    marker(active, units.length, false);
+  }
   return { markdown: out, emittedSyntax, groups };
 }
 
 // ---------------------------------------------------------------------------
-// Flanking classification — what `@lezer/markdown` 1.6.4 computes, not the spec.
-//
-// Mirrors `Emphasis()` in @lezer/markdown 1.6.4 (dist/index.js ~1453): the
-// parser scans the WHOLE run of `*` before classifying it, so a closer
-// immediately followed by an opener is one delimiter run with one pair of
-// neighbours. The neighbours are single UTF-16 code units (`cx.slice(start - 1,
-// start)`), whitespace is JS `\s` or the string edge, and punctuation is
-// `/[\p{S}|\p{P}]/u` on that one unit — so a surrogate half is neither, and
-// every astral code point is a word character. src/webview/cm/inline/inline-ir.ts
-// deliberately models the SPEC (whole code points, Unicode Zs whitespace) for
-// rendering; it is not shared, because what matters here is how the editor's own
-// parser will re-read the bytes. Pinned to 1.6.4 only: a Lezer bump that changes
-// the classification is caught by the re-parse oracle tests.
-//
-// The rule of three is a matching rule, not modelled by this classifier.
-// Lezer 1.6.4 recomputes delimiter sizes after consuming markers; it accepts
-// `**a*b****c*` and `*a**b*****c**` with the intended styles. CommonMark's
-// original-run-length rule rejects matches needed by these layouts;
-// markdown-it renders literal stars. These bytes also occur before the IR.
-// The oracle pins editor-parser compatibility, not CommonMark conformance.
-// See cm-paste-emphasis-oracle.test.ts and the spec-safe emission follow-up.
+// Flanking classification shared by the pinned Lezer and CommonMark parsers:
+// both inspect UTF-16 code units, use JS whitespace and Unicode punctuation.
 // ---------------------------------------------------------------------------
 
 const LEZER_PUNCTUATION = /[\p{S}|\p{P}]/u;
