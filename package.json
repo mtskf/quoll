@@ -363,6 +363,7 @@
     "@vitest/coverage-v8": "^4.1.12",
     "@vscode/test-electron": "^3.1.0",
     "@vscode/vsce": "^4.0.0",
+    "commonmark": "0.31.2",
     "esbuild": "^0.25.0",
     "happy-dom": "^21.0.4",
     "mocha": "^11",

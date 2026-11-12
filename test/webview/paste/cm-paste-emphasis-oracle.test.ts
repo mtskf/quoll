@@ -1,8 +1,46 @@
 // @vitest-environment happy-dom
+import { Parser } from "commonmark";
 import { Window } from "happy-dom";
 import { describe, expect, it, vi } from "vitest";
 import { htmlToMarkdown } from "../../../src/webview/cm/paste/html-to-markdown.js";
-import { assertStyleParity } from "./inline-style-oracle.js";
+import {
+  assertStyleParity,
+  commonmarkStyledChars,
+  markdownStyledChars,
+} from "./inline-style-oracle.js";
+
+it("CommonMark module exposes a usable Parser", () => {
+  const doc = new Parser().parse("**hello**");
+  expect(doc.type).toBe("document");
+  expect(doc.firstChild?.type).toBe("paragraph");
+  expect(doc.firstChild?.firstChild?.type).toBe("strong");
+  expect(doc.firstChild?.firstChild?.firstChild?.literal).toBe("hello");
+});
+
+it("CommonMark AST reader preserves emphasis code links entities and breaks", () => {
+  expect(commonmarkStyledChars("# **a** *b* \\* &#97; `x` [z](url)")).toEqual(
+    [..."a b * a x z"].map((ch, i) => ({ ch, style: i === 0 ? 1 : i === 2 ? 2 : 0 }))
+  );
+  expect(commonmarkStyledChars("a  \nb\nc")).toEqual([..."ab\nc"].map((ch) => ({ ch, style: 0 })));
+});
+
+it("both readers normalize padded code spans", () => {
+  for (const read of [commonmarkStyledChars, markdownStyledChars]) {
+    expect(read("`` `x` ``")).toEqual([..."`x`"].map((ch) => ({ ch, style: 0 })));
+    expect(read("**`` `x` ``**")).toEqual([..."`x`"].map((ch) => ({ ch, style: 1 })));
+    expect(read("a`   `b")).toEqual([..."a   b"].map((ch) => ({ ch, style: 0 })));
+  }
+});
+
+it("CommonMark oracle rejects the three Lezer-only layouts", () => {
+  for (const [html, md] of [
+    ["<b>a<i>b</i></b><i>c</i>", "**a*b****c*"],
+    ["<i>a<b>b</b></i><b>c</b>", "*a**b*****c**"],
+    ["<b><i>a</i>a<i>a</i></b>", "***a*a*a***"],
+  ]) {
+    expect(() => assertStyleParity(html, md)).toThrow(/CommonMark/);
+  }
+});
 
 describe("oracle self-tests", () => {
   const accept = (html: string, md: string) => () => {
@@ -61,6 +99,165 @@ describe("oracle self-tests", () => {
       /punctuation 1 lost style \d+ without a forced demotion/
     );
   });
+});
+
+it.each([
+  ["<b>a<i>b</i></b><i>c</i>", "**a**&#8288;***b***&#8288;*c*"],
+  ["<i>a<b>b</b></i><b>c</b>", "*a*&#8288;***b***&#8288;**c**"],
+  ["<b><i>a</i>a<i>a</i></b>", "***a***&#8288;**a**&#8288;***a***"],
+  ["<b>This is <i>important</i> text</b>", "**This is** ***important*** **text**"],
+  ["<b>a <i>b</i> c</b>", "**a** ***b*** **c**"],
+  ["<b>a <i>b:</i> c</b>", "**a** ***b:*** **c**"],
+  ["<b><i>a</i> a <i>a</i></b>", "***a*** **a** ***a***"],
+])("balances every equal-style region: %s", (html, expected) => {
+  assertStyleParity(html, expected);
+  expect(htmlToMarkdown(html)?.markdown).toBe(expected);
+});
+
+it.each([
+  ["<b>a<i>b</i></b><i>c</i>", "**a**&#8288;***b***&#8288;*c*"],
+  ["<i>a<b>b</b></i><b>c</b>", "*a*&#8288;***b***&#8288;**c**"],
+  ["<b><i>a</i>a<i>a</i></b>", "***a***&#8288;**a**&#8288;***a***"],
+  ["<b>a <i>b</i> c</b>", "**a** ***b*** **c**"],
+])("serializes balanced link labels independently of outer regions: %s", (label, expected) => {
+  const html = `<a href="u">${label}</a>`;
+  const markdown = htmlToMarkdown(html)?.markdown;
+  expect(markdown).toBe(`[${expected}](u)`);
+  assertStyleParity(html, markdown as string);
+});
+
+it.each([
+  "a<b>😀</b>",
+  "<b>😀</b>a",
+  "<b>a😀</b>x",
+  "<b><code>x</code></b>😀",
+  '<a href="u">a<b>😀</b></a>',
+])("preserves astral word styles under both pinned parsers: %s", (html) => {
+  const markdown = htmlToMarkdown(html)?.markdown;
+  expect(markdown).toBeDefined();
+  assertStyleParity(html, markdown as string);
+});
+
+it.each([
+  "\u00a0",
+  "\u2028",
+  "\u2029",
+  "\ufeff",
+])("Unicode whitespace agrees in both readers: %s", (space) => {
+  const source = `a${space}**b**`;
+  const expected = [
+    { ch: "a", style: 0 },
+    ...(space === "\ufeff" ? [] : [{ ch: space, style: 0 }]),
+    { ch: "b", style: 1 },
+  ];
+  expect(commonmarkStyledChars(source)).toEqual(expected);
+  expect(markdownStyledChars(source)).toEqual(expected);
+  const html = `a${space}<b>b</b>`;
+  const converted = htmlToMarkdown(html)?.markdown as string;
+  assertStyleParity(html, converted);
+});
+
+it.each([
+  "<code>&amp;#8288;</code>",
+  "<b>a</b><i><code>x</code></i>",
+  "<code>`x`</code>",
+  "<b><code>`x`</code></b>",
+])("code and reference text survive conversion: %s", (html) => {
+  const markdown = htmlToMarkdown(html)?.markdown;
+  expect(markdown).toBeDefined();
+  assertStyleParity(html, markdown as string);
+});
+
+it.each([
+  "<h1><b>a<i>b</i></b> #</h1>",
+  "<h1>a<br>b</h1>",
+  '<a href="u">a<br>b</a>',
+  "<p>a<br>b</p>",
+  "a &amp; b",
+  "&amp;#8288;",
+])("heading break ampersand reference interactions: %s", (html) => {
+  const markdown = htmlToMarkdown(html)?.markdown;
+  expect(markdown).toBeDefined();
+  if (!html.includes("<br>")) {
+    assertStyleParity(html, markdown as string);
+  }
+});
+
+it("heading break ampersand and reference bytes remain literal", () => {
+  expect(htmlToMarkdown("<h1>a<br>b</h1>")?.markdown).toBe("# a b");
+  expect(htmlToMarkdown('<a href="u">a<br>b</a>')?.markdown).toBe("[a b](u)");
+  expect(htmlToMarkdown("<p>a<br>b</p>")?.markdown).toBe("a\\\nb");
+  expect(htmlToMarkdown("a &amp; b")?.markdown).toBe("a \\& b");
+  expect(htmlToMarkdown("&amp;#8288;")?.markdown).toBe("\\&#8288;");
+});
+
+it.each(["Lezer", "CommonMark"] as const)("%s oracle self-tests name every rejection", (parser) => {
+  for (const [html, markdown, reason] of [
+    ["<b>a</b>", "**b**", "text differs"],
+    ["<b>a</b>", "a", "word char 0 restyled"],
+    ["a", "**a**", "word char 0 restyled"],
+    ["<b>a</b> <b>b</b>", "**a b**", "space 1 gained a style"],
+    ["<b>a</b>.<b>b</b>", "**a.b**", "punctuation 1 gained a style"],
+    ["<b>a.</b>", "**a**.", "punctuation 1 lost style"],
+  ]) {
+    expect(() => assertStyleParity(html, markdown, parser)).toThrow(
+      new RegExp(`${parser}.*${reason}`)
+    );
+  }
+});
+
+it.each([
+  ['<b>z</b><a href="u"><b>a<i>b</i></b><i>c</i></a>', "**z**[**a**&#8288;***b***&#8288;*c*](u)"],
+  ['<i>z</i><a href="u"><i>a<b>b</b></i><b>c</b></a>', "*z*[*a*&#8288;***b***&#8288;**c**](u)"],
+  [
+    '<b>z</b><a href="u"><b><i>a</i>a<i>a</i></b></a>',
+    "**z**[***a***&#8288;**a**&#8288;***a***](u)",
+  ],
+  ['<b>z</b><a href="u"><b>a <i>b</i> c</b></a>', "**z**[**a** ***b*** **c**](u)"],
+  ['<b><a href="u">a<i>b</i></a></b>y', "[**a**&#8288;***b***](u)y"],
+  ['<b><a href="u">x</a></b><i>y</i>', "**[x](u)**&#8288;*y*"],
+  ['<b><a href="u">x</a></b>y', "[**x**](u)y"],
+])("link labels beside outer regions pin separator placement: %s", (html, expected) => {
+  const markdown = htmlToMarkdown(html)?.markdown as string;
+  expect(markdown).toBe(expected);
+  assertStyleParity(html, markdown);
+});
+
+it.each([
+  ["<h1><b>a<br>b</b></h1>", "<h1><b>a b</b></h1>", "# **a b**"],
+  ['<a href="u"><b>a<br>b</b></a>', '<a href="u"><b>a b</b></a>', "[**a b**](u)"],
+  ["<p><b>a<br>b</b></p>", "<p><b>a<br>b</b></p>", "**a\\\nb**"],
+])("heading and link break folding preserves styles in both oracles: %s", (html, parityHtml, expected) => {
+  const markdown = htmlToMarkdown(html)?.markdown as string;
+  expect(markdown).toBe(expected);
+  // Headings and labels fold breaks to spaces; paragraphs retain a hard break.
+  assertStyleParity(parityHtml, markdown);
+});
+
+it("code reference bytes remain opaque next to a separator", () => {
+  const html = "<b><code>&amp;#8288;</code></b><i>x</i>";
+  const markdown = htmlToMarkdown(html)?.markdown as string;
+  expect(markdown).toBe("**`&#8288;`**&#8288;*x*");
+  assertStyleParity(html, markdown);
+});
+
+it.each([
+  '<b>!</b><b><a href="u">x</a></b>',
+  '!<a href="u">x</a>',
+  '!<b><a href="u">x</a></b>',
+])("a ! before a link remains a link in both ASTs: %s", (html) => {
+  const markdown = htmlToMarkdown(html)?.markdown as string;
+  const names: string[] = [];
+  const visit = (node: ReturnType<Parser["parse"]>): void => {
+    names.push(node.type);
+    for (let child = node.firstChild; child; child = child.next) {
+      visit(child);
+    }
+  };
+  visit(new Parser().parse(markdown));
+  expect(names).toContain("link");
+  expect(names).not.toContain("image");
+  assertStyleParity(html, markdown);
 });
 
 function roundTrip(html: string): void {
@@ -145,11 +342,18 @@ describe("emphasis round-trip against the Lezer re-parse", () => {
     roundTrip(html);
   });
 
-  // Pins compatibility with Lezer 1.6.4's re-parse of these nested-closer runs;
-  // it is not a claim of CommonMark conformance.
+  // Decision 1 balances complete regions and closes before neutral content.
   it.each([
-    ["strong then italic after nested italic", "<b>a<i>b</i></b><i>c</i>", "**a*b****c*"],
-    ["italic then strong after nested strong", "<i>a<b>b</b></i><b>c</b>", "*a**b*****c**"],
+    [
+      "strong then italic after nested italic",
+      "<b>a<i>b</i></b><i>c</i>",
+      "**a**&#8288;***b***&#8288;*c*",
+    ],
+    [
+      "italic then strong after nested strong",
+      "<i>a<b>b</b></i><b>c</b>",
+      "*a*&#8288;***b***&#8288;**c**",
+    ],
   ])("%s", (_name, html, expected) => {
     expect(htmlToMarkdown(html)?.markdown).toBe(expected);
     expect(() => assertStyleParity(html, expected)).not.toThrow();

@@ -51,7 +51,8 @@ describe("serializeInlineRuns", () => {
   });
 
   it("closes one style and opens the next at a style change", () => {
-    expect(md([t("A", B), t("B", I)])).toBe("**A***B*");
+    // Decision 1 balances complete regions and closes before neutral content; separators avoid mixed-boundary repair.
+    expect(md([t("A", B), t("B", I)])).toBe("**A**&#8288;*B*");
   });
 
   it("keeps an interior space's source style", () => {
@@ -88,6 +89,57 @@ const link = (label: InlineAtom[], style: StyleMask = 0, destination = "u"): Inl
   style,
 });
 
+it("closes regions before neutral stretches", () => {
+  expect(md([t("a", B), t(" ", B), t("b", B | I), t(" ", B), t("c", B)])).toBe(
+    "**a** ***b*** **c**"
+  );
+  expect(md([t("a", B | I), t(" ", B), t("b", B | I)])).toBe("***a*** ***b***");
+  expect(md([t("a", B), t(" ", 0), t("b", B)])).toBe("**a** **b**");
+  expect(md([t("a", B), t(" ", B), t("b", B)])).toBe("**a b**");
+  expect(run([t(ZWJ, B)])).toEqual({ markdown: ZWJ, emittedSyntax: false });
+  expect(md([t("a", B), t(" ", B), t(" ", 0), t("b", B)])).toBe("**a**  **b**");
+  expect(md([t("a", B), t(ZWJ, 0), t("b", B)])).toBe(`**a**${ZWJ}**b**`);
+  expect(md([t("a", B), br(B), t("b", B)])).toBe("**a\\\nb**");
+});
+
+it("inserts one separator only between touching balanced regions", () => {
+  const marker = ["", "**", "*", "***"];
+  for (let a = 0; a < 4; a++) {
+    for (let b = 0; b < 4; b++) {
+      const expected =
+        a === b
+          ? `${marker[a]}xy${marker[a]}`
+          : `${marker[a]}x${marker[a]}${a && b ? "&#8288;" : ""}${marker[b]}y${marker[b]}`;
+      expect(md([t("x", a), t("y", b)])).toBe(expected);
+    }
+  }
+});
+
+it("balanced transitions need no repair budget", () => {
+  const budget = { remaining: 0 };
+  expect(
+    serializeInlineRuns([t("a", B), t("b", B | I), t("c", I)], {
+      trimEdges: false,
+      escapeText: escapeInline,
+      repairBudget: budget,
+    }).markdown
+  ).toBe("**a**&#8288;***b***&#8288;*c*");
+  expect(
+    serializeInlineRuns([t("a", I), t("b", B | I), t("c", B)], {
+      trimEdges: false,
+      escapeText: escapeInline,
+      repairBudget: budget,
+    }).markdown
+  ).toBe("*a*&#8288;***b***&#8288;**c**");
+  expect(
+    serializeInlineRuns([t("a", B | I), t("b", B), t("c", B | I)], {
+      trimEdges: false,
+      escapeText: escapeInline,
+      repairBudget: budget,
+    }).markdown
+  ).toBe("***a***&#8288;**b**&#8288;***c***");
+});
+
 describe("link atoms", () => {
   it("serialises the label's own emphasis inside the brackets", () => {
     expect(run([link([t("x", B)])])).toEqual({ markdown: "[**x**](u)", emittedSyntax: true });
@@ -108,15 +160,18 @@ describe("link atoms", () => {
 
 describe("nested emission", () => {
   it("keeps the longer-running style outermost", () => {
-    expect(md([t("A", B | I), t("B", I), t("C", B)])).toBe("***A**B***C**");
+    // Decision 1 balances complete regions and closes before neutral content; separators avoid mixed-boundary repair.
+    expect(md([t("A", B | I), t("B", I), t("C", B)])).toBe("***A***&#8288;*B*&#8288;**C**");
   });
 
   it("never opens a marker right before a neutral unit (leading space)", () => {
-    expect(md([t("a", B), t("a", B | I), t(" a", I)])).toBe("**a*a*** *a*");
+    // Decision 1 balances complete regions and closes before neutral content; separators avoid mixed-boundary repair.
+    expect(md([t("a", B), t("a", B | I), t(" a", I)])).toBe("**a**&#8288;***a*** *a*");
   });
 
   it("never opens a marker right before a neutral unit (trailing space)", () => {
-    expect(md([t("a", I), t("a ", B | I), t("a", B)])).toBe("*a**a*** **a**");
+    // Decision 1 balances complete regions and closes before neutral content; separators avoid mixed-boundary repair.
+    expect(md([t("a", I), t("a ", B | I), t("a", B)])).toBe("*a*&#8288;***a*** **a**");
   });
 });
 
@@ -143,7 +198,8 @@ describe("flanking repair", () => {
   });
 
   it("classifies a closer-plus-opener marker run as one group", () => {
-    expect(md([t("a", B), t("a", B | I), t("(a)", I)])).toBe("**a*a***(*a)*");
+    // Decision 1 balances complete regions and closes before neutral content; separators avoid mixed-boundary repair.
+    expect(md([t("a", B), t("a", B | I), t("(a)", I)])).toBe("**a**&#8288;***a***&#8288;*(a)*");
   });
 
   it("never leaves markers around a lone joiner a demotion split off", () => {
@@ -207,8 +263,10 @@ describe("entity fallback", () => {
   });
 
   it.each([
-    ["closing", [t(`${ZWJ}a`, B), t(".", I)], `**${ZWJ}&#97;***.*`, `<b>${ZWJ}a</b><i>.</i>`],
-    ["opening", [t(".", I), t(`a${ZWJ}`, B)], `*.***&#97;${ZWJ}**`, `<i>.</i><b>a${ZWJ}</b>`],
+    // Decision 1 balances complete regions and closes before neutral content; separators avoid mixed-boundary repair.
+    ["closing", [t(`${ZWJ}a`, B), t(".", I)], `**${ZWJ}a**&#8288;*.*`, `<b>${ZWJ}a</b><i>.</i>`],
+    // Decision 1 balances complete regions and closes before neutral content; separators avoid mixed-boundary repair.
+    ["opening", [t(".", I), t(`a${ZWJ}`, B)], `*.*&#8288;**a${ZWJ}**`, `<i>.</i><b>a${ZWJ}</b>`],
   ] as const)("keeps a raw joiner beside an encoded %s word edge", (_edge, atoms, expected, html) => {
     const out = md(atoms);
     expect(out).toBe(expected);
@@ -216,12 +274,14 @@ describe("entity fallback", () => {
   });
 
   it("re-checks after each repair until the cascade settles", () => {
-    expect(md([t("a", 0), t("a", B), t(".", I)])).toBe("&#97;**&#97;***.*");
+    // Decision 1 balances complete regions and closes before neutral content; separators avoid mixed-boundary repair.
+    expect(md([t("a", 0), t("a", B), t(".", I)])).toBe("a**a**&#8288;*.*");
   });
 });
 
 describe("repair cap", () => {
-  const cascade = [t("a", 0), t("a", B), t(".", I)];
+  // Decision 1 full-region balance removes the old cascade; this fixture still needs two repairs.
+  const cascade = [t("a", 0), t(".", B), t("a", 0)];
   const capped = (repairBudget: RepairBudget) => () =>
     serializeInlineRuns(cascade, { trimEdges: false, escapeText: escapeInline, repairBudget });
 
@@ -248,7 +308,7 @@ describe("repair cap", () => {
     const perCall = 1_000_000 - probe.remaining;
     expect(perCall).toBeGreaterThan(0);
     const shared = { remaining: perCall };
-    expect(capped(shared)()).toEqual({ markdown: "&#97;**&#97;***.*", emittedSyntax: true });
+    expect(capped(shared)()).toEqual({ markdown: "&#97;**.**&#97;", emittedSyntax: true });
     expect(shared.remaining).toBe(0);
     expect(capped(shared)).toThrow(InlineRepairCapExceeded);
   });
@@ -299,7 +359,7 @@ describe("repair cap", () => {
     const probe = { remaining: 1_000_000 };
     capped(probe)();
     // Exactly the repairs' cost: the final, settled pass is free.
-    expect(capped({ remaining: 1_000_000 - probe.remaining })().markdown).toBe("&#97;**&#97;***.*");
+    expect(capped({ remaining: 1_000_000 - probe.remaining })().markdown).toBe("&#97;**.**&#97;");
     expect(warn).not.toHaveBeenCalled();
   });
 });

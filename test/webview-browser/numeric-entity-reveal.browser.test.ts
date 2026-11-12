@@ -280,3 +280,89 @@ it("repair fallback displays its letter and selection-only reveal sends no edit"
     }
   }
 });
+
+it("pasted balanced regions conceal and reveal exactly their separators", async () => {
+  for (const [html, expected] of [
+    ["<b>a<i>b</i></b><i>c</i>", "**a**&#8288;***b***&#8288;*c*"],
+    ["<i>a<b>b</b></i><b>c</b>", "*a*&#8288;***b***&#8288;**c**"],
+    ["<b><i>a</i>a<i>a</i></b>", "***a***&#8288;**a**&#8288;***a***"],
+    ['<a href="u"><b>a<i>b</i></b><i>c</i></a>', "[**a**&#8288;***b***&#8288;*c*](u)"],
+  ]) {
+    const fixture = await productionPasteFixture();
+    const observer = errorObserver(fixture);
+    try {
+      await fixture.select(0);
+      fixture.paste({ "text/html": html });
+      await expect.poll(() => fixture.view.state.doc.toString().trim()).toBe(expected);
+      const source = fixture.view.state.doc.toString();
+      await fixture.posted(source);
+      const offsets = [...source.matchAll(/&#8288;/g)].map((match) => match.index);
+      expect(offsets).toEqual(
+        [...expected.matchAll(/&#8288;/g)].map((match) => match.index + source.indexOf(expected))
+      );
+      // The content characters retain their source styles in the rendered editor.
+      const letters = [...expected.matchAll(/[abc]/g)].filter(
+        (match) => !expected.slice(0, match.index).endsWith("&#")
+      );
+      let styles: boolean[][];
+      if (html.startsWith("<i>")) {
+        styles = [
+          [false, true],
+          [true, true],
+          [true, false],
+        ];
+      } else if (html.startsWith("<b><i>")) {
+        styles = [
+          [true, true],
+          [true, false],
+          [true, true],
+        ];
+      } else {
+        styles = [
+          [true, false],
+          [true, true],
+          [false, true],
+        ];
+      }
+      for (let i = 0; i < letters.length; i++) {
+        const pos = source.indexOf(expected) + letters[i].index;
+        const dom = fixture.view.domAtPos(pos);
+        const element =
+          dom.node.nodeType === Node.ELEMENT_NODE ? (dom.node as Element) : dom.node.parentElement;
+        expect(element).not.toBeNull();
+        const computed = fixture.win.getComputedStyle(element as Element);
+        expect(Number.parseInt(computed.fontWeight, 10) >= 600).toBe(styles[i][0]);
+        expect(computed.fontStyle === "italic").toBe(styles[i][1]);
+      }
+      const changes = fixture.changes();
+      const edits = fixture.edits().length;
+      await fixture.select(source.length);
+      await settled();
+      const widgets = [...fixture.view.dom.querySelectorAll<HTMLElement>(".quoll-numeric-entity")];
+      expect(widgets).toHaveLength(2);
+      expect(fixture.view.dom.textContent).not.toContain("&#8288;");
+      for (const widget of widgets) {
+        expect(widget.textContent).toBe("\u2060");
+        expect(widget.getBoundingClientRect().width).toBeLessThan(1);
+      }
+      for (const from of offsets) {
+        fixture.view.dispatch({ selection: { anchor: from + 2 } });
+        await settled();
+        expect(
+          [...fixture.view.dom.querySelectorAll(".quoll-syntax-reveal")].some(
+            (el) => el.textContent === "&#8288;"
+          )
+        ).toBe(true);
+        await fixture.select(source.length);
+        await settled();
+      }
+      expect(fixture.view.state.doc.toString()).toBe(source);
+      expect(fixture.changes()).toBe(changes);
+      expect(fixture.edits()).toHaveLength(edits);
+      expect(observer.errors).toEqual([]);
+    } finally {
+      observer.restore();
+      fixture.dispose();
+    }
+  }
+});

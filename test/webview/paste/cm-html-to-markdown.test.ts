@@ -412,28 +412,31 @@ describe("htmlToMarkdown — block constructs", () => {
     });
     const CAP_WARNING = "[quoll] rich paste: emphasis repair cap exceeded";
 
-    // A sequential cascade: `a` then alternating bold/italic `a`s, closed by a bold
-    // `.`. Each repair exposes the next failing group, so batching cannot collapse
-    // it and the work grows with depth x run length. Measured: one run fails from
-    // 577 pairs, and 50-pair paragraphs fail together from 130 of them.
+    // Decision 1 full-region balance eliminates the old cascade's repairs.
     const cascade = (pairs: number): string =>
       `<p>a${"<b>a</b><i>a</i>".repeat(pairs)}<b>.</b></p>`;
+    const para = (n: number): string => `<p><a href="u">${"&".repeat(n)}</a>a<b>.</b>a</p>`;
 
-    it("returns null when one long run is a deep repair cascade", () => {
+    it("converts the old cascade without warning", () => {
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-      expect(convert(cascade(1000))).toBeNull();
-      // The repair cap specifically, not some other throw or cap.
+      expect(convert(cascade(1000))).not.toBeNull();
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    it("charges escaped link label bytes on each genuine repair pass", () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      expect(convert(para(1_100_000))).toBeNull();
       expect(warn).toHaveBeenCalledTimes(1);
       expect(warn).toHaveBeenCalledWith(CAP_WARNING);
     });
     it("bounds the repair work across blocks, not per block", () => {
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-      // The same paragraph passes 60 times over but not 260 times: each block
+      // The same paragraph passes 60 times over but not 120 times: each block
       // alone is cheap, and the budget is shared by the whole conversion.
-      const para = cascade(50);
-      expect(convert(para.repeat(60))).not.toBeNull();
+      const block = para(10_000);
+      expect(convert(block.repeat(60))).not.toBeNull();
       expect(warn).not.toHaveBeenCalled();
-      expect(convert(para.repeat(260))).toBeNull();
+      expect(convert(block.repeat(120))).toBeNull();
       expect(warn).toHaveBeenCalledTimes(1);
       expect(warn).toHaveBeenCalledWith(CAP_WARNING);
     });
@@ -1366,9 +1369,10 @@ describe("inline style runs (PASTE-01b)", () => {
     expect(convert("<b>A<span>B</span></b>")).toBe("**AB**");
   });
 
-  it("nests overlapping emphasis with the longer run outermost", () => {
+  it("balances overlapping emphasis regions", () => {
+    // Decision 1 full-region balance closes before neutral content.
     expect(convert("<strong><em>A</em></strong><em>B</em><strong>C</strong>")).toBe(
-      "***A**B***C**"
+      "***A***&#8288;*B*&#8288;**C**"
     );
   });
 
