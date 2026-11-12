@@ -304,23 +304,26 @@ it("pasted balanced regions conceal and reveal exactly their separators", async 
       const letters = [...expected.matchAll(/[abc]/g)].filter(
         (match) => !expected.slice(0, match.index).endsWith("&#")
       );
-      const styles = html.startsWith("<i>")
-        ? [
-            [false, true],
-            [true, true],
-            [true, false],
-          ]
-        : html.startsWith("<b><i>")
-          ? [
-              [true, true],
-              [true, false],
-              [true, true],
-            ]
-          : [
-              [true, false],
-              [true, true],
-              [false, true],
-            ];
+      let styles: boolean[][];
+      if (html.startsWith("<i>")) {
+        styles = [
+          [false, true],
+          [true, true],
+          [true, false],
+        ];
+      } else if (html.startsWith("<b><i>")) {
+        styles = [
+          [true, true],
+          [true, false],
+          [true, true],
+        ];
+      } else {
+        styles = [
+          [true, false],
+          [true, true],
+          [false, true],
+        ];
+      }
       for (let i = 0; i < letters.length; i++) {
         const pos = source.indexOf(expected) + letters[i].index;
         const dom = fixture.view.domAtPos(pos);

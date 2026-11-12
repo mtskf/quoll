@@ -167,8 +167,12 @@ export function commonmarkStyledChars(md: string): StyledChar[] {
   }
   const out: StyledChar[] = [];
   const walk = (node: NonNullable<typeof block>, style: StyleMask): void => {
-    const own = (style |
-      (node.type === "strong" ? BOLD : node.type === "emph" ? ITALIC : 0)) as StyleMask;
+    let own = style;
+    if (node.type === "strong") {
+      own = (style | BOLD) as StyleMask;
+    } else if (node.type === "emph") {
+      own = (style | ITALIC) as StyleMask;
+    }
     if (node.type === "text" || node.type === "code") {
       pushChars(out, node.literal ?? "", own);
     } else if (node.type === "softbreak") {
