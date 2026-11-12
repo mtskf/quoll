@@ -431,7 +431,7 @@ describe("htmlToMarkdown — block constructs", () => {
     });
     it("bounds the repair work across blocks, not per block", () => {
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-      // The same paragraph passes 60 times over but not 260 times: each block
+      // The same paragraph passes 60 times over but not 120 times: each block
       // alone is cheap, and the budget is shared by the whole conversion.
       const block = para(10_000);
       expect(convert(block.repeat(60))).not.toBeNull();
