@@ -154,11 +154,26 @@ describe("headingSlugSource", () => {
     expect(slugOf("# A <?php x ?> B")).toBe("a-b");
   });
 
-  it("does NOT decode entities — a known, documented parity gap", () => {
+  it("does NOT decode named entities — a known, documented parity gap", () => {
     // GitHub resolves `&amp;` to `&` and then drops it as punctuation. Dropping
     // the Entity node instead would swallow `&eacute;`, which GitHub keeps.
     // Pinned so the gap is a decision on record rather than a surprise.
     expect(slugOf("# A &amp; B")).toBe("a-amp-b");
+  });
+
+  it("decodes numeric references before slugging", () => {
+    expect(slugOf("# Caf&#233;")).toBe("café");
+    expect(slugOf("# Caf&#xE9;")).toBe("café");
+    expect(slugOf("# A&#32;B")).toBe("a-b");
+    expect(slugOf("# A &#38; B")).toBe("a-b");
+    // WORD JOINER (what paste emits between flanking-sensitive runs) is not a
+    // letter, so it vanishes from the slug instead of leaking `8288`.
+    expect(slugOf("# A&#8288;B")).toBe("ab");
+    expect(slugOf("# **a**&#8288;b")).toBe("ab");
+  });
+
+  it("keeps numeric references inside inline code literal", () => {
+    expect(slugOf("# The `&#8288;` code")).toBe("the-8288-code");
   });
 
   it("drops an HTML comment, matching GitHub rather than Quoll's rendering", () => {
