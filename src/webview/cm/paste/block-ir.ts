@@ -1,7 +1,7 @@
 import { MAX_LIST_NUMBER } from "../list/list-transform.js";
 import { HARD_BREAK } from "./inline-runs.js";
 
-/** Block representation for rich HTML paste. */
+/** DOM-free block representation and serialization for rich HTML paste. */
 export interface PreparedInline {
   readonly markdown: string;
   readonly rich: boolean;
@@ -43,6 +43,13 @@ function indent(text: string, prefix: string): string {
     .join("\n");
 }
 
+export function fenceCode(body: string, lang: string): string {
+  const runs = body.match(/`+/g);
+  const longest = runs ? Math.max(...runs.map((run) => run.length)) : 0;
+  const fence = "`".repeat(Math.max(3, longest + 1));
+  return `${fence}${lang}\n${body}\n${fence}`;
+}
+
 export function serializeBlockNodes(nodes: readonly BlockNode[]): {
   markdown: string;
   rich: boolean;
@@ -56,11 +63,8 @@ export function serializeBlockNodes(nodes: readonly BlockNode[]): {
           markdown: `${"#".repeat(node.level)} ${node.inline.markdown.replace(/(^| )(#+)$/, "$1\\$2")}`,
           rich: true,
         };
-      case "code": {
-        const longest = Math.max(0, ...Array.from(node.body.matchAll(/`+/g), (m) => m[0].length));
-        const fence = "`".repeat(Math.max(3, longest + 1));
-        return { markdown: `${fence}${node.lang}\n${node.body}\n${fence}`, rich: true };
-      }
+      case "code":
+        return { markdown: fenceCode(node.body, node.lang), rich: true };
       case "table":
         return { markdown: node.gfm, rich: node.content === "visible" };
       case "rule":

@@ -70,6 +70,25 @@ describe("block baseline pins", () => {
   });
 });
 
+describe("wrapper residue and richness", () => {
+  it.each([
+    ["heading", "<h1>", "</h1>", "# `x`"],
+    ["quote", "<blockquote>", "</blockquote>", "> `x`"],
+    ["list item", "<ul><li>", "</li></ul>", "- `x`"],
+  ])("drops blank %s residue but keeps readable code", (_label, open, close, expected) => {
+    const prefix = "<p>plain</p>";
+    const buriedRule = "<span><span><hr></span></span>";
+    expect(htmlToMarkdown(`${prefix}${open}${buriedRule}<b>&#8205;</b>${close}`)).toEqual({
+      markdown: "plain",
+      emittedMarkdownSyntax: false,
+    });
+    expect(htmlToMarkdown(`${prefix}${open}${buriedRule}<code>x</code>${close}`)).toEqual({
+      markdown: `plain\n\n${expected}`,
+      emittedMarkdownSyntax: true,
+    });
+  });
+});
+
 describe("htmlToMarkdown — inline constructs", () => {
   it("converts bold (<strong> and <b>)", () => {
     expect(convert("<p><strong>a</strong> <b>c</b></p>")).toBe("**a** **c**");
