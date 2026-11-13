@@ -1,6 +1,10 @@
 // @vitest-environment happy-dom
 import { describe, expect, it } from "vitest";
-import { type Ctx, collectInline } from "../../../src/webview/cm/paste/html-to-markdown.js";
+import {
+  type Ctx,
+  collectInline,
+  htmlToMarkdown,
+} from "../../../src/webview/cm/paste/html-to-markdown.js";
 import {
   BOLD,
   CapExceeded,
@@ -14,7 +18,6 @@ const I = ITALIC;
 const freshCtx = (): Ctx => ({
   nodes: 0,
   outLen: 0,
-  emittedMarkdownSyntax: false,
   repair: { remaining: Number.POSITIVE_INFINITY },
 });
 
@@ -79,7 +82,10 @@ describe("collectInline", () => {
         style: 0,
       },
     ]);
-    expect(ctx.emittedMarkdownSyntax).toBe(true);
+    expect(htmlToMarkdown('<a href="https://e.x"><b>t</b></a>')).toEqual({
+      markdown: "[**t**](https://e.x)",
+      emittedMarkdownSyntax: true,
+    });
   });
 
   it("encodes the destination as Markdown", () => {

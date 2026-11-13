@@ -42,6 +42,53 @@ function formsGfmTable(md: string): boolean {
   return parsesToNode(md, "Table");
 }
 
+describe("block baseline pins", () => {
+  it("segments sibling breaks across comments and skipped elements, but not empty inline elements", () => {
+    expect(convert("<p>a<br><!-- comment --><br>b</p>")).toBe("a\n\nb");
+    expect(convert("<p>a<br><style>x</style><br>b</p>")).toBe("a\n\nb");
+    expect(convert("<p>a<br><span></span><br>b</p>")).toBe("a\\\n\\\nb");
+  });
+  it("reports the repair cap before a later failing table", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(
+      htmlToMarkdown(`<p><a href="u">${"&".repeat(1_100_000)}</a>a<b>.</b>a</p><table></table>`)
+    ).toBeNull();
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      "[quoll] rich paste: emphasis repair cap exceeded"
+    );
+    warn.mockRestore();
+  });
+  it("keeps a literal backslash beside a break", () => {
+    expect(convert("<p>a\\<br>b</p>")).toBe("a\\\\\\\nb");
+  });
+  it("drops an invisible wrapper with an interior break", () => {
+    expect(
+      htmlToMarkdown(
+        "<p>plain</p><blockquote><span><span><hr></span></span>&#8205;<br>&#8205;</blockquote>"
+      )
+    ).toEqual({ markdown: "plain", emittedMarkdownSyntax: false });
+  });
+});
+
+describe("wrapper residue and richness", () => {
+  it.each([
+    ["heading", "<h1>", "</h1>", "# `x`"],
+    ["quote", "<blockquote>", "</blockquote>", "> `x`"],
+    ["list item", "<ul><li>", "</li></ul>", "- `x`"],
+  ])("drops blank %s residue but keeps readable code", (_label, open, close, expected) => {
+    const prefix = "<p>plain</p>";
+    const buriedRule = "<span><span><hr></span></span>";
+    expect(htmlToMarkdown(`${prefix}${open}${buriedRule}<b>&#8205;</b>${close}`)).toEqual({
+      markdown: "plain",
+      emittedMarkdownSyntax: false,
+    });
+    expect(htmlToMarkdown(`${prefix}${open}${buriedRule}<code>x</code>${close}`)).toEqual({
+      markdown: `plain\n\n${expected}`,
+      emittedMarkdownSyntax: true,
+    });
+  });
+});
+
 describe("htmlToMarkdown — inline constructs", () => {
   it("converts bold (<strong> and <b>)", () => {
     expect(convert("<p><strong>a</strong> <b>c</b></p>")).toBe("**a** **c**");
@@ -340,8 +387,19 @@ describe("htmlToMarkdown — block constructs", () => {
   it("keeps two paragraphs in a list item as an indented loose item", () => {
     expect(convert("<ul><li><p>a</p><p>b</p></li></ul>")).toBe("- a\n\n  b");
   });
+  it("keeps list-like continuation text loose", () => {
+    expect(convert("<ul><li><p>a</p><p>- literal</p></li></ul>")).toBe("- a\n\n  \\- literal");
+  });
   it("renders a code block inside a list item (not flattened to inline code)", () => {
     expect(convert("<ul><li><pre><code>x</code></pre></li></ul>")).toBe("- ```\n  x\n  ```");
+  });
+  it("keeps blank lines inside a list item's code block free of padding", () => {
+    expect(convert("<ul><li><pre><code>a\n\nb</code></pre></li></ul>")).toBe(
+      "- ```\n  a\n\n  b\n  ```"
+    );
+    expect(convert("<ul><li><p>x</p><pre><code>a\n\nb</code></pre></li></ul>")).toBe(
+      "- x\n\n  ```\n  a\n\n  b\n  ```"
+    );
   });
   it("renders a blockquote inside a list item", () => {
     expect(convert("<ul><li><blockquote>q</blockquote></li></ul>")).toBe("- > q");
@@ -866,6 +924,14 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
     const result = htmlToMarkdown(`<div>- [ ] task</div>${wrapped}`);
     expect(result?.emittedMarkdownSyntax).toBe(false);
     expect(result?.markdown).toBe(expected);
+  });
+
+  it("keeps rich siblings around a nested spacer wrapper", () => {
+    const result = htmlToMarkdown(
+      "<h1>before</h1><blockquote><blockquote><table><tr><td><hr></td></tr></table></blockquote></blockquote><h2>after</h2>"
+    );
+    expect(result?.markdown).toBe("# before\n\n> > |  |\n> > | --- |\n\n## after");
+    expect(result?.emittedMarkdownSyntax).toBe(true);
   });
 
   it.each([

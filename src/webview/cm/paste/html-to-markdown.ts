@@ -33,32 +33,10 @@
 //    hand would come back as `\- \[ \]`. When `emittedMarkdownSyntax === false`,
 //    the coordinator uses the clipboard's plain or URI-list text when available;
 //    this escaped rendering is used for an HTML-only clipboard.
-//  - Whether a container is visually EMPTY is decided by ONE rule —
-//    `blankAfterInvisible` (full-strip of the `\p{DI} ∪ \p{Cf}` format+ignorable class +
-//    whitespace), measured over
-//    SKIP_TAGS-filtered text (`skipTagsText`) — never re-derived from a branch's own
-//    rendered output, which is what six separate branches got wrong (an empty list
-//    renders `-`, not ``). Most branches reach that rule through `hasVisibleContent(el)`,
-//    which wraps it and adds the `<hr>` clause: every container branch that sets
-//    `emittedMarkdownSyntax` routes through `hasVisibleContent` — on that container, or
-//    (for `<ul>`/`<ol>`) on each `<li>`. Three branches set their flag WITHOUT calling
-//    `hasVisibleContent(el)`, each for its own reason — and only TWO of them decide
-//    emptiness by the same `blankAfterInvisible` rule; the third (`<hr>`) opts out of
-//    the emptiness question entirely. Do not assume otherwise when changing them:
-//     · `<hr>` opts out of the rule entirely. A void element: the predicate would
-//       answer "empty" for every one, and thematic breaks would stop converting.
-//     · `<table>` emits its grid unconditionally and takes its RICHNESS from a PER-CELL
-//       `blankAfterInvisible(skipTagsText(cell))` check (td/th/caption), NOT from
-//       `hasVisibleContent(el)` — whose `<hr>` clause would call an `<hr>`-only spacer
-//       cell rich. The one branch where "emit this" and "this is rich" differ.
-//     · `<strong>`/`<b>`/`<em>`/`<i>` only set a style mask on the atoms
-//       `collectInline` gathers; `serializeInlineRuns` (inline-runs.ts) sets the flag
-//       when it actually emits a marker. A visually empty unit — whitespace, a break,
-//       a lone joiner — is neutral there and never opens one, so neither a lone-joiner
-//       nor a joiner-plus-`<br>` span is bolded; `hasVisibleContent(el)` is not called.
-//    A block pushed with `syntax: false` — a paragraph, or the blocks a nested
-//    walk already recorded for itself — needs none of this: it cannot flip the
-//    flag, so its own "did anything render" test cannot defeat the caller's defer.
+//  - Source visibility uses `blankAfterInvisible` over SKIP_TAGS-filtered text,
+//    with an <hr> clause for text-free rules. Tables are emitted independently and
+//    use per-cell text to determine richness; block serialization guards residue.
+//  - Collection never mutates the DOM, so traversal caps trivially precede mutation.
 //  - Never throws to the handler: caps throw an internal sentinel (`CapExceeded`);
 //    `htmlToMarkdown` wraps the whole walk in a try/catch that returns `null` for
 //    ANY thrown value, so the handler always has a safe defer-to-plain-paste path.
@@ -66,6 +44,13 @@
 import { isAllowedUrl } from "../../../markdown/url-allowlist.js";
 import { encodeMarkdownDestination } from "../../../markdown/url-decode.js";
 import { MAX_LIST_NUMBER } from "../list/list-transform.js";
+import {
+  type BlockNode,
+  blankAfterInvisible,
+  fenceCode,
+  type PreparedInline,
+  serializeBlockNodes,
+} from "./block-ir.js";
 import { SKIP_TAGS, tableElementToGfm } from "./html-table-to-gfm.js";
 import {
   BOLD,
@@ -94,7 +79,7 @@ const MAX_REPAIR_WORK = 4_000_000;
 // Recursion depth cap for BOTH inline and block walks. 32 is far beyond any real
 // document (nobody nests 32 blockquotes/lists or 32 inline emphasis spans), yet
 // low enough that the transient peak memory of wrapper re-indentation
-// (`prefixLines` / `indentContinuation` rebuild a copy of the child body at each
+// (quote prefixes and list indentation rebuild a copy of the child body at each
 // level) is bounded to `MAX_DEPTH × MAX_OUTPUT_CHARS` and then freed. A deeper
 // fragment throws CapExceeded → `null` → plain-text paste (which handles the same
 // bytes linearly). This is the guard against both call-stack exhaustion and
@@ -112,16 +97,7 @@ const MAX_DEPTH = 32;
 
 export interface Ctx {
   nodes: number; // element visits
-  outLen: number; // cumulative emitted Markdown length (incremental output cap)
-  // Did the walk emit Markdown SYNTAX (as opposed to escaped text + line
-  // structure)? Recorded at the emitting site rather than sniffed from the
-  // output string, because escaped text can legitimately contain any marker
-  // byte. The handler uses it to choose between this conversion and the
-  // clipboard's own `text/plain` bytes. Block-level writes go through
-  // `serializeBlocks`' `push`, which takes the fact as a REQUIRED argument;
-  // the inline path assigns it directly: `collectInline`'s code/link leaves, and
-  // `inlineMarkdown` when `serializeInlineRuns` reports it emitted emphasis markers.
-  emittedMarkdownSyntax: boolean;
+  outLen: number; // cumulative leaf characters, before final wrapper formatting
   repair: RepairBudget; // shared by every inline run of this conversion
 }
 
@@ -200,48 +176,6 @@ function escapeMarkers(text: string): string {
  *  reject, which `String.prototype.trim()` does not strip. */
 function collapseWs(text: string): string {
   return text.replace(/[\u200B\uFEFF]/g, "").replace(/\s+/g, " ");
-}
-
-/** Emptiness normaliser: strip the invisible/ignorable formatting chars — the
- *  `\p{Default_Ignorable_Code_Point} ∪ \p{Cf}` (Format) union (U+00AD SOFT HYPHEN, the
- *  zero-width joiners ZWSP/ZWNJ/ZWJ/WJ, U+FE00–FE0F VARIATION SELECTORs, the bidi
- *  marks/isolates LRM/RLM/ALM + U+2066–2069, the interlinear controls U+FFF9–FFFB, BOM,
- *  and any future format/ignorable char) — collapse whitespace, trim, and report whether
- *  nothing visible remains. Distinct from `collapseWs` (the emit path, which PRESERVES
- *  joiners — WJ included — and variation selectors for fidelity): a lone one reads
- *  as blank here so an otherwise-empty container holding only one cannot flip
- *  `emittedMarkdownSyntax`. THE single answer to "is this text visually empty" within this
- *  file — routed
- *  through by every emptiness decision in this module: `hasVisibleContent`, the table
- *  per-cell and blockquote/list wrapper own-text richness checks,
- *  the CODE/A/PRE/heading/blockquote/list-item residue guards, and the inline-run
- *  blank-text / non-`<li>` list-child checks — so none grows its own rule. ⚠️ inline-runs.ts's `INVISIBLE_TOKEN` hand-mirrors the same
- *  `\p{Default_Ignorable_Code_Point} ∪ \p{Cf}` union (it classifies atoms, not strings), so
- *  the two must be changed together. */
-function blankAfterInvisible(text: string): boolean {
-  return (
-    text
-      // Invisible / ignorable formatting chars stripped by the UNION of two Unicode
-      // properties — `\p{Default_Ignorable_Code_Point} ∪ \p{Cf}` (Format) — not a
-      // hand-enumerated list: two bounded, self-updating classes that together cover the
-      // zero-width joiners (ZWSP/ZWNJ/ZWJ/WJ/BOM), U+00AD SOFT HYPHEN, the U+FE00–FE0F
-      // VARIATION SELECTORs, the bidi marks/isolates (LRM/RLM/ALM, U+2066–2069), the
-      // interlinear annotation controls U+FFF9–FFFB (`Cf` but NOT Default_Ignorable — the
-      // reason `\p{Cf}` is unioned in), and any future format/ignorable char — every char
-      // that reads as blank. It matches NONE of letter/space/NBSP/heart/emoji/hyphen/CJK.
-      // Written as ALTERNATION (`A|B`), not a `[…]` char class, so biome's
-      // noMisleadingCharacterClass does not flag the property escapes.
-      //   BOUNDARY: this is the format+ignorable class and stops there. A glyph that
-      // merely RENDERS blank but is a SYMBOL — e.g. U+2800 BRAILLE PATTERN BLANK — is
-      // CONTENT, deliberately excluded: stripping symbol categories would be the
-      // unbounded direction this predicate's design forbids.
-      //   This is the EMPTINESS path ONLY; `collapseWs` (the OUTPUT path) must NOT strip
-      // these — VS16 is load-bearing in emoji presentation (`❤️` = U+2764 U+FE0F), joiners
-      // glue emoji/orthography, and the bidi marks order real mixed-direction text.
-      .replace(/\p{Default_Ignorable_Code_Point}|\p{Cf}/gu, "")
-      .replace(/\s+/g, " ")
-      .trim() === ""
-  );
 }
 
 /** Concatenate every descendant text node of `el` VERBATIM, skipping `SKIP_TAGS`
@@ -420,7 +354,6 @@ export function collectInline(
     if (!hasVisibleContent(el) || blankAfterInvisible(body)) {
       return;
     }
-    ctx.emittedMarkdownSyntax = true;
     out.push({ kind: "code", markdown: count(ctx, inlineCode(body)), style });
     return;
   }
@@ -477,7 +410,6 @@ export function collectInline(
         }
         return;
       }
-      ctx.emittedMarkdownSyntax = true;
       out.push({ kind: "link", label, destination: markdownDestination(href), style });
       return;
     }
@@ -489,14 +421,14 @@ export function collectInline(
 /** Serialise one inline run (a segment's nodes) to Markdown through the atom IR:
  *  collect styled atoms, then let `serializeInlineRuns` place the markers, repair
  *  flanking and trim the run's edge spaces / breaks. A heading cannot hold a hard
- *  break, so `"heading"` turns each break into a single space first. Records
- *  marker syntax on `ctx` (code and links were recorded by the collector). */
+ *  break, so `"heading"` turns each break into a single space first. Richness
+ *  combines accepted code/link atoms with the emitted emphasis markers. */
 function inlineMarkdown(
   nodes: readonly Node[],
   depth: number,
   ctx: Ctx,
   mode: "paragraph" | "heading"
-): string {
+): PreparedInline {
   const atoms: InlineAtom[] = [];
   for (const node of nodes) {
     collectInline(node, depth, ctx, 0, atoms);
@@ -507,10 +439,11 @@ function inlineMarkdown(
     trimEdges: true,
     repairBudget: ctx.repair,
   });
-  if (result.emittedSyntax) {
-    ctx.emittedMarkdownSyntax = true;
-  }
-  return result.markdown;
+  return {
+    markdown: result.markdown,
+    rich:
+      result.emittedSyntax || atoms.some((atom) => atom.kind === "code" || atom.kind === "link"),
+  };
 }
 
 /** The label as the link would show it (breaks folded to a space), for the
@@ -581,7 +514,7 @@ const BLOCK_LEVEL_TAGS = new Set([
   "H4",
   "H5",
   "H6",
-  // Block-level but normally consumed by its parent handler: `serializeList`
+  // Block-level but normally consumed by its parent handler: `collectList`
   // walks `directChildrenByTag(list, "LI")`, so an <li> inside a ul/ol/menu never
   // reaches the tag dispatch that reads this set. Listed anyway for the STRAY
   // case — a fragment whose top level is bare <li>s, the ordinary result of a
@@ -594,50 +527,40 @@ const BLOCK_LEVEL_TAGS = new Set([
  *  element, never on the rendered Markdown: a rendered EMPTY container is not the
  *  empty string — a list renders `-`, a code span ``` `` ```, a link `[](url)`,
  *  and a `<br>`-only heading a stray `\` — so a per-branch "is the render empty"
- *  test has to re-derive a different wrong answer each time. Three review cycles
- *  found six such branches wrong; this is the one place that question is answered,
- *  and every branch that sets `emittedMarkdownSyntax` from a container routes
- *  through it FIRST — on that container, or (for `<ul>`/`<ol>`) on each `<li>` the
- *  list is composed of. Not "every branch below": `CODE` and `A` are declared above
- *  this point yet still route through it; `<table>` and the emphasis tags decide
- *  emptiness by the same `blankAfterInvisible` rule but do NOT call this function —
- *  the module header lists those two (plus `<hr>`, which opts out of the emptiness rule
- *  entirely) and why each is safe. An empty container that sets
- *  the flag defeats the caller's no-syntax defer and re-escapes Markdown the user
- *  typed by hand (`- [ ]` → `\- \[ \]`) — the bug this whole guard exists to stop.
+ *  test has to re-derive a different wrong answer each time. This is the one place
+ *  that question is answered: the heading, `<pre>`, `<blockquote>`, inline `<code>`/`<a>`
+ *  branches and each `<li>` of a list gate on it before emitting a block. An empty
+ *  container that got emitted would let `serializeBlockNodes` derive "rich" from it,
+ *  defeat the caller's no-syntax defer and re-escape Markdown the user typed by hand
+ *  (`- [ ]` → `\- \[ \]`) — the bug this guard exists to stop. Richness itself is
+ *  derived later by `serializeBlockNodes`: a quote/list is rich when it has its own text
+ *  or a rich child.
  *
- *  ONE deliberate opt-out, stated here rather than left implicit at its branch:
- *  `<hr>`. It is a void element, so this predicate would answer "empty" for EVERY
- *  one of them and thematic breaks would stop converting altogether — and that is
- *  safe precisely because an `<hr>` holds nothing: it has no empty-vs-full variant,
- *  so there is no wrong answer for the predicate to give.
- *
- *  `<table>` is NOT gated by this predicate: the TABLE branch emits its grid
- *  UNCONDITIONALLY and reads richness from a per-cell `blankAfterInvisible` check, so
- *  a text-free spacer grid at top level is emitted (not rich). But a table NESTED in
- *  a predicate-gated container inherits THAT container's verdict — a text-free table
- *  inside a `<blockquote>`/`<li>` makes the wrapper read empty here and is dropped
- *  outright (`<blockquote><table>empty</table></blockquote>` → nothing), where the
- *  same table at top level emits its grid. That asymmetry is deliberate: the lost
- *  artefact is a text-free grid, and the alternative — a `querySelector("table")`
- *  clause — would re-open the content-loss direction the `<hr>` clause exists to
- *  close. See the TABLE branch comment for the per-cell richness rule. (When something
- *  ELSE keeps the wrapper alive here — its own text, or a buried `<hr>` satisfying the
- *  clause below — the nested text-free grid IS emitted, but the wrapper's COMPOSITIONAL
- *  richness keeps it non-rich, matching the top-level grid; see the BLOCKQUOTE / list
- *  branches.)
+ *  Two elements are deliberately NOT gated by this predicate:
+ *  - `<hr>` is a void element, so this predicate would answer "empty" for EVERY one of
+ *    them and thematic breaks would stop converting altogether. That is safe because an
+ *    `<hr>` holds nothing: it has no empty-vs-full variant, so there is no wrong answer
+ *    for the predicate to give.
+ *  - `<table>` always emits its grid; its richness is decided per cell — "visible" when
+ *    any `td`/`th`/`caption` has text (through `skipTagsText` + `blankAfterInvisible`),
+ *    else "empty" — so a text-free spacer grid at top level is emitted but not rich. A
+ *    table NESTED in a gated container inherits THAT container's verdict: a text-free
+ *    table inside a `<blockquote>`/`<li>` makes the wrapper read empty here and is
+ *    dropped (`<blockquote><table>empty</table></blockquote>` → nothing). That asymmetry
+ *    is deliberate: the lost artefact is a text-free grid, and a `querySelector("table")`
+ *    clause would re-open the content-loss direction the `<hr>` clause below exists to
+ *    close. When something else keeps the wrapper alive (its own text, or a buried
+ *    `<hr>`), the nested text-free grid is emitted and stays non-rich, matching the
+ *    top-level grid.
  *
  *  Visible content is TEXT — measured through `skipTagsText` (SKIP_TAGS excluded) and
- *  the full-strip `blankAfterInvisible`, so neither whitespace, the zero-width class,
- *  nor `<style>`/`<textarea>` text counts — OR an `<hr>`, and `<hr>` ONLY. That second
+ *  `blankAfterInvisible`, so neither whitespace, the zero-width class, nor
+ *  `<style>`/`<textarea>` text counts — OR an `<hr>`, and `<hr>` ONLY. That second
  *  clause is not a tag list creeping in through the back door: an `<hr>` is the one
- *  text-free element whose OWN branch depends on this predicate to survive — a
- *  text-free `<table>` also renders something a reader sees, but its branch emits
- *  unconditionally and consults the predicate only via a container wrapper, so it
- *  needs no clause here. The other text-free elements stay out on purpose, each for
- *  its own reason: an `<img>` renders in a browser but serialises to NOTHING here, so
- *  counting it would push an empty wrapper; and a lone `<br>` IS the emptied-block
- *  residue this guard exists to reject.
+ *  text-free element that must survive inside a gated container. The other text-free
+ *  elements stay out on purpose: an `<img>` renders in a browser but serialises to
+ *  NOTHING here, so counting it would push an empty wrapper; and a lone `<br>` IS the
+ *  emptied-block residue this guard exists to reject.
  *
  *  Without that clause a container whose only child is an `<hr>` —
  *  `<blockquote><hr></blockquote>`, `<li><hr></li>` — read as empty and was dropped
@@ -661,38 +584,6 @@ function directChildrenByTag(el: Element, tag: string): Element[] {
   return Array.from(el.children).filter((c) => c.tagName === tag);
 }
 
-/** A rendered block that starts with a list marker (our own output shape) — used
- *  to join list-item continuation blocks tightly (no blank line) vs loose. */
-function isListBlock(block: string): boolean {
-  return /^(?:[-*+]|\d{1,9}[.)])\s/.test(block);
-}
-
-/** Indent every non-blank line of `block` by `indent`; blank lines stay empty. */
-function indentContinuation(block: string, indent: string): string {
-  return block
-    .split("\n")
-    .map((l) => (l === "" ? "" : indent + l))
-    .join("\n");
-}
-
-/** Prefix every line with `prefix`; a blank line becomes the trimmed prefix (so a
- *  blockquote's paragraph gap renders as `>`). */
-function prefixLines(text: string, prefix: string): string {
-  return text
-    .split("\n")
-    .map((l) => (l === "" ? prefix.trimEnd() : prefix + l))
-    .join("\n");
-}
-
-/** Fence a <pre> code block: a backtick run one longer than the longest run in
- *  the body, min length 3. Body is literal. `lang` is sanitised to a single safe
- *  info-string token (empty when malformed) so it cannot break the fence. */
-function fenceCode(body: string, lang: string): string {
-  const longest = longestBacktickRun(body);
-  const fence = "`".repeat(Math.max(3, longest + 1));
-  return `${fence}${lang}\n${body}\n${fence}`;
-}
-
 /** Language token from a <pre>'s <code class="language-xxx"> (or `lang-xxx`),
  *  sanitised: accepted only when it is a single run of word / `+#.-` chars. */
 function codeLang(pre: Element): string {
@@ -702,58 +593,11 @@ function codeLang(pre: Element): string {
   return /^[\w+#.-]+$/.test(raw) ? raw : "";
 }
 
-/** Serialise one `<li>`: render its children as blocks (so nested lists, `<p>`,
- *  `<pre>`, `<blockquote>` are structured, not flattened), then prefix the first
- *  block with `marker` and indent continuation blocks by the marker width — a
- *  blank line before loose (paragraph) continuations, none before a nested list. */
-function serializeListItem(li: Element, marker: string, depth: number, ctx: Ctx): string {
-  const blocks = serializeBlocks(li, depth + 1, ctx);
-  const indent = " ".repeat(marker.length);
-  if (
-    blocks.length === 0 ||
-    blocks.every((b) => blankAfterInvisible(b.split(HARD_BREAK).join(" ")))
-  ) {
-    // No marker for an item whose blocks are all visually empty. `serializeList` has
-    // already refused the empty <li>s via hasVisibleContent, so what reaches here is an
-    // item whose blocks serialised to nothing readable — text living entirely in a
-    // SKIP_TAGS subtree (`<li><style>…</style></li>`, → no blocks), or a lone joiner left
-    // by a buried <hr> that satisfied the predicate's <hr> clause but serialised away
-    // (`<li><span><span><hr></span></span>‍</li>`). A different question (did
-    // serialisation keep anything readable?) than the one hasVisibleContent answers, on
-    // the SAME full-strip `blankAfterInvisible` rule as the HEADINGS/PRE/blockquote
-    // residues. Returning `marker` here is what emitted the bare `-` that made an empty
-    // bullet look like rich content; `serializeList`'s `item === ""` skip then drops it
-    // WITHOUT advancing the ordinal.
-    return "";
-  }
-  const first = blocks[0]
-    .split("\n")
-    .map((l, i) => (i === 0 ? marker + l : l === "" ? "" : indent + l))
-    .join("\n");
-  let out = first;
-  for (const b of blocks.slice(1)) {
-    out += (isListBlock(b) ? "\n" : "\n\n") + indentContinuation(b, indent);
-  }
-  return out;
-}
-
-/** Serialise a `<ul>`/`<ol>` at nesting `depth`; items joined tightly. Ordered
- *  lists honour `start` and increment. */
-function serializeList(list: Element, depth: number, ctx: Ctx): string {
+/** Collect direct list items after validating content that would otherwise be lost. */
+function collectList(list: Element, depth: number, ctx: Ctx): BlockNode {
   if (depth > MAX_DEPTH) {
     throw new CapExceeded();
   }
-  // serializeList walks direct `<li>` only. A non-`<li>` direct child that carries
-  // content — a sibling-nested `<ul>`/`<ol>` (invalid HTML but widespread in legacy
-  // CMS and hand-written markup), a stray `<div>`/`<p>`, or a bare TEXT node
-  // (`<ul>prefix<li>a</li></ul>`) — would be dropped silently from an INSERTED
-  // conversion. Refuse the whole conversion (the TABLE branch's policy) so the handler
-  // defers to plain paste, which keeps everything. Walk `childNodes`, not `children`,
-  // so a visible direct text node is seen and not just element siblings. Emptiness is
-  // the SAME full-strip rule everywhere: a contentless separator between items — a bare
-  // `<br>`/`<hr>` element or the whitespace real clipboard HTML pretty-prints between
-  // `<li>`s — does not degrade the fragment. SKIP_TAGS children and comments carry no
-  // prose either.
   for (const child of Array.from(list.childNodes)) {
     if (child.nodeType === TEXT_NODE) {
       if (!blankAfterInvisible(child.textContent ?? "")) {
@@ -782,33 +626,20 @@ function serializeList(list: Element, depth: number, ctx: Ctx): string {
   } else {
     n = Math.min(Math.max(n, 0), MAX_LIST_NUMBER);
   }
-  const items: string[] = [];
+  const items: (readonly BlockNode[])[] = [];
   for (const li of directChildrenByTag(list, "LI")) {
-    bump(ctx); // before the emptiness test, so a fragment of 100k empty <li>s still caps
-    // An EMPTY <li> is not an item — the leftover bullet a contenteditable keeps
-    // after the user clears its text (`<li></li>`, `<li><br></li>`). Load-bearing and
-    // now SKIP_TAGS-aware: it also skips a `<li>` whose only block is a text-free grid
-    // (`<li><table><style></li>`), so the list stays empty and the empty string it
-    // returns keeps the `list !== ""` gate from ever pushing an invisible bullet.
-    if (!hasVisibleContent(li)) {
-      continue;
+    bump(ctx);
+    if (hasVisibleContent(li)) {
+      items.push(collectBlocks(li, depth + 1, ctx));
     }
-    const marker = ordered ? `${Math.min(n, MAX_LIST_NUMBER)}. ` : "- ";
-    const item = serializeListItem(li, marker, depth, ctx);
-    if (item === "") {
-      continue;
-    }
-    items.push(item);
-    // `n` advances only for an item that was actually PUSHED, so neither skip can
-    // consume an ordinal that is never emitted and the surviving items stay 1., 2.,
-    // … The two skips reject different things — nothing visible at all vs. text
-    // that lived entirely in a SKIP_TAGS subtree and serialised away — and
-    // advancing inside the marker expression honoured only the first, renumbering
-    // everything after a `<li><style>…</style></li>`. Keep the increment here,
-    // after both gates.
-    n++;
   }
-  return items.join("\n");
+  return {
+    kind: "list",
+    ordered,
+    start: n,
+    items,
+    hasOwnText: !blankAfterInvisible(skipTagsText(list)),
+  };
 }
 
 function isBr(node: Node): boolean {
@@ -869,7 +700,7 @@ function splitInlineSegments(nodes: Node[]): Node[][] {
 
 /** Nodes that serialise to nothing, dropped BEFORE segmentation: comments / PIs
  *  and `SKIP_TAGS` subtrees. Without this the two callers of
- *  `splitInlineSegments` see different node universes — `serializeBlocks`'
+ *  `splitInlineSegments` see different node universes — `collectBlocks`'
  *  inline-run path already `continue`s on both, but the `<p>` branch passes raw
  *  `childNodes` — so `<p>a<br><!--x--><br>b</p>` split into two hard breaks while
  *  the same markup at top level split into blocks. Word / Outlook clipboard HTML
@@ -894,93 +725,31 @@ function contributesNothing(node: Node): boolean {
   return SKIP_TAGS.has((node as Element).tagName);
 }
 
-/** Serialise sibling inline nodes into the blocks they represent and push each.
- *  Shared by the inline-run flush and the `<p>` branch so both split on `<br>`
- *  runs and both drop content-free segments. */
-function pushInlineBlocks(
-  nodes: Node[],
-  depth: number,
-  ctx: Ctx,
-  push: (s: string, syntax: boolean) => void
-): void {
-  const contributing = nodes.filter((n) => !contributesNothing(n));
-  for (const segment of splitInlineSegments(contributing)) {
-    const raw = inlineMarkdown(segment, depth, ctx, "paragraph");
-    const text = escapeMarkers(raw).trim();
-    // A segment that edge-trimmed to nothing — a lone `<br>` between two blocks, or
-    // `<p><br></p>` — falls out here: `escapeMarkers("") === ""`, so `text` is empty
-    // and nothing is pushed. Any surviving break has real content on both sides.
-    if (text !== "") {
-      // `false`: a paragraph is escaped text, never syntax. Any syntax INSIDE it
-      // (emphasis, a link, inline code) was recorded by `inlineMarkdown`, not here.
-      push(text, false);
+function collectParagraphs(nodes: Node[], depth: number, ctx: Ctx): BlockNode[] {
+  const blocks: BlockNode[] = [];
+  for (const segment of splitInlineSegments(nodes.filter((node) => !contributesNothing(node)))) {
+    const inline = inlineMarkdown(segment, depth, ctx, "paragraph");
+    const markdown = escapeMarkers(inline.markdown).trim();
+    if (markdown !== "") {
+      blocks.push({ kind: "paragraph", inline: { markdown, rich: inline.rich } });
     }
   }
+  return blocks;
 }
 
-/** Run a nested block walk with its OWN richness flag, isolated from the parent's,
- *  and hand the wrapper both the serialised text and the child's contribution.
- *  Save the parent's `emittedMarkdownSyntax`, reset to false so `run` records only its
- *  own richness, capture that as `childRich`, then restore `before || childRich` — a
- *  MONOTONE restore: the parent keeps any richness it already had AND inherits the
- *  child's, and because each nesting level ORs its own `before` back in, the invariant
- *  survives arbitrary depth. This is what lets a not-rich spacer grid wrapped in a
- *  quote / list stay non-rich (matching the top-level grid) instead of the wrapper
- *  relabelling itself rich off the grid's `|`/`-` bytes: the caller ORs `childRich`
- *  into the flag it pushes rather than reading richness back off the emitted string. */
-function captureChildSyntax(ctx: Ctx, run: () => string): { text: string; childRich: boolean } {
-  const before = ctx.emittedMarkdownSyntax;
-  ctx.emittedMarkdownSyntax = false;
-  const text = run();
-  const childRich = ctx.emittedMarkdownSyntax;
-  ctx.emittedMarkdownSyntax = before || childRich;
-  return { text, childRich };
-}
-
-/** Serialise the block-level children of `parent` (body / li / blockquote / an
- *  unknown block) to an array of block strings (no trailing separators). A run of
- *  inline/text nodes is SPLIT at runs of 2+ `<br>` and yields one paragraph per
- *  segment (per-line marker-escaped, content-free segments dropped) — it does not
- *  coalesce into a single paragraph. Recognised block elements map to Markdown.
- *  Any BLOCK_LEVEL_TAGS element recurses into its own block(s) — including one
- *  holding nothing but inline children, which is what keeps `<div>`-per-line
- *  fragments on separate lines — as does an unknown element carrying block
- *  children; everything else folds into the inline run. */
-function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
+/** Collect block children without mutating the parsed DOM. */
+function collectBlocks(parent: Element, depth: number, ctx: Ctx): readonly BlockNode[] {
   if (depth > MAX_DEPTH) {
     throw new CapExceeded();
   }
-  const blocks: string[] = [];
-  // `syntax` is REQUIRED (no default, not optional), so a branch that goes through
-  // `push` cannot compile without stating whether it emits Markdown syntax — TS
-  // rejects a bare `push(s)`. That is the whole of the guarantee: `blocks` is a
-  // plain array in this same scope, so `blocks.push(s)` also compiles and would
-  // emit the block while silently leaving the flag false. Route every block
-  // through `push`; never write to `blocks` directly. Same discipline as `count`:
-  // the fact is recorded by the funnel, not by a free-standing assignment beside
-  // it — which is how one empty <blockquote> used to defeat the caller's defer.
-  //
-  // Output is counted at its LEAF source (see `count`), never at these aggregating
-  // pushes, so nested list/blockquote wrappers don't re-count already-counted
-  // content. The two NON-inline leaves (table GFM, <pre> body) are counted
-  // explicitly in their branches below; everything else here is inline-derived
-  // (already counted) or an O(1) marker/prefix.
-  const push = (s: string, syntax: boolean): void => {
-    if (syntax) {
-      ctx.emittedMarkdownSyntax = true;
-    }
-    blocks.push(s);
-  };
+  const blocks: BlockNode[] = [];
   let inlineRun: Node[] = [];
   const flushInline = (): void => {
-    if (inlineRun.length === 0) {
-      return;
+    if (inlineRun.length > 0) {
+      blocks.push(...collectParagraphs(inlineRun, depth, ctx));
+      inlineRun = [];
     }
-    const nodes = inlineRun;
-    inlineRun = [];
-    pushInlineBlocks(nodes, depth, ctx, push);
   };
-
   for (const child of Array.from(parent.childNodes)) {
     if (child.nodeType === TEXT_NODE) {
       inlineRun.push(child);
@@ -995,172 +764,67 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
       continue;
     }
     bump(ctx);
-
     if (HEADINGS[tag]) {
       flushInline();
-      // `<h1><br></h1>` — a contenteditable's emptied heading — serialises to the
-      // lone HARD_BREAK, whose `\` survives collapseWs+trim and used to be pushed
-      // as `# \`. hasVisibleContent settles it on the source instead.
       if (hasVisibleContent(el)) {
-        // A heading is single-line: "heading" mode folds each break atom to a space
-        // (`<h1>a<br>b</h1>` → `# a b`); collapseWs then merges it with any
-        // neighbouring space.
-        const text = collapseWs(
-          inlineMarkdown(Array.from(el.childNodes), depth, ctx, "heading")
-        ).trim();
-        // Residue guard, the SAME full-strip rule as the predicate: `text` can still
-        // be empty when every child was a SKIP_TAGS subtree (`<h1><style>…</style></h1>`)
-        // — textContent counts that text, serialisation drops it — or blank-but-nonempty
-        // when the predicate passed on its `<hr>` clause and the emit path preserved a
-        // joiner (`<h1><hr>&#8205;</h1>`), which `text !== ""` would let through as `# ‍`.
-        if (!blankAfterInvisible(text)) {
-          // A trailing `#` run that is the whole text or follows a space would be
-          // read as the ATX closing sequence and vanish (CommonMark); escape its
-          // first `#`. `C#` is not a closing sequence and stays as it is.
-          const body = text.replace(/(^| )(#+)$/, "$1\\$2");
-          push(`${"#".repeat(HEADINGS[tag])} ${body}`, true);
+        const inline = inlineMarkdown(Array.from(el.childNodes), depth, ctx, "heading");
+        const markdown = collapseWs(inline.markdown).trim();
+        if (!blankAfterInvisible(markdown)) {
+          blocks.push({
+            kind: "heading",
+            level: HEADINGS[tag],
+            inline: { markdown, rich: inline.rich },
+          });
         }
       }
     } else if (tag === "P") {
       flushInline();
-      pushInlineBlocks(Array.from(el.childNodes), depth, ctx, push);
+      blocks.push(...collectParagraphs(Array.from(el.childNodes), depth, ctx));
     } else if (tag === "UL" || tag === "OL" || tag === "MENU") {
       flushInline();
-      // A list of nothing but empty <li>s renders as `-` / `1.\n2.` — non-empty
-      // output, which is why `list !== ""` alone used to let it through.
-      // serializeList now applies hasVisibleContent per <li>, so an all-empty list
-      // really does come back as the empty string and this test is its composition,
-      // not a second answer to emptiness. There is deliberately no outer
-      // hasVisibleContent(el) call: an <li>'s content is a subset of its list's, so
-      // the outer predicate could never be false while any item survived — it was
-      // provably unable to change an outcome, and a guard that cannot fire is a
-      // guard nobody can reason about.
-      //
-      // Richness is COMPOSITIONAL, exactly as for BLOCKQUOTE: a list item wrapping a
-      // text-free spacer grid + buried `<hr>` serialises the grid (`syntax:false`) but
-      // is non-empty, so `push(list, true)` used to relabel it rich. `captureChildSyntax`
-      // isolates the whole walk's flag contribution (any rich item makes the list rich)
-      // via a monotone restore (see its note); push the list's own text term OR that
-      // child richness. Whole-list capture is equivalent to per-item and simpler.
-      const { text: list, childRich } = captureChildSyntax(ctx, () =>
-        serializeList(el, depth, ctx)
-      );
-      if (list !== "") {
-        push(list, !blankAfterInvisible(skipTagsText(el)) || childRich);
-      }
+      blocks.push(collectList(el, depth, ctx));
     } else if (tag === "PRE") {
       flushInline();
-      // <pre> body is a non-inline leaf (verbatim, never through collectInline)
-      // → count it explicitly.
-      // Two SEPARATE concerns, deliberately answered differently:
-      //  - the richness DECISION is hasVisibleContent, shared with every other
-      //    container. A <pre> holding only whitespace is an empty container, not
-      //    code — including the pretty-printed `<pre>\n   \n</pre>` and
-      //    `<pre>\n\n</pre>` that real clipboard HTML carries, which a "strip one
-      //    trailing newline" test still called content. No producer means a blank
-      //    line as code, and calling one rich defeats the caller's no-syntax defer
-      //    and re-escapes the user's hand-typed Markdown.
-      //  - what gets EMITTED is verbatim. Whitespace-significance lives here and
-      //    only here: once a <pre> holds real code, its body keeps every leading
-      //    space and interior blank line. Do not "tidy" this by emitting
-      //    `body.trim()` — that is the mistake this split exists to prevent.
       if (hasVisibleContent(el)) {
-        // Body read through `skipTagsText` (SKIP_TAGS-aware) so a `<style>`/`<textarea>`
-        // beside real code does not leak into the fence — verbatim otherwise (no
-        // collapse), keeping whitespace-significance. Only the trailing newline the
-        // browser appends is dropped.
         const body = skipTagsText(el).replace(/\n$/, "");
-        // Residue guard: a `<pre><hr></pre>` (or a SKIP_TAGS-only `<pre>`) satisfies the
-        // predicate through its `<hr>` clause yet has no code to fence. This TESTS the
-        // body for emptiness through the SAME full-strip rule as the predicate — not
-        // `.trim()`, which would leave a preserved joiner (`<pre><hr>&#8205;</pre>`) —
-        // and it does NOT trim what is emitted, which the paragraph above forbids.
         if (!blankAfterInvisible(body)) {
-          push(count(ctx, fenceCode(body, codeLang(el))), true);
+          const lang = codeLang(el);
+          count(ctx, fenceCode(body, lang));
+          blocks.push({ kind: "code", body, lang });
         }
       }
     } else if (tag === "BLOCKQUOTE") {
       flushInline();
-      // The quote wrapper mail clients leave behind in an otherwise plain reply.
-      // hasVisibleContent is the decision; the residue guard then rejects what a
-      // non-empty source can still serialise down to — a SKIP_TAGS-only subtree (→ "")
-      // or a lone joiner left by a buried <hr> that satisfied the predicate's <hr> clause
-      // but serialised to nothing. The SAME full-strip `blankAfterInvisible` rule as the
-      // heading/PRE residues (HARD_BREAK folded to a space first), not `!== ""`, which
-      // let a preserved joiner through as `> ‍`.
       if (hasVisibleContent(el)) {
-        // Richness is COMPOSITIONAL — ask the child walk, not the emitted string. A
-        // text-free spacer `<table>` (pushed `syntax:false` by the TABLE branch's
-        // per-cell rule) wrapped here with a buried `<hr>` passes hasVisibleContent on
-        // the `<hr>` clause, so the grid IS serialised; its `|`/`-` bytes then make the
-        // residue non-blank. Reading `true` off that would relabel rich exactly what the
-        // TABLE branch ruled not-rich. `captureChildSyntax` isolates the child's own flag
-        // contribution across the nested walk (monotone restore, see its note); push the
-        // quote's own text term OR that child richness.
-        const { text: quoted, childRich } = captureChildSyntax(ctx, () =>
-          serializeBlocks(el, depth + 1, ctx).join("\n\n")
-        );
-        if (!blankAfterInvisible(quoted.split(HARD_BREAK).join(" "))) {
-          push(prefixLines(quoted, "> "), !blankAfterInvisible(skipTagsText(el)) || childRich);
-        }
+        blocks.push({
+          kind: "quote",
+          children: collectBlocks(el, depth + 1, ctx),
+          hasOwnText: !blankAfterInvisible(skipTagsText(el)),
+        });
       }
     } else if (tag === "TABLE") {
       flushInline();
       const gfm = tableElementToGfm(el);
       if (gfm === null) {
-        // A table we cannot render (its own row/col/cell cap breached, or a
-        // degenerate empty table) must NOT be silently dropped from a mixed
-        // prose+table fragment — that would lose data. Abort the whole conversion
-        // so the handler defers to plain-text paste, which preserves the table
-        // (as tab-separated text) AND the surrounding prose.
         throw new CapExceeded();
       }
-      // The ONE branch where "emit this" and "this is rich" have different answers.
-      // Both halves are load-bearing:
-      //  - EMIT unconditionally: a grid is structure no other flavour of the
-      //    fragment expresses, so skipping it would drop the table out of a mixed
-      //    paste that something else (a heading, say) already made rich.
-      //  - RICH only when a CELL holds visible content: a layout/spacer grid — the
-      //    default output of Outlook, mail signatures and newsletter HTML, riding
-      //    beside ordinary prose — shows a reader nothing, so calling it rich would
-      //    defeat the no-syntax defer (the recurring bug this guard exists to stop). A
-      //    text-free grid loses nothing by not being rich: the handler defers and the
-      //    clipboard's own bytes carry the grid as tab-separated text.
-      // Richness is read PER CELL (td/th/caption), through the same emptiness rule
-      // the predicate uses (`blankAfterInvisible(skipTagsText(cell))`) — NOT from
-      // hasVisibleContent(el), whose `<hr>` clause would call an `<hr>`-only spacer
-      // cell rich, and NOT from a regex on the flattened `gfm` string, which cannot
-      // tell a real cell of only `-`/`:` from the table's own grammar. No `<hr>`
-      // clause here: an `<hr>` in a cell renders to nothing in GFM.
-      // Table GFM is the amplification leaf (colspan/rowspan expansion, built
-      // outside this walk's budget) → count it explicitly to abort early.
-      const tableIsRich = Array.from(el.querySelectorAll("td, th, caption")).some(
+      count(ctx, gfm);
+      const visible = Array.from(el.querySelectorAll("td, th, caption")).some(
         (cell) => !blankAfterInvisible(skipTagsText(cell))
       );
-      push(count(ctx, gfm), tableIsRich);
+      blocks.push({ kind: "table", gfm, content: visible ? "visible" : "empty" });
     } else if (tag === "HR") {
       flushInline();
-      // OPT-OUT from hasVisibleContent — a void element has no empty-vs-full variant,
-      // so there is no wrong answer for the predicate to give (rationale in its docblock).
-      push("---", true);
+      blocks.push({ kind: "rule" });
     } else if (tag === "BR") {
-      inlineRun.push(el); // a stray <br> between blocks joins the inline run
+      inlineRun.push(el);
     } else {
       const startsOwnBlock =
         BLOCK_LEVEL_TAGS.has(tag) ||
         Array.from(el.children).some((c) => BLOCK_LEVEL_TAGS.has(c.tagName));
       if (startsOwnBlock) {
-        // Block-level, or an unknown element wrapping blocks: its children are
-        // their own blocks. A block-level element with only inline children still
-        // becomes ONE block (its own line) — folding it into the surrounding
-        // inline run is what merged `<div>`-per-line clipboard fragments.
         flushInline();
-        for (const b of serializeBlocks(el, depth + 1, ctx)) {
-          // `false`: these blocks were already emitted by the nested walk, which
-          // shares this `ctx` and recorded their richness through its own `push`.
-          // Passing `true` here would relabel a plain <div> of text as syntax.
-          push(b, false);
-        }
+        blocks.push(...collectBlocks(el, depth + 1, ctx));
       } else {
         inlineRun.push(el);
       }
@@ -1220,17 +884,17 @@ export function htmlToMarkdown(html: string): HtmlToMarkdownResult | null {
     const ctx: Ctx = {
       nodes: 0,
       outLen: 0,
-      emittedMarkdownSyntax: false,
       repair: { remaining: MAX_REPAIR_WORK },
     };
-    const out = serializeBlocks(body, 0, ctx).join("\n\n").trim();
+    const result = serializeBlockNodes(collectBlocks(body, 0, ctx));
+    const out = result.markdown.trim();
     // The incremental `count` cap already aborts amplification mid-build; this
     // final check is a cheap backstop against uncounted wrapper growth (list /
     // blockquote indentation).
     if (out === "" || out.length > MAX_OUTPUT_CHARS) {
       return null;
     }
-    return { markdown: out, emittedMarkdownSyntax: ctx.emittedMarkdownSyntax };
+    return { markdown: out, emittedMarkdownSyntax: result.rich };
   } catch (err) {
     // ANY error still degrades to `null` — the caller always has a safe path. But
     // `null` is no longer only a defer: rich-html-paste.ts CONSUMES it to protect a
