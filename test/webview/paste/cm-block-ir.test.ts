@@ -67,6 +67,48 @@ describe("block container serialization", () => {
     };
     expect(serializeBlockNodes([nested]).markdown).toBe("- a\n  - b");
   });
+  it("drops containers whose only content is invisible, in both halves of the class", async () => {
+    const { serializeBlockNodes } = await import("../../../src/webview/cm/paste/block-ir.js");
+    const p = (markdown: string): BlockNode => ({
+      kind: "paragraph",
+      inline: { markdown, rich: false },
+    });
+    // U+3164 is Default_Ignorable only; U+0600 is Cf only — each half must count as blank.
+    for (const ch of ["ㅤ", "؀"]) {
+      expect(
+        serializeBlockNodes([{ kind: "quote", hasOwnText: false, children: [p(ch)] }]).markdown
+      ).toBe("");
+    }
+  });
+  it("skips an emptied block between siblings without a stray separator", async () => {
+    const { serializeBlockNodes } = await import("../../../src/webview/cm/paste/block-ir.js");
+    const p = (markdown: string): BlockNode => ({
+      kind: "paragraph",
+      inline: { markdown, rich: false },
+    });
+    expect(
+      serializeBlockNodes([p("a"), { kind: "quote", hasOwnText: false, children: [p("‍")] }, p("b")])
+        .markdown
+    ).toBe("a\n\nb");
+  });
+  it("skips an emptied child inside a list item", async () => {
+    const { serializeBlockNodes } = await import("../../../src/webview/cm/paste/block-ir.js");
+    const p = (markdown: string): BlockNode => ({
+      kind: "paragraph",
+      inline: { markdown, rich: false },
+    });
+    expect(
+      serializeBlockNodes([
+        {
+          kind: "list",
+          ordered: false,
+          start: 0,
+          hasOwnText: true,
+          items: [[{ kind: "quote", hasOwnText: false, children: [p("‍")] }, p("x")]],
+        },
+      ]).markdown
+    ).toBe("- x");
+  });
   it("keeps nested spacer quotes non-rich", async () => {
     const { serializeBlockNodes } = await import("../../../src/webview/cm/paste/block-ir.js");
     const quote: BlockNode = {

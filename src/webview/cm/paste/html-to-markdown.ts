@@ -44,7 +44,13 @@
 import { isAllowedUrl } from "../../../markdown/url-allowlist.js";
 import { encodeMarkdownDestination } from "../../../markdown/url-decode.js";
 import { MAX_LIST_NUMBER } from "../list/list-transform.js";
-import { type BlockNode, fenceCode, type PreparedInline, serializeBlockNodes } from "./block-ir.js";
+import {
+  type BlockNode,
+  blankAfterInvisible,
+  fenceCode,
+  type PreparedInline,
+  serializeBlockNodes,
+} from "./block-ir.js";
 import { SKIP_TAGS, tableElementToGfm } from "./html-table-to-gfm.js";
 import {
   BOLD,
@@ -170,48 +176,6 @@ function escapeMarkers(text: string): string {
  *  reject, which `String.prototype.trim()` does not strip. */
 function collapseWs(text: string): string {
   return text.replace(/[\u200B\uFEFF]/g, "").replace(/\s+/g, " ");
-}
-
-/** Emptiness normaliser: strip the invisible/ignorable formatting chars — the
- *  `\p{Default_Ignorable_Code_Point} ∪ \p{Cf}` (Format) union (U+00AD SOFT HYPHEN, the
- *  zero-width joiners ZWSP/ZWNJ/ZWJ/WJ, U+FE00–FE0F VARIATION SELECTORs, the bidi
- *  marks/isolates LRM/RLM/ALM + U+2066–2069, the interlinear controls U+FFF9–FFFB, BOM,
- *  and any future format/ignorable char) — collapse whitespace, trim, and report whether
- *  nothing visible remains. Distinct from `collapseWs` (the emit path, which PRESERVES
- *  joiners — WJ included — and variation selectors for fidelity): a lone one reads
- *  as blank here so an otherwise-empty container holding only one cannot flip
- *  `emittedMarkdownSyntax`. THE single answer to "is this text visually empty" within this
- *  file — routed
- *  through by every emptiness decision in this module: `hasVisibleContent`, the table
- *  per-cell and blockquote/list wrapper own-text richness checks,
- *  the CODE/A/PRE/heading/blockquote/list-item residue guards, and the inline-run
- *  blank-text / non-`<li>` list-child checks — so none grows its own rule. ⚠️ inline-runs.ts's `INVISIBLE_TOKEN` hand-mirrors the same
- *  `\p{Default_Ignorable_Code_Point} ∪ \p{Cf}` union (it classifies atoms, not strings), so
- *  the two must be changed together. */
-function blankAfterInvisible(text: string): boolean {
-  return (
-    text
-      // Invisible / ignorable formatting chars stripped by the UNION of two Unicode
-      // properties — `\p{Default_Ignorable_Code_Point} ∪ \p{Cf}` (Format) — not a
-      // hand-enumerated list: two bounded, self-updating classes that together cover the
-      // zero-width joiners (ZWSP/ZWNJ/ZWJ/WJ/BOM), U+00AD SOFT HYPHEN, the U+FE00–FE0F
-      // VARIATION SELECTORs, the bidi marks/isolates (LRM/RLM/ALM, U+2066–2069), the
-      // interlinear annotation controls U+FFF9–FFFB (`Cf` but NOT Default_Ignorable — the
-      // reason `\p{Cf}` is unioned in), and any future format/ignorable char — every char
-      // that reads as blank. It matches NONE of letter/space/NBSP/heart/emoji/hyphen/CJK.
-      // Written as ALTERNATION (`A|B`), not a `[…]` char class, so biome's
-      // noMisleadingCharacterClass does not flag the property escapes.
-      //   BOUNDARY: this is the format+ignorable class and stops there. A glyph that
-      // merely RENDERS blank but is a SYMBOL — e.g. U+2800 BRAILLE PATTERN BLANK — is
-      // CONTENT, deliberately excluded: stripping symbol categories would be the
-      // unbounded direction this predicate's design forbids.
-      //   This is the EMPTINESS path ONLY; `collapseWs` (the OUTPUT path) must NOT strip
-      // these — VS16 is load-bearing in emoji presentation (`❤️` = U+2764 U+FE0F), joiners
-      // glue emoji/orthography, and the bidi marks order real mixed-direction text.
-      .replace(/\p{Default_Ignorable_Code_Point}|\p{Cf}/gu, "")
-      .replace(/\s+/g, " ")
-      .trim() === ""
-  );
 }
 
 /** Concatenate every descendant text node of `el` VERBATIM, skipping `SKIP_TAGS`
@@ -563,50 +527,40 @@ const BLOCK_LEVEL_TAGS = new Set([
  *  element, never on the rendered Markdown: a rendered EMPTY container is not the
  *  empty string — a list renders `-`, a code span ``` `` ```, a link `[](url)`,
  *  and a `<br>`-only heading a stray `\` — so a per-branch "is the render empty"
- *  test has to re-derive a different wrong answer each time. Three review cycles
- *  found six such branches wrong; this is the one place that question is answered,
- *  and every branch that sets `emittedMarkdownSyntax` from a container routes
- *  through it FIRST — on that container, or (for `<ul>`/`<ol>`) on each `<li>` the
- *  list is composed of. Not "every branch below": `CODE` and `A` are declared above
- *  this point yet still route through it; `<table>` and the emphasis tags decide
- *  emptiness by the same `blankAfterInvisible` rule but do NOT call this function —
- *  the module header lists those two (plus `<hr>`, which opts out of the emptiness rule
- *  entirely) and why each is safe. An empty container that sets
- *  the flag defeats the caller's no-syntax defer and re-escapes Markdown the user
- *  typed by hand (`- [ ]` → `\- \[ \]`) — the bug this whole guard exists to stop.
+ *  test has to re-derive a different wrong answer each time. This is the one place
+ *  that question is answered: the heading, `<pre>`, `<blockquote>`, inline `<code>`/`<a>`
+ *  branches and each `<li>` of a list gate on it before emitting a block. An empty
+ *  container that got emitted would let `serializeBlockNodes` derive "rich" from it,
+ *  defeat the caller's no-syntax defer and re-escape Markdown the user typed by hand
+ *  (`- [ ]` → `\- \[ \]`) — the bug this guard exists to stop. Richness itself is
+ *  derived later by `serializeBlockNodes`: a quote/list is rich when it has its own text
+ *  or a rich child.
  *
- *  ONE deliberate opt-out, stated here rather than left implicit at its branch:
- *  `<hr>`. It is a void element, so this predicate would answer "empty" for EVERY
- *  one of them and thematic breaks would stop converting altogether — and that is
- *  safe precisely because an `<hr>` holds nothing: it has no empty-vs-full variant,
- *  so there is no wrong answer for the predicate to give.
- *
- *  `<table>` is NOT gated by this predicate: the TABLE branch emits its grid
- *  UNCONDITIONALLY and reads richness from a per-cell `blankAfterInvisible` check, so
- *  a text-free spacer grid at top level is emitted (not rich). But a table NESTED in
- *  a predicate-gated container inherits THAT container's verdict — a text-free table
- *  inside a `<blockquote>`/`<li>` makes the wrapper read empty here and is dropped
- *  outright (`<blockquote><table>empty</table></blockquote>` → nothing), where the
- *  same table at top level emits its grid. That asymmetry is deliberate: the lost
- *  artefact is a text-free grid, and the alternative — a `querySelector("table")`
- *  clause — would re-open the content-loss direction the `<hr>` clause exists to
- *  close. See the TABLE branch comment for the per-cell richness rule. (When something
- *  ELSE keeps the wrapper alive here — its own text, or a buried `<hr>` satisfying the
- *  clause below — the nested text-free grid IS emitted, but the wrapper's COMPOSITIONAL
- *  richness keeps it non-rich, matching the top-level grid; see the BLOCKQUOTE / list
- *  branches.)
+ *  Two elements are deliberately NOT gated by this predicate:
+ *  - `<hr>` is a void element, so this predicate would answer "empty" for EVERY one of
+ *    them and thematic breaks would stop converting altogether. That is safe because an
+ *    `<hr>` holds nothing: it has no empty-vs-full variant, so there is no wrong answer
+ *    for the predicate to give.
+ *  - `<table>` always emits its grid; its richness is decided per cell — "visible" when
+ *    any `td`/`th`/`caption` has text (through `skipTagsText` + `blankAfterInvisible`),
+ *    else "empty" — so a text-free spacer grid at top level is emitted but not rich. A
+ *    table NESTED in a gated container inherits THAT container's verdict: a text-free
+ *    table inside a `<blockquote>`/`<li>` makes the wrapper read empty here and is
+ *    dropped (`<blockquote><table>empty</table></blockquote>` → nothing). That asymmetry
+ *    is deliberate: the lost artefact is a text-free grid, and a `querySelector("table")`
+ *    clause would re-open the content-loss direction the `<hr>` clause below exists to
+ *    close. When something else keeps the wrapper alive (its own text, or a buried
+ *    `<hr>`), the nested text-free grid is emitted and stays non-rich, matching the
+ *    top-level grid.
  *
  *  Visible content is TEXT — measured through `skipTagsText` (SKIP_TAGS excluded) and
- *  the full-strip `blankAfterInvisible`, so neither whitespace, the zero-width class,
- *  nor `<style>`/`<textarea>` text counts — OR an `<hr>`, and `<hr>` ONLY. That second
+ *  `blankAfterInvisible`, so neither whitespace, the zero-width class, nor
+ *  `<style>`/`<textarea>` text counts — OR an `<hr>`, and `<hr>` ONLY. That second
  *  clause is not a tag list creeping in through the back door: an `<hr>` is the one
- *  text-free element whose OWN branch depends on this predicate to survive — a
- *  text-free `<table>` also renders something a reader sees, but its branch emits
- *  unconditionally and consults the predicate only via a container wrapper, so it
- *  needs no clause here. The other text-free elements stay out on purpose, each for
- *  its own reason: an `<img>` renders in a browser but serialises to NOTHING here, so
- *  counting it would push an empty wrapper; and a lone `<br>` IS the emptied-block
- *  residue this guard exists to reject.
+ *  text-free element that must survive inside a gated container. The other text-free
+ *  elements stay out on purpose: an `<img>` renders in a browser but serialises to
+ *  NOTHING here, so counting it would push an empty wrapper; and a lone `<br>` IS the
+ *  emptied-block residue this guard exists to reject.
  *
  *  Without that clause a container whose only child is an `<hr>` —
  *  `<blockquote><hr></blockquote>`, `<li><hr></li>` — read as empty and was dropped

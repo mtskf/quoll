@@ -393,6 +393,14 @@ describe("htmlToMarkdown — block constructs", () => {
   it("renders a code block inside a list item (not flattened to inline code)", () => {
     expect(convert("<ul><li><pre><code>x</code></pre></li></ul>")).toBe("- ```\n  x\n  ```");
   });
+  it("keeps blank lines inside a list item's code block free of padding", () => {
+    expect(convert("<ul><li><pre><code>a\n\nb</code></pre></li></ul>")).toBe(
+      "- ```\n  a\n\n  b\n  ```"
+    );
+    expect(convert("<ul><li><p>x</p><pre><code>a\n\nb</code></pre></li></ul>")).toBe(
+      "- x\n\n  ```\n  a\n\n  b\n  ```"
+    );
+  });
   it("renders a blockquote inside a list item", () => {
     expect(convert("<ul><li><blockquote>q</blockquote></li></ul>")).toBe("- > q");
   });

@@ -26,14 +26,36 @@ export type BlockNode =
       readonly hasOwnText: boolean;
     };
 
-function readable(markdown: string): boolean {
+/** True when `text` shows nothing a reader would see: strip the invisible/ignorable
+ *  formatting chars, collapse whitespace, trim. THE single answer to "is this text visually
+ *  empty" — `hasVisibleContent`, the table per-cell and wrapper own-text richness checks, the
+ *  residue guards and the block serializer's `readable` all route through it, so none grows
+ *  its own rule. ⚠️ inline-runs.ts's `INVISIBLE_TOKEN` hand-mirrors the same class (it
+ *  classifies atoms, not strings), so the two must be changed together.
+ *
+ *  The class is the UNION `\p{Default_Ignorable_Code_Point} ∪ \p{Cf}` (Format), not a
+ *  hand-enumerated list: it covers the zero-width joiners (ZWSP/ZWNJ/ZWJ/WJ/BOM), U+00AD SOFT
+ *  HYPHEN, the U+FE00–FE0F VARIATION SELECTORs, the bidi marks/isolates, the interlinear
+ *  controls U+FFF9–FFFB (`Cf` but NOT Default_Ignorable — why `\p{Cf}` is unioned in) and any
+ *  future format/ignorable char. Written as ALTERNATION (`A|B`), not a `[…]` class, so biome's
+ *  noMisleadingCharacterClass does not flag the property escapes.
+ *  BOUNDARY: format+ignorable only. A SYMBOL that merely renders blank (U+2800 BRAILLE
+ *  PATTERN BLANK) is CONTENT, deliberately kept — stripping symbol categories is the unbounded
+ *  direction this predicate forbids.
+ *  EMPTINESS path ONLY: the OUTPUT path (`collapseWs`) must NOT strip these — VS16 is
+ *  load-bearing in emoji presentation, joiners glue emoji/orthography, bidi marks order real
+ *  mixed-direction text. */
+export function blankAfterInvisible(text: string): boolean {
   return (
-    markdown
-      .split(HARD_BREAK)
-      .join(" ")
+    text
       .replace(/\p{Default_Ignorable_Code_Point}|\p{Cf}/gu, "")
-      .trim() !== ""
+      .replace(/\s+/g, " ")
+      .trim() === ""
   );
+}
+
+function readable(markdown: string): boolean {
+  return !blankAfterInvisible(markdown.split(HARD_BREAK).join(" "));
 }
 
 function indent(text: string, prefix: string): string {
