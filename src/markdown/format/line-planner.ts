@@ -10,9 +10,9 @@
 // (inline code, raw HTML, link title) is left alone, because that whitespace is
 // content; and a run that would trim to empty after an odd number of
 // backslashes becomes one space, because a bare trailing `\` is a hard break.
-// Blank collapse
-// reduces a run of >= 3 blank lines to a single blank line; a keep-out line ends
-// a blank run, and a line deleted by collapse is excluded from the trim pass.
+// Blank collapse reduces a run of >= 3 blank lines to a single blank line; a
+// keep-out line ends a blank run, and a line deleted by collapse is excluded
+// from the trim pass.
 import type { Edit } from "./edit.js";
 import { type Range, rangesIntersect } from "./segment.js";
 

@@ -1,9 +1,8 @@
 // Classify a Markdown document with the shared GFM parser into byte-untouched
 // protected ranges, Table node ranges, multi-line literal inline spans, and
-// list marker groups, in ONE
-// tree.iterate walk (enter returns false to skip descent — the precedent is
-// cm/table/table-ranges.ts; a manual cursor walk leaks adjacent protected
-// blocks). Frontmatter is detected by its opening/closing --- fences. Tables
+// list marker groups, in ONE tree.iterate walk (enter returns false to skip
+// descent — the precedent is cm/table/table-ranges.ts; a manual cursor walk
+// leaks adjacent protected blocks). Frontmatter is detected by its opening/closing --- fences. Tables
 // are the parser's Table nodes (filtered against protected ranges), NOT the
 // line-based parseAllTables (which absorbs interrupters / includes list
 // markers — see Decision Log).
