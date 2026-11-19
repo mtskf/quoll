@@ -5,9 +5,14 @@
 // whole line. Trim is hard-break-preserving (a content line whose trailing run
 // ENDS with >= 2 spaces becomes exactly two spaces — the CommonMark hard break;
 // every other trailing run — one space, or one ending in a tab, or a
-// whitespace-only line — is trimmed to empty). Blank collapse
-// reduces a run of >= 3 blank lines to a single blank line; a keep-out line ends
-// a blank run, and a line deleted by collapse is excluded from the trim pass.
+// whitespace-only line — is trimmed to empty). Two exceptions keep the trim from
+// changing what the line renders: a line end inside a multi-line literal span
+// (inline code, raw HTML, link title) is left alone, because that whitespace is
+// content; and a run that would trim to empty after an odd number of
+// backslashes becomes one space, because a bare trailing `\` is a hard break.
+// Blank collapse reduces a run of >= 3 blank lines to a single blank line; a
+// keep-out line ends a blank run, and a line deleted by collapse is excluded
+// from the trim pass.
 import type { Edit } from "./edit.js";
 import { type Range, rangesIntersect } from "./segment.js";
 
@@ -60,7 +65,21 @@ function trailingWsStart(source: string, line: LineRecord): number {
   return ws;
 }
 
-export function lineEdits(source: string, keepOut: readonly Range[]): Edit[] {
+// True when the content before `end` ends with an odd number of backslashes,
+// i.e. its last backslash is not itself escaped.
+function endsWithUnescapedBackslash(source: string, from: number, end: number): boolean {
+  let i = end;
+  while (i > from && source[i - 1] === "\\") {
+    i -= 1;
+  }
+  return (end - i) % 2 === 1;
+}
+
+export function lineEdits(
+  source: string,
+  keepOut: readonly Range[],
+  literalSpans: readonly Range[]
+): Edit[] {
   const lines = splitLines(source);
   const skipped = lines.map((l) => rangesIntersect(keepOut, l.start, l.termEnd));
   const deleted = new Array<boolean>(lines.length).fill(false);
@@ -98,6 +117,10 @@ export function lineEdits(source: string, keepOut: readonly Range[]): Edit[] {
   flushRun(lines.length);
 
   // Trailing trim: one decision per non-skipped, non-deleted line.
+  // literalSpans arrive in source order and disjoint (classifyDocument does not
+  // descend into a literal node), and wsStart only grows down the document, so
+  // one forward cursor replaces a per-line rescan (which was quadratic).
+  let literalIndex = 0;
   for (let i = 0; i < lines.length; i++) {
     if (skipped[i] || deleted[i]) {
       continue;
@@ -107,11 +130,24 @@ export function lineEdits(source: string, keepOut: readonly Range[]): Edit[] {
     if (wsStart === line.contentEnd) {
       continue; // no trailing whitespace at all
     }
+    while (literalIndex < literalSpans.length && literalSpans[literalIndex].to <= wsStart) {
+      literalIndex += 1;
+    }
+    const literal = literalSpans[literalIndex];
+    if (literal && literal.from < line.termEnd) {
+      continue; // the run (or the line end itself) is literal content
+    }
     const run = source.slice(wsStart, line.contentEnd);
     // Content line whose trailing run ENDS with >= 2 spaces => hard break (two
-    // spaces); everything else (single space, a run ending in a tab, or a
-    // whitespace-only line) trims to empty.
-    const target = wsStart > line.start && / {2}$/.test(run) ? "  " : "";
+    // spaces); after an unescaped backslash => one space (keeps it literal);
+    // everything else (single space, a run ending in a tab, or a whitespace-only
+    // line) trims to empty.
+    let target = "";
+    if (wsStart > line.start && / {2}$/.test(run)) {
+      target = "  ";
+    } else if (endsWithUnescapedBackslash(source, line.start, wsStart)) {
+      target = " ";
+    }
     if (target !== run) {
       edits.push({ from: wsStart, to: line.contentEnd, insert: target });
     }

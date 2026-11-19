@@ -68,4 +68,10 @@ describe("formatDocument", () => {
     expect(formatDocument("+ + +\n")).toBe("+ + +\n");
     expect(formatDocument("* x\n* y\n\n# s\n\n+ + +\n")).toBe("* x\n* y\n\n# s\n\n+ + +\n");
   });
+  it("keeps a literal backslash literal (no exposed backslash hard break)", () => {
+    expect(formatDocument("alpha\\ \nbeta\n")).toBe("alpha\\ \nbeta\n");
+  });
+  it("leaves the content of a multi-line inline code span byte-identical", () => {
+    expect(formatDocument("a `x    \ny \t\nz` b   \n")).toBe("a `x    \ny \t\nz` b  \n");
+  });
 });

@@ -65,6 +65,21 @@ describe("classifyDocument", () => {
     expect(classifyDocument(src).tableRanges).toEqual([]);
   });
 
+  it("collects literal inline spans that cross a line break, and only those", () => {
+    const src = 'a `x  \ny` `one` b\n<i title="t  \nu"> <!-- c  \nd --> [l](u "t  \nx")\n';
+    expect(classifyDocument(src).literalSpans.map((r) => slice(src, r))).toEqual([
+      "`x  \ny`",
+      '<i title="t  \nu">',
+      "<!-- c  \nd -->",
+      '"t  \nx"',
+    ]);
+  });
+
+  it("does not collect literal spans inside a protected block", () => {
+    const src = "```\n`a  \nb`\n```\n";
+    expect(classifyDocument(src).literalSpans).toEqual([]);
+  });
+
   it("rangesIntersect uses intersection not containment", () => {
     const ranges = [{ from: 5, to: 10 }];
     expect(rangesIntersect(ranges, 8, 12)).toBe(true); // partial overlap
