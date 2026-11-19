@@ -117,6 +117,10 @@ export function lineEdits(
   flushRun(lines.length);
 
   // Trailing trim: one decision per non-skipped, non-deleted line.
+  // literalSpans arrive in source order and disjoint (classifyDocument does not
+  // descend into a literal node), and wsStart only grows down the document, so
+  // one forward cursor replaces a per-line rescan (which was quadratic).
+  let literalIndex = 0;
   for (let i = 0; i < lines.length; i++) {
     if (skipped[i] || deleted[i]) {
       continue;
@@ -126,7 +130,11 @@ export function lineEdits(
     if (wsStart === line.contentEnd) {
       continue; // no trailing whitespace at all
     }
-    if (rangesIntersect(literalSpans, wsStart, line.termEnd)) {
+    while (literalIndex < literalSpans.length && literalSpans[literalIndex].to <= wsStart) {
+      literalIndex += 1;
+    }
+    const literal = literalSpans[literalIndex];
+    if (literal && literal.from < line.termEnd) {
       continue; // the run (or the line end itself) is literal content
     }
     const run = source.slice(wsStart, line.contentEnd);

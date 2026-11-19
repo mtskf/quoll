@@ -49,6 +49,32 @@ describe("lineEdits — literal spans", () => {
   });
 });
 
+describe("lineEdits — literal span scan cost", () => {
+  // Counts element reads on the span list. A per-line rescan reads it
+  // O(lines x spans) times; a forward cursor reads it O(lines + spans). Counting
+  // reads is deterministic, unlike wall-clock timing under host load.
+  it("reads the literal spans a linear number of times", () => {
+    const n = 400;
+    const src = "`a\nb` \n".repeat(n);
+    const spans: { from: number; to: number }[] = [];
+    for (let i = 0, at = 0; i < n; i++, at += 7) {
+      spans.push({ from: at, to: at + 5 });
+    }
+    let reads = 0;
+    const counted = new Proxy(spans, {
+      get(target, key, receiver) {
+        if (typeof key === "string" && /^\d+$/.test(key)) {
+          reads += 1;
+        }
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    const edits = lineEdits(src, [], counted);
+    expect(edits).toEqual(lineEdits(src, [], [...spans]));
+    expect(reads).toBeLessThan(10 * n);
+  });
+});
+
 describe("lineEdits — blank collapse", () => {
   it("collapses a run of 3 blank lines to 1", () => expect(run("a\n\n\n\nb\n")).toBe("a\n\nb\n"));
   it("leaves a run of 2 blank lines untouched", () => expect(run("a\n\n\nb\n")).toBe("a\n\n\nb\n"));
