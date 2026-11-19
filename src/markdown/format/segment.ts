@@ -1,5 +1,6 @@
 // Classify a Markdown document with the shared GFM parser into byte-untouched
-// protected ranges, Table node ranges, and ordered-list marker groups, in ONE
+// protected ranges, Table node ranges, multi-line literal inline spans, and
+// list marker groups, in ONE
 // tree.iterate walk (enter returns false to skip descent — the precedent is
 // cm/table/table-ranges.ts; a manual cursor walk leaks adjacent protected
 // blocks). Frontmatter is detected by its opening/closing --- fences. Tables
@@ -18,6 +19,16 @@ const PROTECTED_NODES: ReadonlySet<string> = new Set([
   "ProcessingInstructionBlock",
 ]);
 
+// Inline nodes whose bytes reach the output verbatim, so whitespace at a line
+// end inside them is content, not trailing whitespace.
+const LITERAL_INLINE_NODES: ReadonlySet<string> = new Set([
+  "InlineCode",
+  "HTMLTag",
+  "Comment",
+  "ProcessingInstruction",
+  "LinkTitle",
+]);
+
 export type Range = { from: number; to: number };
 export type ListMarkInfo = { from: number; to: number; text: string };
 export type OrderedList = { marks: ListMarkInfo[] };
@@ -25,6 +36,9 @@ export type BulletList = { marks: ListMarkInfo[]; adjacencySafe: boolean };
 export type DocClassification = {
   protectedRanges: Range[];
   tableRanges: Range[];
+  // Literal inline spans that cross a line break (single-line spans can never
+  // contain a line end, so they are not collected).
+  literalSpans: Range[];
   orderedLists: OrderedList[];
   bulletLists: BulletList[];
 };
@@ -84,6 +98,7 @@ function frontmatterRange(source: string): Range | null {
 export function classifyDocument(source: string): DocClassification {
   const protectedRanges: Range[] = [];
   const tableRanges: Range[] = [];
+  const literalSpans: Range[] = [];
   const orderedLists: OrderedList[] = [];
   const bulletLists: BulletList[] = [];
 
@@ -107,6 +122,12 @@ export function classifyDocument(source: string): DocClassification {
           tableRanges.push({ from: node.from, to: node.to });
         }
         return false; // GFM tables don't nest; cells not needed
+      }
+      if (LITERAL_INLINE_NODES.has(node.name)) {
+        if (source.slice(node.from, node.to).includes("\n")) {
+          literalSpans.push({ from: node.from, to: node.to });
+        }
+        return false; // literal content has no inline children of interest
       }
       if (node.name === "OrderedList") {
         const marks = collectListMarks(node.node, source);
@@ -140,5 +161,5 @@ export function classifyDocument(source: string): DocClassification {
     },
   });
 
-  return { protectedRanges, tableRanges, orderedLists, bulletLists };
+  return { protectedRanges, tableRanges, literalSpans, orderedLists, bulletLists };
 }

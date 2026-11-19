@@ -15,7 +15,8 @@ export function formatDocumentEdits(source: string): Edit[] {
   if (source.length === 0) {
     return [];
   }
-  const { protectedRanges, tableRanges, orderedLists, bulletLists } = classifyDocument(source);
+  const { protectedRanges, tableRanges, literalSpans, orderedLists, bulletLists } =
+    classifyDocument(source);
   const keepOut = [...protectedRanges, ...tableRanges];
   // Sort into document order: the runtime path dispatches `{ changes: edits }`
   // directly, and CM expects changes in order. This is the ONE sort — applyEdits
@@ -25,7 +26,7 @@ export function formatDocumentEdits(source: string): Edit[] {
     ...tableEdits(source, tableRanges),
     ...listRenumberEdits(orderedLists),
     ...bulletUnifyEdits(source, bulletLists),
-    ...lineEdits(source, keepOut),
+    ...lineEdits(source, keepOut, literalSpans),
   ].sort((a, b) => a.from - b.from || a.to - b.to);
 }
 

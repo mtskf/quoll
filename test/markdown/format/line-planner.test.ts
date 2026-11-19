@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 import { applyEdits } from "../../../src/markdown/format/edit.js";
 import { lineEdits } from "../../../src/markdown/format/line-planner.js";
 
-const run = (s: string) => applyEdits(s, lineEdits(s, []));
+const run = (s: string) => applyEdits(s, lineEdits(s, [], []));
+// The range of the first `literal` occurrence in `s`.
+const spanOf = (s: string, literal: string) => {
+  const from = s.indexOf(literal);
+  return { from, to: from + literal.length };
+};
 
 describe("lineEdits — trailing trim", () => {
   it("removes a single trailing space", () =>
@@ -20,7 +25,28 @@ describe("lineEdits — trailing trim", () => {
   it("trims a run that is 2 spaces then a tab (does NOT end in 2 spaces)", () =>
     expect(run("foo  \t\nbar\n")).toBe("foo\nbar\n"));
   it("leaves protected lines untouched", () =>
-    expect(lineEdits("```\nlet a = 1   \n```\n", [{ from: 0, to: 15 }])).toEqual([]));
+    expect(lineEdits("```\nlet a = 1   \n```\n", [{ from: 0, to: 15 }], [])).toEqual([]));
+  it("keeps one space after an odd trailing backslash (trim would expose a hard break)", () =>
+    expect(run("alpha\\ \nbeta\n")).toBe("alpha\\ \nbeta\n"));
+  it("shrinks a longer run after an odd trailing backslash to one space", () =>
+    expect(run("alpha\\ \t \nbeta\n")).toBe("alpha\\ \nbeta\n"));
+  it("trims normally after an even (escaped) trailing backslash pair", () =>
+    expect(run("alpha\\\\ \nbeta\n")).toBe("alpha\\\\\nbeta\n"));
+  it("keeps a hard break after a trailing backslash unchanged", () =>
+    expect(run("alpha\\  \nbeta\n")).toBe("alpha\\  \nbeta\n"));
+});
+
+describe("lineEdits — literal spans", () => {
+  it("leaves a line end inside a literal span byte-identical", () => {
+    const src = "a `x  \ny\t\nz` b  \nend   \n";
+    const span = spanOf(src, "`x  \ny\t\nz`");
+    expect(applyEdits(src, lineEdits(src, [], [span]))).toBe("a `x  \ny\t\nz` b  \nend  \n");
+  });
+  it("still trims a line whose run lies after the span closes", () => {
+    const src = "a `x\ny`   \nb \n";
+    const span = spanOf(src, "`x\ny`");
+    expect(applyEdits(src, lineEdits(src, [], [span]))).toBe("a `x\ny`  \nb\n");
+  });
 });
 
 describe("lineEdits — blank collapse", () => {

@@ -23,6 +23,8 @@ const CORPUS = [
   "* a\n* --\n* b\n",
   "* [ ] a\n* [x] b\n",
   "* -\n",
+  "alpha\\ \t\nbeta\n",
+  "a `x    \ny \t\nz` b   \n",
 ];
 
 describe("formatDocument idempotence", () => {
