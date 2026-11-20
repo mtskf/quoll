@@ -1,16 +1,21 @@
-import { describe, expect, it } from "vitest";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Uri } from "vscode"; // vitest-aliased to test/extension/vscode-stub.ts (joinPath only)
 import {
   type HandleOpenLinkDeps,
   handleOpenLink,
 } from "../../../src/extension/links/handle-open-link.js";
+import { resolveRealContainment } from "../../../src/extension/links/real-containment.js";
+import { isWithinDir } from "../../../src/extension/links/within-dir.js";
 import {
   OPEN_LINK_CONTAINMENT_ONLY_REJECTIONS,
   OPEN_LINK_DOC_LAYOUT,
   OPEN_LINK_STRUCTURAL_MATRIX,
 } from "../../fixtures/open-link-destinations.js";
+import { makeUnitTempDir } from "../temp-root.js";
 
-const makeUri = (path: string) => ({ path }) as unknown as import("vscode").Uri;
+const makeUri = (path: string) => ({ path, fsPath: path, scheme: "file" }) as import("vscode").Uri;
 
 // documentUri = /ws/notes/doc.md ; workspace root = /ws — taken from the shared
 // fixture, since every `hostRoutes` verdict in the matrix is stated against
@@ -197,5 +202,67 @@ describe("handleOpenLink", () => {
     });
     await handleOpenLink("./other.md", deps);
     expect(errors).toEqual([expect.stringContaining("couldn't open the linked file")]);
+  });
+});
+
+describe("handleOpenLink — symlink containment", () => {
+  let temp: ReturnType<typeof makeUnitTempDir>;
+  let wsUri: Uri;
+  let notes: string;
+
+  beforeEach(() => {
+    temp = makeUnitTempDir("open-link");
+    const ws = path.join(temp.dir, "workspace");
+    const outside = path.join(temp.dir, "outside");
+    notes = path.join(ws, "notes");
+    wsUri = makeUri(ws);
+    fs.mkdirSync(notes, { recursive: true });
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, "secret.md"), "# secret\n");
+    fs.writeFileSync(path.join(notes, "doc.md"), "[x](./escape.md)\n");
+    fs.writeFileSync(path.join(notes, "other.md"), "# Other\n");
+    fs.writeFileSync(path.join(notes, "..notes.md"), "# Notes\n");
+    fs.symlinkSync(path.join(outside, "secret.md"), path.join(notes, "escape.md"), "file");
+    fs.symlinkSync(outside, path.join(notes, "linked-dir"), "dir");
+    fs.symlinkSync("./renamed.md", path.join(notes, "old.md"), "file");
+  });
+
+  afterEach(() => temp?.dispose());
+
+  function makeFileDeps() {
+    return makeDeps({
+      documentUri: makeUri(path.join(notes, "doc.md")),
+      workspaceFolderOf: (uri) => (isWithinDir(uri, wsUri) ? wsUri : undefined),
+      realContainment: resolveRealContainment,
+    });
+  }
+
+  it("refuses a symlink escape out of the workspace", async () => {
+    const { deps, opened, errors } = makeFileDeps();
+    await handleOpenLink("./escape.md", deps);
+    expect(opened).toEqual([]);
+    expect(errors).toEqual([expect.stringContaining("points outside this workspace")]);
+  });
+
+  it.each([
+    "./linked-dir/secret.md",
+    "./linked-dir/absent.md",
+    "./old.md",
+  ])("refuses %s with the out-of-scope toast", async (href) => {
+    const { deps, opened, errors } = makeFileDeps();
+    await handleOpenLink(href, deps);
+    expect(opened).toEqual([]);
+    expect(errors).toEqual([expect.stringContaining("points outside this workspace")]);
+  });
+
+  it.each([
+    "other.md",
+    "..notes.md",
+    "new.md",
+  ])("dispatches an in-scope link to %s", async (name) => {
+    const { deps, opened, errors } = makeFileDeps();
+    await handleOpenLink(`./${name}`, deps);
+    expect(opened).toEqual([path.join(notes, name)]);
+    expect(errors).toEqual([]);
   });
 });

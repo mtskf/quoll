@@ -20,8 +20,8 @@
 //     document.uri),
 //   - requires the resolved target to be inside a workspace folder OR (no
 //     workspace / escaped) inside the document's own directory subtree —
-//     containment on the resolved, decoded target is authoritative regardless
-//     of encoding, so decoding does not reopen the traversal hole,
+//     the lexical check uses the decoded target, then file URIs are checked
+//     against the real path of the workspace folder or document directory,
 //   - opens it via the injected openWith (production: openInQuollEditor +
 //     QuollEditorPanel.viewType).
 //
@@ -58,9 +58,7 @@ const OPEN_LINK_FAILURE_MESSAGE =
  *  whether anything exists there, so it cannot be used to probe the filesystem
  *  outside the workspace. That preserves this module's "refuse without
  *  confirming the escape" posture while still telling the user their click was
- *  seen and declined — the two are not in tension, because the containment
- *  verdict is derivable from the link text the user is already looking at,
- *  whereas existence is not. Names no path (the destination is untrusted
+ *  seen and declined. Names no path (the destination is untrusted
  *  webview-supplied text; echoing it back into a toast would render attacker-
  *  chosen content in host chrome — the log line carries the sanitised preview
  *  instead). */
@@ -97,127 +95,134 @@ export type HandleOpenLinkDeps = {
  *  QuollEditorPanel.handleInbound; `href` is the already-decoded relative
  *  destination string the webview sent (post decodeMarkdownDestination). */
 export async function handleOpenLink(href: string, deps: HandleOpenLinkDeps): Promise<void> {
-  // 1. Host re-validation (C0/DEL, protocol-relative, disallowed scheme).
-  if (!isAllowedUrl(href)) {
-    console.warn("[quoll] open-link rejected: URL not in allowlist", {
-      hrefPreview: sanitizeForLog(href),
-    });
-    return;
-  }
-
-  const hashIdx = href.indexOf("#");
-  const encodedPath = hashIdx >= 0 ? href.slice(0, hashIdx) : href;
-
-  if (encodedPath.length === 0) {
-    console.warn("[quoll] open-link dropped: empty path (fragment-only)", {
-      hrefPreview: sanitizeForLog(href),
-    });
-    return;
-  }
-
-  // Percent-decode ONCE so the standard `[notes](my%20notes.md)` form (what VS
-  // Code preview / GitHub / Obsidian emit) resolves to the real space-named
-  // file rather than a literal `%20`-named one. decodeURIComponent throws on a
-  // malformed escape (e.g. `50%off.md`) — fall back to the raw form so such a
-  // link still opens its literal-named file (no regression). decodeURIComponent
-  // is all-or-nothing, so a path mixing a valid and an invalid escape
-  // (`sub%20dir/50%off.md`) decodes to neither (whole-string fallback to raw),
-  // which merely surfaces the existing not-found toast — no security impact.
-  // Every structural guard below AND the containment check run on the DECODED
-  // path, so a decoded `../` traversal (`..%2f..%2f…`) resolves outside scope
-  // and is rejected by containment — decoding does not reopen the traversal hole.
-  let pathPart: string;
   try {
-    pathPart = decodeURIComponent(encodedPath);
-  } catch {
-    pathPart = encodedPath;
-  }
+    // 1. Host re-validation (C0/DEL, protocol-relative, disallowed scheme).
+    if (!isAllowedUrl(href)) {
+      console.warn("[quoll] open-link rejected: URL not in allowlist", {
+        hrefPreview: sanitizeForLog(href),
+      });
+      return;
+    }
 
-  // Re-apply the allowlist to the decoded form: catches C0/DEL bytes and
-  // protocol-relative `//host` that were hidden behind percent-escapes
-  // (`%01`, `%2f%2f…`) in the raw href.
-  if (!isAllowedUrl(pathPart)) {
-    console.warn("[quoll] open-link rejected: decoded path not in allowlist", {
-      hrefPreview: sanitizeForLog(href),
-    });
-    return;
-  }
-  if (/^[a-z][a-z0-9+.-]*:/i.test(pathPart)) {
-    // isAllowedUrl accepts mailto:/http: — but open-link targets are schemeless.
-    console.warn("[quoll] open-link dropped: destination has a scheme", {
-      hrefPreview: sanitizeForLog(href),
-    });
-    return;
-  }
-  if (pathPart.startsWith("/") || pathPart.includes("\\")) {
-    // Reject absolute `/…` and ANY backslash: markdown paths use `/`, and a `\`
-    // is normalized as a separator by real Uri.joinPath (Windows) but not by the
-    // test stub — rejecting it makes separator semantics moot for containment.
-    console.warn("[quoll] open-link dropped: absolute path or backslash", {
-      hrefPreview: sanitizeForLog(href),
-    });
-    return;
-  }
-  if (!/\.md$/i.test(pathPart)) {
-    console.warn("[quoll] open-link dropped: not a .md target", {
-      hrefPreview: sanitizeForLog(href),
-    });
-    return;
-  }
+    const hashIdx = href.indexOf("#");
+    const encodedPath = hashIdx >= 0 ? href.slice(0, hashIdx) : href;
 
-  const dir = deps.joinPath(deps.documentUri, "..");
-  const target = deps.joinPath(dir, pathPart);
+    if (encodedPath.length === 0) {
+      console.warn("[quoll] open-link dropped: empty path (fragment-only)", {
+        hrefPreview: sanitizeForLog(href),
+      });
+      return;
+    }
 
-  // Fail-closed containment: inside a workspace folder, OR (no workspace /
-  // escaped the workspace) inside the document's own directory subtree.
-  //
-  // Containment runs on the DECODED, resolved `target`, so it is authoritative
-  // regardless of encoding. A decoded `../` traversal (`..%2f..%2fx.md` →
-  // `../../x.md`) resolves OUTSIDE `dir`/workspace and is rejected here —
-  // decoding before the join does not reopen the traversal hole, because the
-  // boundary is asserted on the resolved target, not on the raw string.
-  //
-  // THE ONE REJECTION THAT TOASTS — see this module's header for why this arm,
-  // and only this arm, is a reachable outcome of a real click. What follows from
-  // that is local: the webview has already promised the click (pointer cursor)
-  // and consumed it (preventDefault, which eats the caret move) by the time the
-  // host sees the escape, so a log-only drop produces NOTHING the user can
-  // perceive — no navigation, no caret move, no toast, nothing in the webview
-  // console. That silence was an accepted phase-1 trade-off; it is now paid off
-  // with a toast, which is the smaller half of the deferred design fork:
-  //
-  //   toast (chosen)  — one host-side string, no wire change. Tells the user
-  //     both THAT the click was declined and WHY.
-  //   `open-link-rejected` channel (declined) — a new host→webview message plus
-  //     validator, reducer arm, per-click pending state webview-side, and a
-  //     re-clamp of the stashed position against a document that may have moved
-  //     on. It buys back the suppressed caret move, but a caret landing in the
-  //     link text a round-trip later communicates no REASON, so the toast would
-  //     be wanted anyway — the channel is strictly additional machinery on top
-  //     of the fix, not an alternative to it. Left undone deliberately; revisit
-  //     only if the caret loss (not the silence) is what users report.
-  //
-  // The message is generic on purpose — see OPEN_LINK_OUT_OF_SCOPE_MESSAGE for
-  // why saying "out of scope" leaks nothing that the link text does not already.
-  const isInWorkspace = deps.workspaceFolderOf(target) !== undefined;
-  if (!isInWorkspace && !isWithinDir(target, dir)) {
-    console.warn("[quoll] open-link dropped: target outside workspace/document dir", {
-      hrefPreview: sanitizeForLog(href),
-    });
-    deps.showError(OPEN_LINK_OUT_OF_SCOPE_MESSAGE);
-    return;
-  }
+    // Percent-decode ONCE so the standard `[notes](my%20notes.md)` form (what VS
+    // Code preview / GitHub / Obsidian emit) resolves to the real space-named
+    // file rather than a literal `%20`-named one. decodeURIComponent throws on a
+    // malformed escape (e.g. `50%off.md`) — fall back to the raw form so such a
+    // link still opens its literal-named file (no regression). decodeURIComponent
+    // is all-or-nothing, so a path mixing a valid and an invalid escape
+    // (`sub%20dir/50%off.md`) decodes to neither (whole-string fallback to raw),
+    // which merely surfaces the existing not-found toast — no security impact.
+    // Every structural guard below AND the containment check run on the DECODED
+    // path, so a decoded `../` traversal (`..%2f..%2f…`) resolves outside scope
+    // and is rejected by containment — decoding does not reopen the traversal hole.
+    let pathPart: string;
+    try {
+      pathPart = decodeURIComponent(encodedPath);
+    } catch {
+      pathPart = encodedPath;
+    }
 
-  // openWith returns a Thenable; a synchronous throw or an async rejection both
-  // surface the failure toast so a dead click is never silent. Mirrors
-  // handleOpenExternal's failure handling.
-  try {
-    void Promise.resolve(deps.openWith(target)).then(undefined, (err: unknown) => {
-      console.error("[quoll] open-link openWith rejected", err);
-      deps.showError(OPEN_LINK_FAILURE_MESSAGE);
-    });
+    // Re-apply the allowlist to the decoded form: catches C0/DEL bytes and
+    // protocol-relative `//host` that were hidden behind percent-escapes
+    // (`%01`, `%2f%2f…`) in the raw href.
+    if (!isAllowedUrl(pathPart)) {
+      console.warn("[quoll] open-link rejected: decoded path not in allowlist", {
+        hrefPreview: sanitizeForLog(href),
+      });
+      return;
+    }
+    if (/^[a-z][a-z0-9+.-]*:/i.test(pathPart)) {
+      // isAllowedUrl accepts mailto:/http: — but open-link targets are schemeless.
+      console.warn("[quoll] open-link dropped: destination has a scheme", {
+        hrefPreview: sanitizeForLog(href),
+      });
+      return;
+    }
+    if (pathPart.startsWith("/") || pathPart.includes("\\")) {
+      // Reject absolute `/…` and ANY backslash: markdown paths use `/`, and a `\`
+      // is normalized as a separator by real Uri.joinPath (Windows) but not by the
+      // test stub — rejecting it makes separator semantics moot for containment.
+      console.warn("[quoll] open-link dropped: absolute path or backslash", {
+        hrefPreview: sanitizeForLog(href),
+      });
+      return;
+    }
+    if (!/\.md$/i.test(pathPart)) {
+      console.warn("[quoll] open-link dropped: not a .md target", {
+        hrefPreview: sanitizeForLog(href),
+      });
+      return;
+    }
+
+    const dir = deps.joinPath(deps.documentUri, "..");
+    const target = deps.joinPath(dir, pathPart);
+
+    // Fail-closed containment: inside a workspace folder, OR (no workspace /
+    // escaped the workspace) inside the document's own directory subtree.
+    //
+    // Containment runs on the DECODED, resolved `target`, so it is authoritative
+    // regardless of encoding. A decoded `../` traversal (`..%2f..%2fx.md` →
+    // `../../x.md`) resolves OUTSIDE `dir`/workspace and is rejected here —
+    // decoding before the join does not reopen the traversal hole, because the
+    // boundary is asserted on the resolved target, not on the raw string.
+    //
+    // THE ONE REJECTION THAT TOASTS — see this module's header for why this arm,
+    // and only this arm, is a reachable outcome of a real click. What follows from
+    // that is local: the webview has already promised the click (pointer cursor)
+    // and consumed it (preventDefault, which eats the caret move) by the time the
+    // host sees the escape, so a log-only drop produces NOTHING the user can
+    // perceive — no navigation, no caret move, no toast, nothing in the webview
+    // console. That silence was an accepted phase-1 trade-off; it is now paid off
+    // with a toast, which is the smaller half of the deferred design fork:
+    //
+    //   toast (chosen)  — one host-side string, no wire change. Tells the user
+    //     both THAT the click was declined and WHY.
+    //   `open-link-rejected` channel (declined) — a new host→webview message plus
+    //     validator, reducer arm, per-click pending state webview-side, and a
+    //     re-clamp of the stashed position against a document that may have moved
+    //     on. It buys back the suppressed caret move, but a caret landing in the
+    //     link text a round-trip later communicates no REASON, so the toast would
+    //     be wanted anyway — the channel is strictly additional machinery on top
+    //     of the fix, not an alternative to it. Left undone deliberately; revisit
+    //     only if the caret loss (not the silence) is what users report.
+    //
+    // The message is generic on purpose — see OPEN_LINK_OUT_OF_SCOPE_MESSAGE for
+    // why saying "out of scope" leaks nothing that the link text does not already.
+    const workspaceFolder = deps.workspaceFolderOf(target);
+    let outside = workspaceFolder === undefined && !isWithinDir(target, dir);
+    if (!outside && target.scheme === "file") {
+      const roots = [workspaceFolder ?? dir];
+      const verdicts = await Promise.all(
+        roots.map((root) => deps.realContainment(target.fsPath, root.fsPath))
+      );
+      if (deps.isDisposed()) {
+        return;
+      }
+      outside = verdicts.every((verdict) => verdict === "outside");
+    }
+    if (outside) {
+      console.warn("[quoll] open-link dropped: target outside workspace/document dir", {
+        hrefPreview: sanitizeForLog(href),
+      });
+      deps.showError(OPEN_LINK_OUT_OF_SCOPE_MESSAGE);
+      return;
+    }
+
+    await deps.openWith(target);
   } catch (err) {
-    console.error("[quoll] open-link openWith threw synchronously", err);
-    deps.showError(OPEN_LINK_FAILURE_MESSAGE);
+    console.error("[quoll] open-link failed", err);
+    if (!deps.isDisposed()) {
+      deps.showError(OPEN_LINK_FAILURE_MESSAGE);
+    }
   }
 }
