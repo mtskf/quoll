@@ -161,4 +161,47 @@ describe("dirty-doc-disk-conflict", function () {
     // pin the Quoll-owned contract: the divergence never silently discarded the
     // user's edits, so the stale etag that triggers the native guard is intact.
   });
+
+  // REV-20261119-07: a save's own fs signal lands after the user has already
+  // typed on. Disk then holds exactly what this document saved, so it must not
+  // read as an external change — while a genuinely different write right after
+  // the save must still prompt. Drives the platform save + a standard text
+  // editor opened beside Quoll on the same document.
+  it("does not prompt for its own save followed by an immediate append, but still prompts for a different external write", async () => {
+    const harness = await getHarness();
+    await openAndDirty("# Initial\n\nSAVED\n");
+    const doc = harness.activePanel?.document as vscode.TextDocument;
+    const editor = await vscode.window.showTextDocument(doc, {
+      viewColumn: vscode.ViewColumn.Beside,
+      preview: false,
+    });
+
+    let prompts = 0;
+    let promptFired: () => void = () => undefined;
+    const prompted = new Promise<void>((resolve) => {
+      promptFired = resolve;
+    });
+    harness.diskConflictPromptOverride = (_msg, ..._actions) => {
+      prompts += 1;
+      promptFired();
+      return Promise.resolve(KEEP);
+    };
+
+    assert.ok(await doc.save(), "the save must succeed");
+    const appended = await editor.edit((eb) =>
+      eb.insert(doc.lineAt(doc.lineCount - 1).range.end, "APPENDED\n")
+    );
+    assert.ok(appended, "the append in the standard editor must apply");
+    assert.strictEqual(doc.isDirty, true, "the append must re-dirty the model");
+
+    // Outlast the fs-watcher latency + the conflict debounce for the save's signal.
+    await new Promise((r) => setTimeout(r, 1500));
+    assert.strictEqual(prompts, 0, "our own save must not read as an external change");
+    assert.ok(doc.getText().includes("APPENDED"), "the append must be untouched");
+
+    await fs.writeFile(tempFile as string, "## Other\n\nbody\n");
+    await prompted;
+    assert.strictEqual(prompts, 1, "a different external write must still prompt");
+    assert.ok(doc.getText().includes("APPENDED"), "Keep my edits must preserve the append");
+  });
 });

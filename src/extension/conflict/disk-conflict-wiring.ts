@@ -192,6 +192,14 @@ export function createDiskConflictWiring(deps: DiskConflictWiringDeps): DiskConf
         }
       };
     },
+    subscribeSave: (onSave) => {
+      const sub = workspace.onDidSaveTextDocument((saved) => {
+        if (saved.uri.toString() === deps.documentUri.toString()) {
+          onSave();
+        }
+      });
+      return () => sub.dispose();
+    },
     documentUriString: deps.documentUri.toString(),
     isDisposed: deps.isDisposed,
     isDirty: deps.isDirty,

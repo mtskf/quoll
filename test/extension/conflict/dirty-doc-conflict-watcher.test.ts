@@ -15,7 +15,9 @@ const DEBOUNCE = 10;
 // subscription handler; individual tests override only the deps they exercise.
 function makeWatcher(overrides: Partial<DirtyDocConflictWatcherDeps> = {}) {
   let onSignal: ((changedUriString: string) => void) | null = null;
+  let onSave: (() => void) | null = null;
   let unsubscribed = false;
+  let saveUnsubscribed = false;
   const spies = {
     readDiskText: vi.fn(async () => "disk-content"),
     readBufferText: vi.fn(() => "buffer-content"),
@@ -30,6 +32,12 @@ function makeWatcher(overrides: Partial<DirtyDocConflictWatcherDeps> = {}) {
       onSignal = handler;
       return () => {
         unsubscribed = true;
+      };
+    },
+    subscribeSave: (handler) => {
+      onSave = handler;
+      return () => {
+        saveUnsubscribed = true;
       };
     },
     documentUriString: URI,
@@ -54,13 +62,20 @@ function makeWatcher(overrides: Partial<DirtyDocConflictWatcherDeps> = {}) {
       }
       onSignal(uri);
     },
+    // The platform's save notification for the watched doc.
+    save: () => {
+      if (onSave === null) {
+        throw new Error("save handler not captured");
+      }
+      onSave();
+    },
     setDirty: (v: boolean) => {
       dirty = v;
     },
     setDisposed: (v: boolean) => {
       disposed = v;
     },
-    isUnsubscribed: () => unsubscribed,
+    isUnsubscribed: () => unsubscribed && saveUnsubscribed,
   };
 }
 
@@ -249,6 +264,118 @@ describe("createDirtyDocConflictWatcher", () => {
     w.emit();
     await fireDebounce();
     expect(w.spies.promptReload).not.toHaveBeenCalled();
+  });
+
+  describe("own saves", () => {
+    // Timeline: this document saves `saved\n` (clean at the save notification),
+    // the save's own fs signal arrives, and the user appends before the debounce
+    // fires. `disk` is what the conflict check then reads.
+    function savedThenAppended(disk: string) {
+      let buffer = "saved\n";
+      const readDiskText = vi.fn(async (): Promise<string | null> => disk);
+      const w = makeWatcher({ readDiskText, readBufferText: () => buffer });
+      w.setDirty(false);
+      w.save();
+      w.emit();
+      buffer = "saved\nappended\n";
+      w.setDirty(true);
+      return { ...w, readDiskText, setBuffer: (v: string) => (buffer = v) };
+    }
+
+    it("does not prompt when a self-save is followed by an append before the check", async () => {
+      const w = savedThenAppended("saved\n");
+      await fireDebounce();
+      expect(w.readDiskText).toHaveBeenCalledTimes(1);
+      expect(w.spies.promptReload).not.toHaveBeenCalled();
+    });
+
+    it("compares the saved content with the same BOM/EOL normalization", async () => {
+      const w = savedThenAppended("saved\r\n");
+      await fireDebounce();
+      expect(w.spies.promptReload).not.toHaveBeenCalled();
+    });
+
+    it("still prompts for a different external write right after a self-save", async () => {
+      const w = savedThenAppended("external\n");
+      await fireDebounce();
+      expect(w.spies.promptReload).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps recognising its save across a repeated fs signal for the same bytes", async () => {
+      const w = savedThenAppended("saved\n");
+      await fireDebounce();
+      w.emit();
+      await fireDebounce();
+      expect(w.readDiskText).toHaveBeenCalledTimes(2);
+      expect(w.spies.promptReload).not.toHaveBeenCalled();
+    });
+
+    it("forgets the save once disk is seen to hold other bytes, so a write-back of them prompts", async () => {
+      // e.g. a branch switch away and back: disk leaves our save while the doc is
+      // clean (VS Code reloads it), the user edits, then disk returns to the
+      // bytes we once saved. That is an external change to the reloaded text.
+      let buffer = "saved\n";
+      let disk = "saved\n";
+      const w = makeWatcher({
+        readDiskText: vi.fn(async () => disk),
+        readBufferText: () => buffer,
+      });
+      w.setDirty(false);
+      w.save();
+      disk = "other\n";
+      buffer = "other\n"; // the platform's clean auto-reload
+      w.emit();
+      await fireDebounce();
+      buffer = "other\nedited\n";
+      w.setDirty(true);
+      disk = "saved\n";
+      w.emit();
+      await fireDebounce();
+      expect(w.spies.promptReload).toHaveBeenCalledTimes(1);
+    });
+
+    it("ignores a save notified while the model is still dirty (the saved bytes are unknown)", async () => {
+      let buffer = "saved\nmore\n";
+      const w = makeWatcher({
+        readDiskText: vi.fn(async () => "saved\nmore\n"),
+        readBufferText: () => buffer,
+      });
+      w.save(); // dirty at the notification: the buffer is not what was written
+      buffer = "saved\nmore\nagain\n";
+      w.emit();
+      await fireDebounce();
+      expect(w.spies.promptReload).toHaveBeenCalledTimes(1);
+    });
+
+    it("discards a disk read that a save overtook, without forgetting that save", async () => {
+      let buffer = "old\nedit\n";
+      let releaseRead: (v: string) => void = () => undefined;
+      const readDiskText = vi
+        .fn<() => Promise<string | null>>()
+        .mockImplementationOnce(
+          () =>
+            new Promise<string>((resolve) => {
+              releaseRead = resolve;
+            })
+        )
+        .mockResolvedValue("new\n");
+      const w = makeWatcher({ readDiskText, readBufferText: () => buffer });
+      w.emit();
+      await fireDebounce(); // read in flight
+      buffer = "new\n";
+      w.setDirty(false);
+      w.save(); // the save lands mid-read
+      buffer = "new\nappended\n";
+      w.setDirty(true);
+      releaseRead("old\n"); // the pre-save bytes
+      await vi.runAllTimersAsync();
+      expect(w.spies.promptReload).not.toHaveBeenCalled();
+      // The save's own fs signal still resolves as ours.
+      w.emit();
+      await fireDebounce();
+      expect(readDiskText).toHaveBeenCalledTimes(2);
+      expect(w.spies.promptReload).not.toHaveBeenCalled();
+    });
   });
 
   it("dispose cancels a pending debounce and tears down the subscription", async () => {

@@ -15,7 +15,7 @@
 // "should we even prompt" predicate lives in disk-conflict.ts and is reused
 // here (never duplicated).
 
-import { shouldPromptDiskConflict } from "./disk-conflict.js";
+import { sameDocumentText, shouldPromptDiskConflict } from "./disk-conflict.js";
 
 // Debounce for the dirty-doc on-disk conflict watcher. External tools often
 // write a file in several fs operations (truncate + write, or temp + rename);
@@ -28,6 +28,9 @@ export interface DirtyDocConflictWatcherDeps {
    *  by `documentUriString` itself. Returns a teardown for the subscription,
    *  run on dispose. */
   readonly subscribe: (onSignal: (changedUriString: string) => void) => () => void;
+  /** Subscribe to the platform's save notification for this document (fired
+   *  after the write). Returns a teardown, run on dispose. */
+  readonly subscribeSave: (onSave: () => void) => () => void;
   /** The watched document's URI string, for filtering signals to this doc. */
   readonly documentUriString: string;
   /** True once the panel is disposed — every async continuation re-checks it. */
@@ -71,14 +74,28 @@ export function createDirtyDocConflictWatcher(
   // watcher event mid-prompt or mid-reload cannot start a second prompt
   // (Codex C84).
   let conflictActionInFlight = false;
+  // What this document last wrote to disk, or null when unknown. A save's own fs
+  // signal can be checked after the user has typed on, so the dirty buffer then
+  // differs from a disk that holds nothing but our save: matching it is how the
+  // check tells our write from an external one. Cleared as soon as disk is seen
+  // to hold anything else, so a later external write-back of those same bytes
+  // (a branch switch away and back) still prompts. No ignore window: a
+  // different write prompts however soon after the save it lands.
+  let savedText: string | null = null;
+  const onSave = (): void => {
+    // Dirty at the notification ⇒ edits landed after the write, so the buffer is
+    // not what was saved and the saved bytes are unknown.
+    savedText = deps.isDirty() ? null : deps.readBufferText();
+  };
 
   const checkConflict = async (): Promise<void> => {
     if (deps.isDisposed() || conflictActionInFlight) {
       return;
     }
-    // Clean docs auto-revert via the platform; our own saves clear dirty.
+    // Clean docs auto-revert via the platform, so a clean doc has nothing to
+    // prompt about — it is read only to learn whether disk still holds our save.
     // Cheap synchronous early-exit BEFORE claiming the single-flight flag.
-    if (!deps.isDirty()) {
+    if (!deps.isDirty() && savedText === null) {
       return;
     }
     // Claim the flag BEFORE the async read (Codex C82): a slow readFile must
@@ -86,6 +103,7 @@ export function createDirtyDocConflictWatcher(
     // duplicate prompt. The flag spans the entire action (read → prompt →
     // reload); `finally` always releases it (return / throw both run it).
     conflictActionInFlight = true;
+    const savedBeforeRead = savedText;
     try {
       let diskText: string | null;
       try {
@@ -106,8 +124,18 @@ export function createDirtyDocConflictWatcher(
       if (diskText === null) {
         return;
       }
-      // Re-read isDirty / buffer FRESH after the await: a save that landed
-      // during readFile flips isDirty → shouldPromptDiskConflict returns false.
+      // A save that landed during readFile makes these bytes stale; its own fs
+      // signal triggers a fresh check.
+      if (savedText !== savedBeforeRead) {
+        return;
+      }
+      if (savedText !== null) {
+        if (sameDocumentText(diskText, savedText)) {
+          return;
+        }
+        savedText = null;
+      }
+      // Re-read isDirty / buffer FRESH after the await.
       if (!shouldPromptDiskConflict(deps.isDirty(), diskText, deps.readBufferText())) {
         return;
       }
@@ -155,6 +183,7 @@ export function createDirtyDocConflictWatcher(
   };
 
   const unsubscribe = deps.subscribe(onSignal);
+  const unsubscribeSave = deps.subscribeSave(onSave);
 
   return {
     dispose(): void {
@@ -165,6 +194,7 @@ export function createDirtyDocConflictWatcher(
         conflictTimer = null;
       }
       unsubscribe();
+      unsubscribeSave();
     },
   };
 }
