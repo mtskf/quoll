@@ -23,8 +23,10 @@ const FIRST_SAFE_GLOB_MAJOR = 13;
 const major = (version: string): number => Number.parseInt(version, 10);
 
 /** `snapshots:` entries, keyed by `name@version`, with their resolved deps. */
-function snapshots(): Map<string, Map<string, string>> {
-  const section = lock.slice(lock.indexOf("\nsnapshots:\n"));
+function snapshots(text: string): Map<string, Map<string, string>> {
+  // An autocrlf checkout turns the lockfile into CRLF; the parse is LF-based.
+  const lf = text.replace(/\r\n/g, "\n");
+  const section = lf.slice(lf.indexOf("\nsnapshots:\n"));
   const result = new Map<string, Map<string, string>>();
   let deps: Map<string, string> | undefined;
   for (const line of section.split("\n")) {
@@ -43,7 +45,7 @@ function snapshots(): Map<string, Map<string, string>> {
 }
 
 describe("glob / minimatch lockfile compatibility", () => {
-  const all = snapshots();
+  const all = snapshots(lock);
   const globs = [...all].filter(([key]) => key.startsWith("glob@"));
 
   it("parses the glob snapshots it guards", () => {
@@ -52,6 +54,11 @@ describe("glob / minimatch lockfile compatibility", () => {
     for (const [, deps] of globs) {
       expect(deps.get("minimatch")).toBeDefined();
     }
+  });
+
+  it("parses a CRLF lockfile the same as an LF one", () => {
+    const lf = lock.replace(/\r\n/g, "\n");
+    expect(snapshots(lf.replace(/\n/g, "\r\n"))).toEqual(snapshots(lf));
   });
 
   it("pairs minimatch 11+ only with a glob that can drive it", () => {

@@ -76,6 +76,18 @@ function jobBlock(workflow: string, job: string, label: string): string {
   return (end === -1 ? rest : rest.slice(0, end)).join("\n");
 }
 
+// Collects the sorted set of mapping keys `pattern` matches — the shared tail
+// of jobAttributeKeys and topLevelKeys (only the indent, and whether comments
+// need stripping first, differs between them). Quote-tolerant, because
+// `"defaults":` and `defaults:` are the same key.
+const mappingKeys = (text: string, pattern: RegExp) =>
+  [...text.matchAll(pattern)].map((m) => m[1] ?? m[2] ?? m[3]).sort();
+
+// The keys a job declares, wherever they sit: YAML mappings are unordered, so
+// scanning only the slice before `steps:` misses `defaults:` written after it.
+const jobAttributeKeys = (job: string) =>
+  mappingKeys(job, /^ {4}(?:"([^"]*)"|'([^']*)'|([^\s:]+))\s*:/gm);
+
 describe("release SBOM cataloger wiring", () => {
   const workflow = stripComments(publishYml);
   const syftConfig = stripComments(read(".github/syft-release.yaml"));
@@ -119,9 +131,9 @@ describe("release SBOM cataloger wiring", () => {
 // a TRUE positive — the files really would have diverged — so the assertion is
 // correct either way.
 describe("CI rehearses the release SBOM sequence", () => {
-  const publishJob = jobBlock(stripComments(publishYml), "publish", "publish.yml");
+  const releaseBuildJob = jobBlock(stripComments(publishYml), "build", "publish.yml");
   const sbomJob = jobBlock(stripComments(ciYml), "sbom", "ci.yml");
-  const rawPublishJob = jobBlock(publishYml, "publish", "publish.yml");
+  const rawReleaseBuildJob = jobBlock(publishYml, "build", "publish.yml");
   const rawSbomJob = jobBlock(ciYml, "sbom", "ci.yml");
 
   const normalise = (block: string) =>
@@ -162,7 +174,7 @@ describe("CI rehearses the release SBOM sequence", () => {
 
   it.each(SHARED_STEPS)("runs `%s` identically in both workflows", (step) => {
     expect(normalise(stepBlock(sbomJob, step, "ci.yml"))).toBe(
-      normalise(stepBlock(publishJob, step, "publish.yml"))
+      normalise(stepBlock(releaseBuildJob, step, "publish.yml"))
     );
   });
 
@@ -196,7 +208,7 @@ describe("CI rehearses the release SBOM sequence", () => {
   // — the block-scalar rewrite above, a step-level `continue-on-error: true` —
   // fails the single-line anchor, whether or not it also swallows the status.
   it.each([
-    ["publish.yml", publishJob],
+    ["publish.yml", releaseBuildJob],
     ["ci.yml", sbomJob],
   ])("keeps the SBOM verify step fail-closed in %s", (label, job) => {
     const step = stepBlock(job, "Verify SBOM is scoped to the shipped runtime", label);
@@ -229,7 +241,7 @@ describe("CI rehearses the release SBOM sequence", () => {
       });
 
   it.each([
-    ["publish.yml", publishJob],
+    ["publish.yml", releaseBuildJob],
     ["ci.yml", sbomJob],
   ])("runs the shared steps consecutively and in order in %s", (_label, job) => {
     const labels = stepLabels(job);
@@ -247,7 +259,7 @@ describe("CI rehearses the release SBOM sequence", () => {
   // satisfied by a correct-looking `uses:` line sitting in a comment or in some
   // unrelated step while the real one regressed.
   it.each([
-    ["publish.yml", rawPublishJob],
+    ["publish.yml", rawReleaseBuildJob],
     ["ci.yml", rawSbomJob],
   ])("pins anchore/sbom-action to a 40-hex SHA in %s", (label, rawJob) => {
     // 8 spaces = a step's own attributes, so this cannot be satisfied by a
@@ -287,7 +299,7 @@ describe("CI rehearses the release SBOM sequence", () => {
     for (const [kind, matches] of Object.entries(sbomPins)) {
       expect(matches, `no ${kind} pin matched in ci.yml's sbom job`).not.toHaveLength(0);
     }
-    expect(sbomPins).toEqual(pins(publishJob));
+    expect(sbomPins).toEqual(pins(releaseBuildJob));
   });
 
   // Everything above pins what the gate RUNS. What follows pins whether running
@@ -311,18 +323,6 @@ describe("CI rehearses the release SBOM sequence", () => {
   // task. Read these as a tripwire for the plausible mid-release edit, not as
   // proof the gate cannot be un-gated.
 
-  // Collects the sorted set of mapping keys `pattern` matches — the shared tail
-  // of both callers below (only the indent, and whether comments need
-  // stripping first, differs between them). Quote-tolerant, because
-  // `"defaults":` and `defaults:` are the same key.
-  const mappingKeys = (text: string, pattern: RegExp) =>
-    [...text.matchAll(pattern)].map((m) => m[1] ?? m[2] ?? m[3]).sort();
-
-  // The keys a job declares, wherever they sit: YAML mappings are unordered, so
-  // scanning only the slice before `steps:` misses `defaults:` written after it.
-  const jobAttributeKeys = (job: string) =>
-    mappingKeys(job, /^ {4}(?:"([^"]*)"|'([^']*)'|([^\s:]+))\s*:/gm);
-
   // Same idea at the top of the file, where a workflow-wide `defaults:` would
   // live — no job block would ever show it.
   const topLevelKeys = (yaml: string) =>
@@ -332,14 +332,27 @@ describe("CI rehearses the release SBOM sequence", () => {
   // `defaults.run.shell`, and a custom shell template's exit code IS the step
   // outcome, so `shell: bash -c "bash {0}; exit 0" bash` runs every command and
   // discards every failure without touching a single step block. Pin the key
-  // SETS instead of blocklisting the attribute: both jobs declare exactly
-  // `runs-on` and `steps`, and neither file declares anything at the top level
-  // beyond its trigger and permissions.
+  // SETS instead of blocklisting the attribute: each job declares exactly the
+  // keys listed (publish.yml's `build` adds only its per-job `permissions`,
+  // which cannot change a shell), and neither file declares anything at the
+  // top level beyond its trigger and permissions.
   it.each([
-    ["publish.yml", publishYml, publishJob, ["name", "on", "permissions", "jobs"]],
-    ["ci.yml", ciYml, sbomJob, ["name", "on", "permissions", "concurrency", "jobs"]],
-  ])("keeps the gate's execution context unmodified in %s", (_label, raw, job, top) => {
-    expect(jobAttributeKeys(job)).toEqual(["runs-on", "steps"]);
+    [
+      "publish.yml",
+      publishYml,
+      releaseBuildJob,
+      ["permissions", "runs-on", "steps"],
+      ["name", "on", "permissions", "jobs"],
+    ],
+    [
+      "ci.yml",
+      ciYml,
+      sbomJob,
+      ["runs-on", "steps"],
+      ["name", "on", "permissions", "concurrency", "jobs"],
+    ],
+  ])("keeps the gate's execution context unmodified in %s", (_label, raw, job, jobKeys, top) => {
+    expect(jobAttributeKeys(job)).toEqual(jobKeys);
     expect(topLevelKeys(raw)).toEqual([...top].sort());
     // Every step opens block-style. A flow-mapped step — `- { name: …, if:
     // always(), run: … }` — is valid YAML that GHA honours, and it carries its
@@ -381,8 +394,16 @@ describe("CI rehearses the release SBOM sequence", () => {
     return scalars;
   };
 
+  // The publish steps now live in a second job, reached only through
+  // `needs: build` — so a red gate in `build` blocks them only while that job
+  // keeps the implicit `if: success()` too. The `publish` job's key set is
+  // pinned in the OIDC-scope suite below (no job-level `if:` at all); here its
+  // step-level `if:`s are read alongside `build`'s.
   it("keeps a red gate blocking every later publish.yml step", () => {
-    const scalars = ifScalars(publishJob);
+    const scalars = [
+      ...ifScalars(releaseBuildJob),
+      ...ifScalars(jobBlock(stripComments(publishYml), "publish", "publish.yml")),
+    ];
     // Non-vacuity: publish.yml has exactly one `if:` today (the Open VSX step's
     // token check). An empty result would satisfy the loop below while proving
     // the collector never collected.
@@ -397,5 +418,163 @@ describe("CI rehearses the release SBOM sequence", () => {
   // says nothing about `on:`).
   it("keeps the sbom rehearsal gating on every PR", () => {
     expect(stripComments(ciYml)).toMatch(/^on:\n\s+pull_request:/m);
+  });
+});
+
+// `id-token: write` is the Marketplace publish credential under Trusted
+// Publishing, and GitHub exposes it to every step of a job that holds it. With
+// a policy that matches on the workflow file rather than the job, a token
+// minted in ANY job of this file can publish. So only `publish` holds the
+// grant (for both Sigstore attestation and the Marketplace exchange) and runs
+// no third-party code beyond pnpm/action-setup; `build`, which runs
+// anchore/sbom-action, holds `contents: read` and nothing else. Read as text
+// with the same caveats as the suite above; flat `key: value` permission maps
+// are the only form accepted, so `permissions: write-all` or a flow map fails
+// closed.
+describe("release OIDC publish scope", () => {
+  const workflow = stripComments(publishYml);
+  const buildJob = jobBlock(workflow, "build", "publish.yml");
+  const publishJob = jobBlock(workflow, "publish", "publish.yml");
+  const rawPublishJob = jobBlock(publishYml, "publish", "publish.yml");
+
+  // The `permissions:` mapping opened at `indent`, as sorted `key: value`
+  // lines; null when no block-style mapping opens there.
+  const permissionsAt = (block: string, indent: number) => {
+    const lines = block.split("\n");
+    const start = lines.indexOf(`${" ".repeat(indent)}permissions:`);
+    if (start === -1) {
+      return null;
+    }
+    const entry = new RegExp(`^ {${indent + 2}}(\\S.*)$`);
+    const entries: string[] = [];
+    for (const line of lines.slice(start + 1)) {
+      const match = line.match(entry);
+      if (!match) {
+        break;
+      }
+      entries.push(match[1]);
+    }
+    return entries.sort();
+  };
+
+  const stepNames = (job: string) =>
+    job
+      .split("\n")
+      .filter((line) => /^ {6}- /.test(line))
+      .map((line) => line.match(/^ {6}- name: (.*)$/)?.[1] ?? "<unnamed step>");
+
+  it("grants nothing beyond read at the workflow level", () => {
+    expect(permissionsAt(workflow, 0)).toEqual(["contents: read"]);
+  });
+
+  it("declares exactly the build and publish jobs", () => {
+    const afterJobs = workflow.slice(workflow.indexOf("\njobs:\n"));
+    expect([...afterJobs.matchAll(/^ {2}(\S[^:]*):\s*$/gm)].map((m) => m[1])).toEqual([
+      "build",
+      "publish",
+    ]);
+  });
+
+  it("scopes each job's token to what it uses", () => {
+    expect(permissionsAt(buildJob, 4)).toEqual(["contents: read"]);
+    expect(permissionsAt(publishJob, 4)).toEqual([
+      "attestations: write",
+      "contents: read",
+      "id-token: write",
+    ]);
+  });
+
+  it("starts publish only after build succeeds", () => {
+    // No job-level `if:` (so no `always()` past a red `build`), no
+    // `defaults:` shell override, no `environment:` the policy does not name.
+    expect(jobAttributeKeys(publishJob)).toEqual(["needs", "permissions", "runs-on", "steps"]);
+    expect(publishJob).toMatch(/^ {4}needs: build$/m);
+  });
+
+  it("runs only first-party actions and pnpm/action-setup, SHA-pinned, in publish", () => {
+    const uses = rawPublishJob.split("\n").filter((line) => /^\s*(?:- )?uses\s*:/.test(line));
+    expect(uses.length).toBeGreaterThanOrEqual(6);
+    for (const line of uses) {
+      expect(line).toMatch(
+        /^ {6,8}(?:- )?uses: (?:actions\/(?:checkout|setup-node|download-artifact|attest)|pnpm\/action-setup)@[0-9a-f]{40} # v\d+\.\d+\.\d+$/
+      );
+    }
+    // Same flow-style guard as the gate suite: a `- { uses: … }` step would
+    // hide its `uses:` mid-line from the filter above.
+    for (const step of publishJob.split("\n").filter((line) => /^ {6}- /.test(line))) {
+      expect(step).toMatch(/^ {6}- (?:name|uses): [^\s{[&*!]/);
+    }
+  });
+
+  it("publishes to the Marketplace only from the publish job, using build's audited .vsix", () => {
+    expect(buildJob).not.toMatch(/vsce publish/);
+    expect(publishJob.match(/vsce publish/g)).toHaveLength(1);
+    expect(stepBlock(publishJob, "Publish to VS Code Marketplace", "publish.yml")).toMatch(
+      /^ {8}run: pnpm exec vsce publish --oidc --no-dependencies --packagePath extension\.vsix$/m
+    );
+
+    // build uploads the .vsix and its SBOM only after the audit; publish
+    // downloads that same artifact, attests it, then publishes it.
+    const buildSteps = stepNames(buildJob);
+    const audit = buildSteps.indexOf("Audit .vsix contents");
+    expect(audit).not.toBe(-1);
+    expect(audit).toBeLessThan(buildSteps.indexOf("Upload audited .vsix"));
+    const uploadStep = stepBlock(buildJob, "Upload audited .vsix", "publish.yml");
+    expect(uploadStep).toMatch(/^ {10}path: \|\n {12}extension\.vsix\n {12}sbom\.spdx\.json$/m);
+    expect(uploadStep).toMatch(/^ {10}name: extension-vsix$/m);
+
+    const publishSteps = stepNames(publishJob);
+    const order = [
+      "Download audited .vsix",
+      "Attest build provenance",
+      "Attest SBOM",
+      "Publish to VS Code Marketplace",
+      "Publish to Open VSX",
+    ].map((name) => [name, publishSteps.indexOf(name)] as const);
+    for (const [name, at] of order) {
+      expect(at, name).not.toBe(-1);
+    }
+    for (let i = 1; i < order.length; i++) {
+      expect(order[i][1], order[i][0]).toBeGreaterThan(order[i - 1][1]);
+    }
+    expect(stepBlock(publishJob, "Download audited .vsix", "publish.yml")).toMatch(
+      /^ {10}name: extension-vsix$/m
+    );
+  });
+
+  // Attestation needs `id-token`, so it must live where the grant lives — and
+  // it must sign the downloaded bytes the registries then receive.
+  it("attests the downloaded .vsix in publish, never in build", () => {
+    expect(buildJob).not.toMatch(/actions\/attest@/);
+    expect(stepBlock(publishJob, "Attest build provenance", "publish.yml")).toMatch(
+      /^ {10}subject-path: extension\.vsix$/m
+    );
+    const sbom = stepBlock(publishJob, "Attest SBOM", "publish.yml");
+    expect(sbom).toMatch(/^ {10}subject-path: extension\.vsix$/m);
+    expect(sbom).toMatch(/^ {10}sbom-path: sbom\.spdx\.json$/m);
+  });
+
+  // Attestation is a release gate: `continue-on-error` lets a failed attest
+  // pass, and a step-level `if:` can skip it or (via `always()`) run it past a
+  // red gate. Either silently drops the guarantee. Step-level keys sit at 8
+  // spaces, so `with:` values (10) cannot false-match.
+  it.each([
+    "Attest build provenance",
+    "Attest SBOM",
+  ])("keeps `%s` unconditional and fail-closed", (name) => {
+    const step = stepBlock(publishJob, name, "publish.yml");
+    expect(step).toMatch(/^ {8}uses: actions\/attest@/m);
+    expect(step).not.toMatch(/^ {8}(?:"|')?continue-on-error(?:"|')?\s*:/m);
+    expect(step).not.toMatch(/^ {8}(?:"|')?if(?:"|')?\s*:/m);
+  });
+
+  // A failed Marketplace publish must stop Open VSX, and both registries must
+  // ship the audited extension.vsix.
+  it("publishes to Open VSX from the same .vsix, with neither registry step allowed to fail open", () => {
+    const marketplace = stepBlock(publishJob, "Publish to VS Code Marketplace", "publish.yml");
+    const ovsx = stepBlock(publishJob, "Publish to Open VSX", "publish.yml");
+    expect(marketplace).not.toMatch(/continue-on-error/);
+    expect(ovsx).not.toMatch(/continue-on-error/);
+    expect(ovsx).toMatch(/^ {8}run: pnpm exec ovsx publish extension\.vsix$/m);
   });
 });
