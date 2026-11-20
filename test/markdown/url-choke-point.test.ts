@@ -170,16 +170,9 @@ const CHOKE_POINTS: readonly ChokePoint[] = [
   {
     name: "host env.openExternal()",
     pattern: /\.openExternal\s*\(/,
-    // handle-open-external.ts is the host gate; open-external-url.ts holds the
-    // real `env.openExternal` binding. effect-executor.ts invokes the injected
-    // open-external delegate via a local alias (`runOpenExternal`), NOT
-    // `deps.openExternal(...)`, so it does not textually match this pattern and
-    // is intentionally kept OUT of this allowlist — a future raw
-    // `env.openExternal(...)` added there would still be flagged.
-    allow: new Set([
-      "src/extension/links/handle-open-external.ts",
-      "src/extension/links/open-external-url.ts",
-    ]),
+    // The launcher owns this API call. The gate and effect executor call
+    // their delegates as functions, so direct API calls there are flagged.
+    allow: new Set(["src/extension/links/open-external-url.ts"]),
   },
   {
     // The string form opens any http(s) URL externally.
@@ -188,9 +181,10 @@ const CHOKE_POINTS: readonly ChokePoint[] = [
     allow: new Set(["src/extension/links/open-external-url.ts"]),
   },
   {
+    // Only the host gate may import the launcher.
     name: "openExternalUrl import",
     pattern: /["'`][^"'`]*\/open-external-url(?:\.js)?["'`]/,
-    allow: new Set(["src/extension/session/quoll-editor-panel.ts"]),
+    allow: new Set(["src/extension/links/handle-open-external.ts"]),
   },
   {
     // Live-DOM-from-string promotion. Quoll builds ALL DOM via
@@ -432,10 +426,10 @@ describe("URL/security choke-point lint", () => {
     }
   });
 
-  it("flags each spelling of an openExternalUrl import", () => {
+  it("flags direct launcher imports from the panel and sibling modules", () => {
     const fixtures: SourceFile[] = [
       {
-        rel: "src/extension/session/other.ts",
+        rel: "src/extension/session/quoll-editor-panel.ts",
         content: 'import { openExternalUrl } from "../links/open-external-url.js";',
       },
       {

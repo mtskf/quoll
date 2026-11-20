@@ -69,7 +69,6 @@ import { createImageWriteWiring } from "../image/image-write-wiring.js";
 import { handleOpenCodeReference } from "../links/handle-open-code-reference.js";
 import { handleOpenExternal } from "../links/handle-open-external.js";
 import { handleOpenLink } from "../links/handle-open-link.js";
-import { openExternalUrl } from "../links/open-external-url.js";
 import { resolveRealContainment } from "../links/real-containment.js";
 import { toLintDiagnostics } from "../lint/lint-diagnostics.js";
 import { LintMirror } from "../lint/lint-mirror.js";
@@ -511,11 +510,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
             : workspace.applyEdit(edit);
         },
       },
-      openExternal: (href) =>
-        handleOpenExternal(href, {
-          openExternal: openExternalUrl,
-          showError,
-        }),
+      openExternal: (href) => handleOpenExternal(href, { showError }),
     });
 
     let webviewReady = false;

@@ -1,5 +1,5 @@
-// Host-side gate for webview "open-external" requests. Pure-function
-// design (deps injected) so it unit-tests without a live VS Code host.
+// Host-side gate for webview "open-external" requests. Unit tests can
+// inject an opener without a live VS Code host.
 // The wire shape comes from src/shared/protocol.ts; the security gate
 // is isAllowedUrl from src/markdown/url-allowlist.ts (the same predicate
 // render, open-link and link-insert consumers use — defense in depth).
@@ -36,12 +36,13 @@
 // a third file in the C9b deletion footprint).
 
 import { isAllowedUrl } from "../../markdown/url-allowlist.js";
+import { openExternalUrl } from "./open-external-url.js";
 
 const OPENABLE_SCHEMES = new Set(["http", "https", "mailto"]);
 
 /** User-facing toast shown when a gated, launchable URL still fails to open.
  *  Covers a fulfilled `false`, an async rejection, or a synchronous throw.
- *  For local HTTP(S), `vscode.open` resolves void, so only a rejection signals
+ *  On the verbatim path, `vscode.open` resolves void, so only a rejection signals
  *  failure. Details go to the host log. */
 const OPEN_EXTERNAL_FAILURE_MESSAGE =
   "Quoll: couldn't open the link. See the extension host log for details.";
@@ -63,9 +64,8 @@ function sanitizeForLog(href: string): string {
 }
 
 export type HandleOpenExternalDeps = {
-  /** The panel injects openExternalUrl. A completed `vscode.open` command
-   *  returns true, while the Uri path returns the result of env.openExternal. */
-  openExternal: (url: string) => Thenable<boolean>;
+  /** Unit tests can override the default opener. */
+  openExternal?: (url: string) => Thenable<boolean>;
   /** Host showError (a window.showErrorMessage wrapper). Surfaces a
    *  user-visible toast when a launch fails so a failed link click is not
    *  silently dropped. Required so callers always provide failure feedback. */
@@ -75,7 +75,10 @@ export type HandleOpenExternalDeps = {
 /** Gate-and-dispatch an "open-external" request. Caller is
  *  QuollEditorPanel.handleInbound; href is the already-decoded URL string
  *  the webview sent (post decodeMarkdownDestination). */
-export function handleOpenExternal(href: string, deps: HandleOpenExternalDeps): void {
+export function handleOpenExternal(
+  href: string,
+  { openExternal = openExternalUrl, showError }: HandleOpenExternalDeps
+): void {
   if (!isAllowedUrl(href)) {
     // Symmetric with the inbound-validation reject path in QuollEditorPanel
     // — log at console.warn so a triage report has a single greppable line.
@@ -103,20 +106,20 @@ export function handleOpenExternal(href: string, deps: HandleOpenExternalDeps): 
   // A fulfilled false on the Uri path or a rejection from either path
   // also gets a toast and a host log entry.
   try {
-    void Promise.resolve(deps.openExternal(href)).then(
+    void Promise.resolve(openExternal(href)).then(
       (delivered: boolean) => {
         if (!delivered) {
-          deps.showError(OPEN_EXTERNAL_FAILURE_MESSAGE);
+          showError(OPEN_EXTERNAL_FAILURE_MESSAGE);
           console.warn("[quoll] open-external returned false");
         }
       },
       (err: unknown) => {
-        deps.showError(OPEN_EXTERNAL_FAILURE_MESSAGE);
+        showError(OPEN_EXTERNAL_FAILURE_MESSAGE);
         console.error("[quoll] open-external rejected", err);
       }
     );
   } catch (err) {
-    deps.showError(OPEN_EXTERNAL_FAILURE_MESSAGE);
+    showError(OPEN_EXTERNAL_FAILURE_MESSAGE);
     console.error("[quoll] open-external threw synchronously", err);
   }
 }
