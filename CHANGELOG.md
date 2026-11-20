@@ -2,15 +2,32 @@
 
 All notable changes to Quoll are documented here.
 
-## Unreleased
+## 0.1.87 — 2026-11-20
+
+### Added
+
+- Numeric character references such as `&#233;` now display as the character they stand for. Move the caret into one, or select it, to see and edit the code.
+- Cmd+Shift+V (Ctrl+Shift+V on Windows and Linux) pastes the clipboard as plain text, without turning URLs into links, converting rich content, or importing images.
 
 ### Fixed
+
+- Bold and italic pasted from a web page or document now keep their styling. Adjacent or overlapping bold and italic, or emphasis next to punctuation, used to come out as Markdown that showed different styles.
+- Pasting a single bold word, link, or piece of inline code into the middle of a line keeps it in the sentence instead of splitting the line into three paragraphs.
+- Switching to the text editor right after typing no longer loses edits that had not reached the file yet. If they cannot be sent, the switch is refused and a notice says so.
+- If a Quoll tab closes while it is still saving, an edit that cannot be confirmed now reopens as an untitled draft instead of being lost.
+- A fence-shaped run inside the leading frontmatter (for example in a `description: |` value) is no longer collapsed as a code block.
+- Code block collapsing now updates correctly when you add or remove a link reference definition or change how far a list is indented.
+- Buttons in the search panel now show a hover highlight in every theme.
 
 - Pasting text, tables, or rich content together with files now inserts the text and accepted image links together in one undoable step. Captions survive rejected files, and image links keep their clipboard order even when replies arrive out of order.
 - Undoing while a paste is waiting for images preserves Redo and prevents late image replies from changing the document. Moving the caret while waiting keeps the paste at its original target without moving you back.
 - If an internal error interrupts the editor right after a change, that change is still saved. If it cannot be queued, an error banner appears instead of the change being lost silently.
 - Links to a heading that contains a numeric character reference such as `&#233;` or `&#8288;` now jump to it, using the character you see rather than the raw code.
 - Format Document no longer changes what your text says: a backslash followed by a trailing space stays a visible backslash instead of becoming a line break, and spaces at line ends inside multi-line inline code, raw HTML tags, or link titles are kept as written.
+
+### Changed
+
+- Quoll no longer refuses to save Markdown it considers unsafe, such as frontmatter containing unusual line separators. Links and other content are still checked before they are shown or opened.
 
 ## 0.1.86 — 2026-11-03
 
@@ -29,7 +46,6 @@ All notable changes to Quoll are documented here.
 - In a file with Windows line endings (CRLF), copying or cutting whole lines with several cursors and no selection now pastes them back as whole lines. They used to be spliced into the middle of the lines the cursors were on.
 
 ### Changed
-- separate Markdown storage from execution checks (remove the write gate) (#482)
 
 - Format Document now tells you whether it changed anything, found nothing to change, or could not run, instead of giving the same message for all three.
 - Headings and lists inside a blockquote no longer show a fold chevron.
