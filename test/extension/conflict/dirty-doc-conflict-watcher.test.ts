@@ -368,13 +368,44 @@ describe("createDirtyDocConflictWatcher", () => {
       buffer = "new\nappended\n";
       w.setDirty(true);
       releaseRead("old\n"); // the pre-save bytes
-      await vi.runAllTimersAsync();
+      await Promise.resolve();
       expect(w.spies.promptReload).not.toHaveBeenCalled();
-      // The save's own fs signal still resolves as ours.
-      w.emit();
+      // The retry recognises the save without another signal.
       await fireDebounce();
       expect(readDiskText).toHaveBeenCalledTimes(2);
       expect(w.spies.promptReload).not.toHaveBeenCalled();
+    });
+
+    it("retries an external write whose debounce fired during a read overtaken by a save", async () => {
+      let buffer = "old\nedit\n";
+      let releaseRead: (v: string) => void = () => undefined;
+      const readDiskText = vi.fn<() => Promise<string | null>>().mockImplementationOnce(
+        () =>
+          new Promise<string>((resolve) => {
+            releaseRead = resolve;
+          })
+      );
+      const w = makeWatcher({ readDiskText, readBufferText: () => buffer });
+      w.spies.promptReload.mockResolvedValue(undefined);
+      w.emit();
+      await fireDebounce();
+
+      buffer = "new\n";
+      w.setDirty(false);
+      w.save();
+      buffer = "new\nappended\n";
+      w.setDirty(true);
+
+      readDiskText.mockResolvedValue("external\n");
+      w.emit();
+      await fireDebounce();
+      expect(readDiskText).toHaveBeenCalledTimes(1);
+      expect(w.spies.promptReload).not.toHaveBeenCalled();
+
+      releaseRead("old\n");
+      await vi.runAllTimersAsync();
+      expect(w.spies.promptReload).toHaveBeenCalledTimes(1);
+      expect(readDiskText).toHaveBeenCalledTimes(2);
     });
   });
 

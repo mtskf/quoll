@@ -81,6 +81,9 @@ export function createDirtyDocConflictWatcher(
   // to hold anything else, so a later external write-back of those same bytes
   // (a branch switch away and back) still prompts. No ignore window: a
   // different write prompts however soon after the save it lands.
+  // If disk goes A → B → A within one debounce window while the clean document
+  // reloads B and is then edited, the single check sees A and stays silent.
+  // B can also go undetected if it is unreadable or non-UTF-8 at check time.
   let savedText: string | null = null;
   const onSave = (): void => {
     // Dirty at the notification ⇒ edits landed after the write, so the buffer is
@@ -124,9 +127,10 @@ export function createDirtyDocConflictWatcher(
       if (diskText === null) {
         return;
       }
-      // A save that landed during readFile makes these bytes stale: judging them
-      // against the newer save would forget it as foreign. Drop this check.
+      // A save that landed during readFile makes these bytes stale. Drop the
+      // result and reschedule the check so a newer write can still be seen.
       if (savedText !== savedBeforeRead) {
+        onSignal(deps.documentUriString);
         return;
       }
       if (savedText !== null) {
