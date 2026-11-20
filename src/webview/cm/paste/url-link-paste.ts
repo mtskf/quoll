@@ -2,8 +2,15 @@ import { markdownLanguage } from "@codemirror/lang-markdown";
 import { ensureSyntaxTree } from "@codemirror/language";
 import type { EditorState } from "@codemirror/state";
 
-import { markdownLinkSource, nonPlainText } from "../../../markdown/link-source.js";
+import { markdownLinkSource } from "../../../markdown/link-source.js";
 import { type AllowlistedUrl, isAllowedUrl } from "../../../markdown/url-allowlist.js";
+
+// Ported verbatim from @codemirror/lang-markdown's built-in pasteURLAsLink: Lezer
+// node names that mean the selection is NOT plain Markdown text, so wrapping a link
+// into it would corrupt the construct (code, an existing link/image, emphasis
+// marks, raw HTML, an autolink URL, …). Matched case-insensitively.
+const nonPlainText =
+  /code|horizontalrule|html|link|comment|processing|escape|entity|image|mark|url/i;
 
 /**
  * The clipboard text is a wrappable link target iff, after trimming, it is a

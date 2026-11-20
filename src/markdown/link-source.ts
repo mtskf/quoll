@@ -3,36 +3,51 @@
 import { gfmParser } from "./gfm-parser.js";
 import { encodeMarkdownDestination } from "./url-decode.js";
 
-// Ported verbatim from @codemirror/lang-markdown's built-in pasteURLAsLink: Lezer
-// node names that are NOT plain Markdown text (code, an existing link/image,
-// emphasis marks, raw HTML, an autolink URL, …). Matched case-insensitively.
-export const nonPlainText =
-  /code|horizontalrule|html|link|comment|processing|escape|entity|image|mark|url/i;
-
-function preservesLabelSource(name: string): boolean {
-  // Lezer reads any [x] as a Link, so its brackets would shadow the outer link.
-  return name !== "Link" && name !== "LinkMark" && nonPlainText.test(name);
-}
+// Label nodes whose bytes are kept as written: escaping `\`, `[` or `]` inside
+// them would change what they mean. Every other `\`, `[` and `]` is escaped, so
+// a nested link, a reference `[x][ref]` or a bare URL ending in `]` reads as text.
+const labelSourceNodes = new Set([
+  // Code spans, autolinks and raw HTML bind tighter than link brackets, and a
+  // backslash inside them is literal.
+  "InlineCode",
+  "Autolink",
+  "HTMLTag",
+  "Comment",
+  "ProcessingInstruction",
+  // Already an escape; escaping its backslash would expose the escaped mark.
+  "Escape",
+  // Its brackets are the image syntax, which a link label may contain.
+  "Image",
+  // A backslash hard break; doubling the backslash turns it into text.
+  "HardBreak",
+]);
 
 function escapePlainText(text: string): string {
   return text.replace(/[\\[\]]/g, "\\$&");
 }
 
+// Parse the label after an escaped `[`, as the link will: a line start such as
+// four spaces, `~~~` or `<div>` is then not read as a block that hides the code
+// spans inside it, and the character before the label is the `[` it will follow
+// in the link, which emphasis flanking depends on.
+const labelPrefix = "\\[";
+
 function escapeLabel(label: string): string {
+  const input = labelPrefix + label;
   let escaped = "";
-  let plainFrom = 0;
+  let plainFrom = labelPrefix.length;
   // A full, synchronous parse of just the label keeps the escaping deterministic.
-  gfmParser.parse(label).iterate({
+  gfmParser.parse(input).iterate({
     enter: (node) => {
-      if (preservesLabelSource(node.name)) {
-        escaped += escapePlainText(label.slice(plainFrom, node.from));
-        escaped += label.slice(node.from, node.to);
+      if (node.from >= plainFrom && labelSourceNodes.has(node.name)) {
+        escaped += escapePlainText(input.slice(plainFrom, node.from));
+        escaped += input.slice(node.from, node.to);
         plainFrom = node.to;
         return false;
       }
     },
   });
-  return escaped + escapePlainText(label.slice(plainFrom));
+  return escaped + escapePlainText(input.slice(plainFrom));
 }
 
 export function markdownLinkSource(label: string, href: string): string {
