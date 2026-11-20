@@ -199,8 +199,8 @@ export function leadingCharsForColumns(text: string, cols: number, tabSize: numb
   return i;
 }
 
-/** Move the item's content boundary, using spaces where a tab would change
- *  the relative indentation. Keep code payload bytes intact. */
+/** Preserve relative indentation across nested markers by expanding tabs whose
+ *  width changes. Code and HTML payload whitespace is literal content. */
 function shiftLine(
   state: EditorState,
   item: SyntaxNode,
@@ -208,9 +208,6 @@ function shiftLine(
   boundary: number,
   delta: number
 ): ChangeSpec | null {
-  if (delta === 0) {
-    return null;
-  }
   const line = state.doc.line(lineNumber);
   const keepThrough = Math.min(boundary, boundary + delta);
   let i = 0;
@@ -232,37 +229,44 @@ function shiftLine(
       keptCol = col;
     }
   }
-  let end = i;
-  while (line.text[end] === " " || line.text[end] === "\t") {
-    end++;
-  }
-  for (
-    let node: SyntaxNode | null = item.resolveInner(line.from + end, 1);
-    node;
-    node = node.parent
-  ) {
+  let insert = " ".repeat(col + delta - keptCol);
+  const block = item.resolve(line.from, 1);
+  const end =
+    block.from < line.from &&
+    (block.name === "HTMLBlock" ||
+      block.name === "CommentBlock" ||
+      block.name === "ProcessingInstructionBlock")
+      ? i
+      : line.length;
+  while (i < end) {
+    const pos = line.from + i;
+    const node = item.resolve(pos, 1);
     if (node.name === "CodeText") {
-      end = Math.max(i, node.from - line.from);
       break;
     }
-  }
 
-  let insert = " ".repeat(col + delta - keptCol);
-  for (let j = i; j < end; j++) {
-    const ch = line.text[j];
+    const ch = line.text[i];
     if (ch === "\t") {
       const width = state.tabSize - (col % state.tabSize);
       const shiftedWidth = state.tabSize - ((col + delta) % state.tabSize);
       insert += width === shiftedWidth ? ch : " ".repeat(width);
       col += width;
-    } else {
+    } else if (ch === " ") {
       insert += ch;
       col++;
+    } else if (node.from === pos && (node.name === "ListMark" || node.name === "QuoteMark")) {
+      insert += line.text.slice(i, node.to - line.from);
+      col += node.to - pos;
+      i = node.to - line.from;
+      continue;
+    } else {
+      break;
     }
+    i++;
   }
-  return line.text.slice(keep, end) === insert
+  return line.text.slice(keep, i) === insert
     ? null
-    : { from: line.from + keep, to: line.from + end, insert };
+    : { from: line.from + keep, to: line.from + i, insert };
 }
 
 /** Move the item's own lines using CommonMark marker padding on both sides

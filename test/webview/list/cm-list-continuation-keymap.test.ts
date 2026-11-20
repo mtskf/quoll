@@ -438,6 +438,47 @@ describe("continueListOnEnter — split keeps the item's children nested", () =>
       view.destroy();
     }
   });
+
+  it("preserves the payload tab in a Python fence", () => {
+    const doc = "9. abcd\n   ```python\n   \treturn\n   ```";
+    const view = mount(doc, at("9. ab".length), { withHistory: true });
+    try {
+      expect(continueListOnEnter(view)).toBe(true);
+      expect(view.state.doc.line(4).text).toBe("    \treturn");
+      expect(undo(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(doc);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("keeps the grandchild under a nested marker followed by a tab", () => {
+    const doc = "9. abcd\n      -\tx\n        - y";
+    const view = mount(doc, at("9. ab".length), { withHistory: true });
+    try {
+      expect(parentMarkerOf(view, "y")).toBe("-");
+      expect(continueListOnEnter(view)).toBe(true);
+      expect(parentMarkerOf(view, "y")).toBe("-");
+      expect(view.state.doc.toString()).toBe("9. ab\n10. cd\n       - x\n         - y");
+      expect(undo(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(doc);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("preserves the payload tab on an HTML block continuation", () => {
+    const doc = "9. abcd\n\n   <pre>\n   \tvalue\n   </pre>";
+    const view = mount(doc, at("9. ab".length), { withHistory: true });
+    try {
+      expect(continueListOnEnter(view)).toBe(true);
+      expect(view.state.doc.line(5).text).toBe("    \tvalue");
+      expect(undo(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(doc);
+    } finally {
+      view.destroy();
+    }
+  });
 });
 
 describe("continueListOnEnter — empty marker line exits the list", () => {
