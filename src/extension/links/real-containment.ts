@@ -1,5 +1,5 @@
 import { lstat, realpath } from "node:fs/promises";
-import { isAbsolute, relative, sep } from "node:path";
+import { dirname, isAbsolute, relative, sep } from "node:path";
 
 /** True when `realTarget` is `realRoot` itself or a descendant of it.
  *  Both paths have already been resolved by the caller. */
@@ -11,31 +11,66 @@ export function isRealPathWithinRoot(realTarget: string, realRoot: string): bool
 export type RealContainment = "inside" | "outside" | "missing";
 
 /** Check containment using absolute native paths. */
-export async function resolveRealContainment(targetPath: string, rootPath: string): Promise<RealContainment> {
+export async function resolveRealContainment(
+  targetPath: string,
+  rootPath: string
+): Promise<RealContainment> {
   try {
     const realRoot = await realpath(rootPath);
-    try {
-      await lstat(targetPath);
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException)?.code;
-      if (code === "ENOENT" || code === "ENOTDIR") {
-        return "missing";
-      }
-      throw err;
+    const existingPath = await findExistingEntry(targetPath);
+    if (existingPath === undefined) {
+      console.warn("[quoll] realpath containment walk reached the filesystem root", {
+        targetPath,
+        rootPath,
+      });
+      return "outside";
     }
 
-    try {
-      const realTarget = await realpath(targetPath);
-      return isRealPathWithinRoot(realTarget, realRoot) ? "inside" : "outside";
-    } catch (err) {
-      // An existing leaf with no resolvable referent may be a dangling symlink.
-      if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
-        return "outside";
-      }
-      throw err;
+    const realTarget = await realpathIfPresent(existingPath);
+    if (realTarget === undefined || !isRealPathWithinRoot(realTarget, realRoot)) {
+      return "outside";
     }
+    return existingPath === targetPath ? "inside" : "missing";
   } catch (err) {
     console.warn("[quoll] realpath containment check failed", { targetPath, rootPath, err });
     return "outside";
+  }
+}
+
+async function entryExists(entryPath: string): Promise<boolean> {
+  try {
+    await lstat(entryPath);
+    return true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return false;
+    }
+    throw err;
+  }
+}
+
+async function findExistingEntry(targetPath: string): Promise<string | undefined> {
+  let entry = targetPath;
+  // lstat stops the search at dangling symlinks too.
+  while (!(await entryExists(entry))) {
+    const parent = dirname(entry);
+    if (parent === entry) {
+      return undefined;
+    }
+    entry = parent;
+  }
+  return entry;
+}
+
+async function realpathIfPresent(entryPath: string): Promise<string | undefined> {
+  try {
+    return await realpath(entryPath);
+  } catch (err) {
+    // An existing entry with no resolvable referent may be a dangling symlink.
+    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+      return undefined;
+    }
+    throw err;
   }
 }

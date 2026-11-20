@@ -1,7 +1,10 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { isRealPathWithinRoot, resolveRealContainment } from "../../src/extension/links/real-containment.js";
+import {
+  isRealPathWithinRoot,
+  resolveRealContainment,
+} from "../../src/extension/links/real-containment.js";
 import { makeUnitTempDir } from "./temp-root.js";
 
 describe("isRealPathWithinRoot", () => {
@@ -44,6 +47,7 @@ describe("resolveRealContainment", () => {
     await fs.writeFile(outsideFile, "outside");
     await fs.symlink(outsideFile, path.join(root, "linked-out.md"), "file");
     await fs.symlink(outside, path.join(root, "linked-dir"), "dir");
+    await fs.symlink(path.join(outside, "absent-dir"), path.join(root, "dangling-dir"), "dir");
     await fs.symlink(path.join(root, "absent.md"), path.join(root, "dangling.md"), "file");
     await fs.symlink(insideFile, path.join(root, "linked-in.md"), "file");
   });
@@ -58,6 +62,14 @@ describe("resolveRealContainment", () => {
     ["file under a directory symlink outside the root", ["linked-dir", "file.md"], "outside"],
     ["dangling symlink", ["dangling.md"], "outside"],
     ["symlink inside the root", ["linked-in.md"], "inside"],
+    [
+      "missing leaf under a directory symlink outside the root",
+      ["linked-dir", "new.md"],
+      "outside",
+    ],
+    ["missing leaf under a dangling directory symlink", ["dangling-dir", "new.md"], "outside"],
+    ["missing leaf inside the root", ["new.md"], "missing"],
+    ["missing leaf under a regular file (ENOTDIR)", ["file.md", "x"], "missing"],
   ])("checks containment for a %s", async (_label, segments, verdict) => {
     expect(await resolveRealContainment(path.join(root, ...segments), root)).toBe(verdict);
   });
