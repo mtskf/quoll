@@ -51,7 +51,7 @@ import {
   type PreparedInline,
   serializeBlockNodes,
 } from "./block-ir.js";
-import { SKIP_TAGS, tableElementToGfm } from "./html-table-to-gfm.js";
+import { HTML_WHITESPACE_RUN, SKIP_TAGS, tableElementToGfm } from "./html-table-to-gfm.js";
 import {
   BOLD,
   CapExceeded,
@@ -148,9 +148,9 @@ function escapeMarkers(text: string): string {
 }
 
 /** Normalise a run of SOURCE text to what a reader actually sees: drop the
- *  zero-width characters, then collapse all whitespace runs (incl. newlines) to a
- *  single space — HTML's own inline whitespace behaviour. Applied to text nodes
- *  and to the emptiness predicate, never to a `<pre>` BODY, which the block path
+ *  zero-width characters, then collapse each `HTML_WHITESPACE_RUN` (incl. newlines) to
+ *  a single space — HTML's own inline whitespace behaviour, so U+3000 / U+202F stay
+ *  text. Applied to text nodes and to the emptiness predicate, never to a `<pre>` BODY, which the block path
  *  reads verbatim, so an interior newline cannot form indented code or smuggle an
  *  unescaped line start; real breaks come only from `<br>` and block structure.
  *
@@ -164,7 +164,7 @@ function escapeMarkers(text: string): string {
  *  that keeps two glyphs from separating — so deleting them on the emit path corrupts
  *  real text on disk (a family emoji splits into three people; a Persian word loses a
  *  letter; a no-break pair comes apart). This runs on EVERY emitted text node, so it is
- *  fidelity-first. U+00A0 needs no clause — it IS `\s`.
+ *  fidelity-first.
  *
  *  EMPTINESS is a SEPARATE question, answered by `blankAfterInvisible`, which strips
  *  the `\p{Default_Ignorable_Code_Point} ∪ \p{Cf}` union (the joiners included, plus bidi
@@ -175,7 +175,7 @@ function escapeMarkers(text: string): string {
  *  container (`<h1>&#8203;</h1>`, `<h1>&#8205;</h1>`) the emptiness guard exists to
  *  reject, which `String.prototype.trim()` does not strip. */
 function collapseWs(text: string): string {
-  return text.replace(/[\u200B\uFEFF]/g, "").replace(/\s+/g, " ");
+  return text.replace(/[\u200B\uFEFF]/g, "").replace(HTML_WHITESPACE_RUN, " ");
 }
 
 /** Concatenate every descendant text node of `el` VERBATIM, skipping `SKIP_TAGS`

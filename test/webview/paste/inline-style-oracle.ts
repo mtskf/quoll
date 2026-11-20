@@ -60,13 +60,17 @@ const CANCELS_ITALIC = /(?:^|;)\s*font-style\s*:\s*normal\b/i;
 const SKIPPED = new Set(["SCRIPT", "STYLE", "TEMPLATE"]);
 
 /** The source's styled chars. Whitespace is collapsed PER TEXT NODE (remove
- *  U+200B / U+FEFF, then each `\s+` → one space), never across nodes. */
+ *  U+200B / U+FEFF, then each run of HTML-collapsible whitespace — ASCII space, tab,
+ *  LF, FF, CR, plus U+00A0 — → one space), never across nodes. Not `\s`: U+3000,
+ *  U+202F and the other Unicode spaces render as written, so they are source text. */
 export function htmlStyledChars(html: string): StyledChar[] {
   const doc = new DOMParser().parseFromString(html, "text/html");
   const out: StyledChar[] = [];
   const walk = (node: Node, style: StyleMask): void => {
     if (node.nodeType === Node.TEXT_NODE) {
-      const text = (node.textContent ?? "").replace(/[\u200b\ufeff]/g, "").replace(/\s+/g, " ");
+      const text = (node.textContent ?? "")
+        .replace(/[\u200b\ufeff]/g, "")
+        .replace(/[ \t\n\f\r\u00a0]+/g, " ");
       pushChars(out, text, style);
       return;
     }

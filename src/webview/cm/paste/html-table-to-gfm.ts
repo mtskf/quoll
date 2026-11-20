@@ -59,6 +59,15 @@ export const SKIP_TAGS = new Set([
   "OPTGROUP",
 ]);
 
+// A run of the whitespace HTML itself collapses: the ASCII set (space, tab, LF, FF,
+// CR) plus U+00A0, which clipboard serialisers write as `&nbsp;` to protect a space
+// rather than as text. Deliberately NOT JS `\s`: U+3000 IDEOGRAPHIC SPACE, U+202F
+// NARROW NO-BREAK SPACE and the other Unicode spaces render as written, so they are
+// text and must survive. Markdown's own delimiter rules (flanking, edge trimming)
+// still read them as whitespace — that is inline-runs.ts's concern, not this one.
+// Shared with html-to-markdown.ts so prose and cells fold the same set.
+export const HTML_WHITESPACE_RUN = /[ \t\n\f\r\u00A0]+/g;
+
 // Block-level elements: their children are bracketed with spaces so text across a
 // boundary does not glue (`<div>a</div><div>b</div>` → `a b`, not `ab`). Unknown
 // elements recurse as inline — an acceptable degrade (surplus whitespace collapses).
@@ -268,7 +277,7 @@ function collectCellText(cell: Element): string {
       stack.push(" ");
     }
   }
-  return parts.join("").replace(/\s+/g, " ").trim();
+  return parts.join("").replace(HTML_WHITESPACE_RUN, " ").trim();
 }
 
 /** Backslash-escape the Markdown-inline-active characters that can form an

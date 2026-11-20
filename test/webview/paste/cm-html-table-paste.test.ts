@@ -155,6 +155,14 @@ describe("htmlTableToGfm — cell text extraction", () => {
     );
   });
 
+  it("keeps U+3000 and U+202F inside a cell while folding ASCII whitespace", () => {
+    const idsp = String.fromCharCode(0x3000);
+    const nnbsp = String.fromCharCode(0x202f);
+    expect(
+      htmlTableToGfm(`<table><tr><td><b>東京${idsp}大阪</b>  \n 10${nnbsp}%</td></tr></table>`)
+    ).toContain(`| 東京${idsp}大阪 10${nnbsp}% |`);
+  });
+
   it("separates block-element boundaries so text does not glue", () => {
     expect(
       htmlTableToGfm("<table><tr><td><div>a</div><div>b</div></td><td>c</td></tr></table>")

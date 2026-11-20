@@ -75,6 +75,25 @@ it("ordinary text-only paste delegates once to CM", () => {
   expect(post).not.toHaveBeenCalled();
 });
 
+it("decorated rich paste keeps U+3000 / U+202F in prose and table cells", () => {
+  // The space characters HTML does not collapse must survive the adopted conversion,
+  // not only the converter in isolation (plain text differs so the rich path is visible).
+  const idsp = String.fromCharCode(0x3000);
+  const nnbsp = String.fromCharCode(0x202f);
+  const prose = mount();
+  firePasteAt(prose.view.contentDOM, {
+    html: `<p><strong>東京${idsp}大阪</strong> 10${nnbsp}%</p>`,
+    text: "plain",
+  });
+  expect(prose.view.state.doc.toString()).toBe(`**東京${idsp}大阪** 10${nnbsp}%`);
+  const table = mount();
+  firePasteAt(table.view.contentDOM, {
+    html: `<table><tr><th>A</th></tr><tr><td><em>東京${idsp}大阪</em> 10${nnbsp}%</td></tr></table>`,
+    text: "plain",
+  });
+  expect(table.view.state.doc.toString()).toBe(`| A |\n| --- |\n| 東京${idsp}大阪 10${nnbsp}% |\n`);
+});
+
 it("table and File produce one decided table replacement", async () => {
   const { view, paste, post, edits } = mount();
   firePasteAt(view.contentDOM, {
