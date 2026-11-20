@@ -90,9 +90,38 @@ describe("runFormatDocument", () => {
     expect(doc.length).toBeLessThan(MAX_CONTENT_LENGTH);
     const view = makeView(doc);
     const dispatched = countDispatch(view);
-    expect(runFormatDocument(view)).toBe("too-large");
+    const repeat = vi.spyOn(String.prototype, "repeat");
+    try {
+      expect(runFormatDocument(view)).toBe("too-large");
+      // Refused by the budget, not by the post-render backstop: no padding was built.
+      expect(repeat.mock.calls.filter(([n]) => n >= 1000)).toEqual([]);
+    } finally {
+      repeat.mockRestore();
+    }
     expect(dispatched()).toBe(0);
     expect(view.state.doc.toString()).toBe(doc);
+    view.destroy();
+  });
+  it("formats a document that stays within the cap because other rules shrink it", () => {
+    // Growth from the table alone would cross the cap; the trailing-space trim
+    // pays for it, so the formatted document fits and must be formatted.
+    const table = "| a | bbbb |\n| - | - |\n| 1 | 2 |";
+    const growth = fmtIndex.formatDocument(table).length - table.length;
+    const head = `${"x \n".repeat(growth)}`;
+    const tail = `\n\n${table}`;
+    const doc = `${head}${"y".repeat(MAX_CONTENT_LENGTH - head.length - tail.length)}${tail}`;
+    expect(doc.length).toBe(MAX_CONTENT_LENGTH);
+    const view = makeView(doc);
+    expect(runFormatDocument(view)).toBe("formatted");
+    expect(view.state.doc.length).toBeLessThanOrEqual(MAX_CONTENT_LENGTH);
+    expect(view.state.doc.toString()).toContain("| a   | bbbb |");
+    view.destroy();
+  });
+  it("reports unchanged, not too-large, for an over-cap document whose tables are already formatted", () => {
+    const table = "| a   | bbbb |\n| --- | ---- |\n| 1   | 2    |";
+    const doc = `${table}\n\n${"y".repeat(MAX_CONTENT_LENGTH)}`;
+    const view = makeView(doc);
+    expect(runFormatDocument(view)).toBe("unchanged");
     view.destroy();
   });
   it("outboundContentLength counts CRLF-serialized length (edit-sync posts CRLF)", () => {
@@ -192,7 +221,14 @@ describe("runFormatDocument — the outbound size cap is measured in the documen
       state: EditorState.create({ doc, extensions: [quollDocumentEol.of("\r\n")] }),
     });
     const dispatched = countDispatch(view);
-    expect(runFormatDocument(view)).toBe("too-large");
+    const repeat = vi.spyOn(String.prototype, "repeat");
+    try {
+      expect(runFormatDocument(view)).toBe("too-large");
+      // The budget (measured in CRLF), not the backstop, refused it: nothing was rendered.
+      expect(repeat).not.toHaveBeenCalled();
+    } finally {
+      repeat.mockRestore();
+    }
     expect(dispatched()).toBe(0);
     expect(serializeDocument(view.state.doc, "\r\n")).toBe(doc);
     view.destroy();

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { formatDocument, formatDocumentEdits } from "../../../src/markdown/format/index.js";
+import {
+  FormatTooLargeError,
+  formatDocument,
+  formatDocumentEdits,
+} from "../../../src/markdown/format/index.js";
 
 describe("formatDocument", () => {
   it("applies table, renumber, blank, and trim rules together", () => {
@@ -73,5 +77,24 @@ describe("formatDocument", () => {
   });
   it("leaves the content of a multi-line inline code span byte-identical", () => {
     expect(formatDocument("a `x    \ny \t\nz` b   \n")).toBe("a `x    \ny \t\nz` b  \n");
+  });
+
+  describe("maxLength budget", () => {
+    it("credits a shrinking table that follows a growing one", () => {
+      const src = "|a|b|\n|-|-|\n\n|        a        |        b        |\n|------|------|";
+      const formatted = formatDocument(src);
+      expect(formatted.length).toBeLessThan(src.length);
+      expect(formatDocumentEdits(src, src.length)).toEqual(formatDocumentEdits(src));
+    });
+    it("throws only when the net growth of all rules exceeds the cap", () => {
+      const src = "|a|b|\n|-|-|\n";
+      const grown = formatDocument(src).length;
+      expect(() => formatDocumentEdits(src, grown)).not.toThrow();
+      expect(() => formatDocumentEdits(src, grown - 1)).toThrow(FormatTooLargeError);
+    });
+    it("does not refuse a document that already exceeds the cap but does not grow", () => {
+      const src = "| a   | bbbb |\n| --- | ---- |\n| 1   | 2    |\n";
+      expect(formatDocumentEdits(src, 1)).toEqual([]);
+    });
   });
 });
