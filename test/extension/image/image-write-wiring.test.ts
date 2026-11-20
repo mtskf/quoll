@@ -1,8 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
-import { workspace } from "vscode";
+import { createHash } from "node:crypto";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { type Uri, workspace } from "vscode";
 
 import { SESSION_IMAGE_WRITE_BUDGET_TOAST } from "../../../src/extension/image/image-write-budget.js";
 import { createImageWriteWiring } from "../../../src/extension/image/image-write-wiring.js";
+
+import { resolveRealContainment } from "../../../src/extension/links/real-containment.js";
+import { makeUnitTempDir } from "../temp-root.js";
 
 // A minimal valid PNG (8-byte signature) — decideImageWrite sniffs the magic
 // bytes and content-addresses the filename as <sha256>.png.
@@ -22,6 +28,7 @@ describe("createImageWriteWiring", () => {
     const showError = vi.fn();
     const wiring = createImageWriteWiring({
       documentUri,
+      realContainment: async () => "missing",
       canWrite: () => false,
       showError,
       post,
@@ -50,6 +57,7 @@ describe("createImageWriteWiring", () => {
     const post = vi.fn();
     const wiring = createImageWriteWiring({
       documentUri,
+      realContainment: async () => "missing",
       canWrite: () => true,
       showError: vi.fn(),
       post,
@@ -85,6 +93,7 @@ describe("createImageWriteWiring", () => {
     const showError = vi.fn();
     const wiring = createImageWriteWiring({
       documentUri,
+      realContainment: async () => "missing",
       canWrite: () => true,
       showError,
       post,
@@ -128,6 +137,7 @@ describe("createImageWriteWiring", () => {
       const post = vi.fn();
       const wiring = createImageWriteWiring({
         documentUri,
+        realContainment: async () => "missing",
         canWrite: () => true,
         showError: vi.fn(),
         post,
@@ -164,6 +174,7 @@ describe("createImageWriteWiring", () => {
     const showError = vi.fn();
     const wiring = createImageWriteWiring({
       documentUri,
+      realContainment: async () => "missing",
       canWrite: () => true,
       showError,
       post,
@@ -195,6 +206,7 @@ describe("createImageWriteWiring", () => {
     let currentOverride: ((uri: unknown, content: Uint8Array) => Thenable<void>) | null = null;
     const wiring = createImageWriteWiring({
       documentUri,
+      realContainment: async () => "missing",
       canWrite: () => true,
       showError: vi.fn(),
       post,
@@ -211,5 +223,126 @@ describe("createImageWriteWiring", () => {
     expect(post).toHaveBeenCalledWith(
       expect.objectContaining({ type: "image-write-result", requestId: "req-late", ok: true })
     );
+  });
+});
+
+describe("image write containment", () => {
+  const filename = `${createHash("sha256").update(new Uint8Array(PNG_BYTES)).digest("hex")}.png`;
+  const originalDoc = "# Document\n";
+  let temp: ReturnType<typeof makeUnitTempDir>;
+  let docDir: string;
+  let doc: string;
+  let outside: string;
+  let assets: string;
+  let target: string;
+
+  beforeEach(async () => {
+    temp = makeUnitTempDir("image-write");
+    docDir = path.join(temp.dir, "notes");
+    doc = path.join(docDir, "doc.md");
+    outside = path.join(temp.dir, "outside");
+    assets = path.join(docDir, "assets");
+    target = path.join(assets, filename);
+    await fs.mkdir(docDir);
+    await fs.mkdir(outside);
+    await fs.writeFile(doc, originalDoc);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    temp?.dispose();
+  });
+
+  async function checkPaste(expectSuccess: boolean): Promise<void> {
+    const mkdir = vi.spyOn(workspace.fs, "createDirectory");
+    const write = vi.fn<(uri: Uri, content: Uint8Array) => Promise<void>>(async () => {});
+    // Real mkdir + write, so a guard that let the call through would really
+    // land outside or overwrite the document.
+    mkdir.mockImplementation(async (uri) => {
+      await fs.mkdir(uri.fsPath, { recursive: true });
+    });
+    write.mockImplementation((uri, content) => fs.writeFile(uri.fsPath, content));
+    const post = vi.fn();
+    const showError = vi.fn();
+    const wiring = createImageWriteWiring({
+      documentUri: { scheme: "file", path: doc, fsPath: doc } as Uri,
+      canWrite: () => true,
+      realContainment: resolveRealContainment,
+      writeFileOverride: () => write,
+      post,
+      showError,
+    });
+    wiring.handle("paste", PNG_BASE64);
+    await vi.waitFor(() => expect(post).toHaveBeenCalledOnce());
+    expect(post).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestId: "paste",
+        type: "image-write-result",
+        ok: expectSuccess,
+        ...(expectSuccess ? { relativePath: `./assets/${filename}` } : {}),
+      })
+    );
+    if (expectSuccess) {
+      expect(showError).not.toHaveBeenCalled();
+      expect(await fs.readFile(target)).toEqual(PNG_BYTES);
+    } else {
+      expect(mkdir).not.toHaveBeenCalled();
+      expect(write).not.toHaveBeenCalled();
+      expect(showError).toHaveBeenCalledWith(
+        expect.stringContaining("failed to write the image file")
+      );
+    }
+  }
+
+  it("refuses an assets directory symlink outside the document folder", async () => {
+    await fs.symlink(outside, assets, "dir");
+    await checkPaste(false);
+    expect(await fs.readdir(outside)).toEqual([]);
+  });
+
+  it("refuses a hash file symlink to an outside file", async () => {
+    const external = path.join(outside, "x.png");
+    await fs.mkdir(assets);
+    await fs.writeFile(external, "original");
+    await fs.symlink(external, target, "file");
+    await checkPaste(false);
+    expect(await fs.readFile(external, "utf8")).toBe("original");
+  });
+
+  it("refuses a hash file symlink to the document", async () => {
+    await fs.mkdir(assets);
+    await fs.symlink("../doc.md", target, "file");
+    await checkPaste(false);
+    expect(await fs.readFile(doc, "utf8")).toBe(originalDoc);
+  });
+
+  it("refuses a hash file hardlinked to the document", async () => {
+    await fs.mkdir(assets);
+    await fs.link(doc, target);
+    await checkPaste(false);
+    expect(await fs.readFile(doc, "utf8")).toBe(originalDoc);
+  });
+
+  it("refuses a dangling hash file symlink", async () => {
+    await fs.mkdir(assets);
+    await fs.symlink(path.join(outside, "absent.png"), target, "file");
+    await checkPaste(false);
+    expect(await fs.readdir(outside)).toEqual([]);
+  });
+
+  it("refuses a dangling assets directory symlink", async () => {
+    await fs.symlink(path.join(outside, "absent-dir"), assets, "dir");
+    await checkPaste(false);
+    expect(await fs.readdir(outside)).toEqual([]);
+  });
+
+  it("creates a missing assets directory and writes the image", async () => {
+    await checkPaste(true);
+  });
+
+  it("accepts an existing regular hash file", async () => {
+    await fs.mkdir(assets);
+    await fs.writeFile(target, new Uint8Array(PNG_BYTES));
+    await checkPaste(true);
   });
 });

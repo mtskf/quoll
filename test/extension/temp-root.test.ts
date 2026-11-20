@@ -1,11 +1,12 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createRunTempRoot,
   makeTempDir,
   makeTempDirSync,
+  makeUnitTempDir,
   RUN_TEMP_ROOT_ENV,
   type RunTempRoot,
   resolveRunTempWorkDir,
@@ -132,5 +133,57 @@ describe("makeTempDir", () => {
     process.env[RUN_TEMP_ROOT_ENV] = run.root;
     await expect(makeTempDir("../escape")).rejects.toThrow(/bare name/);
     expect(() => makeTempDirSync("a/b")).toThrow(/bare name/);
+  });
+});
+
+describe("makeUnitTempDir", () => {
+  let outer: ReturnType<typeof makeUnitTempDir>;
+
+  beforeEach(() => {
+    vi.stubEnv(RUN_TEMP_ROOT_ENV, undefined);
+    outer = makeUnitTempDir("outer");
+    vi.stubEnv("TMPDIR", outer.dir);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    outer?.dispose();
+  });
+
+  it("allocates unique realpath'd dirs with the unit slug prefix", () => {
+    const first = makeUnitTempDir("sample");
+    const second = makeUnitTempDir("sample");
+
+    expect(first.dir).not.toBe(second.dir);
+    for (const { dir } of [first, second]) {
+      expect(fs.statSync(dir).isDirectory()).toBe(true);
+      expect(dir).toBe(fs.realpathSync(dir));
+      expect(path.basename(dir).startsWith("quoll-unit-sample-")).toBe(true);
+    }
+  });
+
+  it("reclaims a non-empty dir and can be called twice", () => {
+    const temp = makeUnitTempDir("cleanup");
+    fs.writeFileSync(path.join(temp.dir, "leftover.md"), "# x\n");
+
+    temp.dispose();
+    expect(fs.existsSync(temp.dir)).toBe(false);
+    expect(() => temp.dispose()).not.toThrow();
+  });
+
+  it("rejects a slug with a separator before allocating", () => {
+    expect(() => makeUnitTempDir("a/b")).toThrow(/bare name/);
+    expect(fs.readdirSync(outer.dir)).toEqual([]);
+  });
+
+  it("resolves a symlinked TMPDIR", () => {
+    const real = path.join(outer.dir, "real");
+    const link = path.join(outer.dir, "link");
+    fs.mkdirSync(real);
+    fs.symlinkSync(real, link, "dir");
+    vi.stubEnv("TMPDIR", link);
+
+    const { dir } = makeUnitTempDir("sample");
+    expect(dir.startsWith(real + path.sep)).toBe(true);
   });
 });

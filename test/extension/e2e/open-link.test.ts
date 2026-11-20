@@ -1,6 +1,12 @@
 import * as assert from "node:assert";
 import { PROTOCOL_VERSION } from "./constants";
-import { cleanupBetweenTests, getHarness, isDocumentEvent, openFixtureWithQuoll } from "./harness";
+import {
+  cleanupBetweenTests,
+  getHarness,
+  isDocumentEvent,
+  openFixtureWithQuoll,
+  pollUntil,
+} from "./harness";
 
 describe("open-link", function () {
   this.timeout(15000);
@@ -34,8 +40,7 @@ describe("open-link", function () {
       href: "./link-target.md",
     });
 
-    // handleOpenLink is synchronous through the gate; the override runs inline.
-    await Promise.resolve();
+    await pollUntil(() => opened.length === 1, "the open-link target to open", 5000);
 
     assert.strictEqual(opened.length, 1, "expected the open-link target to be opened once");
     assert.ok(
@@ -63,19 +68,17 @@ describe("open-link", function () {
       href: "../../../../../../etc/passwd.md",
     });
 
-    await Promise.resolve();
-
-    assert.deepStrictEqual(
-      opened,
-      [],
-      "expected the host containment gate to drop an out-of-scope open-link"
-    );
     // Dropped, but NOT silently: the webview already promised this click
     // (containment is the one gate it cannot run), so the refusal owes the user
     // a toast. The unit suite pins the message on the pure function; this pins
     // that the panel actually wires `showError` into that arm — the toast
     // reaches the real host surface the harness records.
     const refusal = await harness.waitForError((msg) => msg.includes("points outside"), 5000);
+    assert.deepStrictEqual(
+      opened,
+      [],
+      "expected the host containment gate to drop an out-of-scope open-link"
+    );
     assert.ok(
       !refusal.includes("passwd"),
       `the refusal toast must not echo the untrusted destination, got ${refusal}`
@@ -100,7 +103,7 @@ describe("open-link", function () {
       type: "open-link",
       href: "./my%20notes.md",
     });
-    await Promise.resolve();
+    await pollUntil(() => opened.length === 1, "the decoded open-link target to open", 5000);
 
     assert.strictEqual(opened.length, 1);
     assert.ok(
@@ -127,8 +130,31 @@ describe("open-link", function () {
       type: "open-link",
       href: "..%2f..%2f..%2f..%2f..%2f..%2fetc%2fpasswd.md",
     });
-    await Promise.resolve();
+    await harness.waitForError((msg) => msg.includes("points outside"), 5000);
 
     assert.deepStrictEqual(opened, [], "decoded ../ traversal must be dropped by containment");
+  });
+
+  it("refuses a symlink whose real target is outside the document directory", async () => {
+    const harness = await getHarness();
+    await openFixtureWithQuoll("link-source.md");
+    await harness.waitForEvent(isDocumentEvent, 8000);
+
+    const opened: string[] = [];
+    harness.openLinkOverride = (uri): Promise<unknown> => {
+      opened.push(uri.path);
+      return Promise.resolve(undefined);
+    };
+
+    const panel = harness.activePanel;
+    assert.ok(panel);
+    panel.simulateInbound({
+      protocol: PROTOCOL_VERSION,
+      type: "open-link",
+      href: "./escape-link.md",
+    });
+    await harness.waitForError((msg) => msg.includes("points outside"), 5000);
+
+    assert.deepStrictEqual(opened, [], "the realpath guard must refuse the symlink target");
   });
 });
