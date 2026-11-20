@@ -31,7 +31,7 @@ import { EditorView } from "@codemirror/view";
 import { decodeMarkdownDestination } from "../../markdown/url-decode.js";
 import { MAX_HREF_LENGTH, PROTOCOL_VERSION, type WebviewToHost } from "../../shared/protocol.js";
 import { type PostMessageHost, safePostMessage } from "../safe-post-message.js";
-import { resolveLinkTarget } from "./link-resolve.js";
+import { linkDestination, resolveLinkTarget } from "./link-resolve.js";
 import { classifyLinkTarget } from "./link-target.js";
 
 /** Forced-parse budget for resolving a `#slug` on CLICK. Same value and same
@@ -154,16 +154,8 @@ export function tryOpenLinkAt(
   if (selectionIntersects(state, node.from, node.to)) {
     return false;
   }
-  // Find the URL child. Reference-form Link has none.
-  let child = node.firstChild;
-  let urlNode: { from: number; to: number } | null = null;
-  while (child !== null) {
-    if (child.name === "URL") {
-      urlNode = { from: child.from, to: child.to };
-      break;
-    }
-    child = child.nextSibling;
-  }
+  // Reference-form Link has no destination.
+  const urlNode = linkDestination(node, state.doc);
   if (urlNode === null) {
     return false;
   }

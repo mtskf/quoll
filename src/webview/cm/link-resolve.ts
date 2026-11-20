@@ -31,6 +31,7 @@
 
 import { ensureSyntaxTree, type syntaxTree } from "@codemirror/language";
 import type { EditorState, Text } from "@codemirror/state";
+import type { SyntaxNode } from "@lezer/common";
 
 import { collectHeadings, headingSlugSource, slugifyHeadingText } from "./headings.js";
 import type { LinkTarget } from "./link-target.js";
@@ -241,4 +242,24 @@ const ACTIONABLE_BY_KIND: Record<ResolvedLinkTarget["kind"], boolean> = {
  *  ("posts to the host"): `scroll` acts entirely inside the webview. */
 export function isActionableLinkTarget(resolved: ResolvedLinkTarget): boolean {
   return ACTIONABLE_BY_KIND[resolved.kind];
+}
+
+/** The destination of an inline Link: the `URL` child right after its `(`
+ *  LinkMark, or null for reference form. NOT "the first URL child" — a label
+ *  that is itself a bare URL (`[https://a.test](https://b.test)`) parses as a
+ *  GFM autolink, so the label carries a `URL` child of its own. Shared by the
+ *  click handler and link-reveal so the opened href and the hidden span agree. */
+export function linkDestination(link: SyntaxNode, doc: Text): SyntaxNode | null {
+  for (let child = link.firstChild; child !== null; child = child.nextSibling) {
+    const prev = child.prevSibling;
+    if (
+      child.name === "URL" &&
+      prev !== null &&
+      prev.name === "LinkMark" &&
+      doc.sliceString(prev.from, prev.to) === "("
+    ) {
+      return child;
+    }
+  }
+  return null;
 }

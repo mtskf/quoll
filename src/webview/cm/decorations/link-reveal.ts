@@ -52,7 +52,7 @@
 import { Decoration, type DecorationSet } from "@codemirror/view";
 
 import { decodeMarkdownDestination } from "../../../markdown/url-decode.js";
-import { isActionableLinkTarget, resolveLinkTarget } from "../link-resolve.js";
+import { isActionableLinkTarget, linkDestination, resolveLinkTarget } from "../link-resolve.js";
 import { classifyLinkTarget } from "../link-target.js";
 import { buildSortedRangeSet } from "../sorted-range-set.js";
 
@@ -64,8 +64,6 @@ import type { DecorationProvider } from "./types.js";
  *  (`.quoll-link-clickable { cursor: pointer; }`). Sharing the instance
  *  for the same RangeSet dedup benefit shared.ts uses for REVEAL_MARK. */
 const CLICKABLE = Decoration.mark({ class: "quoll-link-clickable" });
-
-const LINK_MARK_NAMES = new Set(["LinkMark", "URL"]);
 
 export const linkReveal: DecorationProvider = {
   build(ctx): DecorationSet {
@@ -83,9 +81,12 @@ export const linkReveal: DecorationProvider = {
           if (node.name !== "Link") {
             return;
           }
-          // Find the URL child. Inline-form Link has one; reference-form
-          // does not. Skip the latter — C4b is inline-only.
-          let urlChild: { from: number; to: number } | null = null;
+          // Inline-form Link has a destination; reference-form does not.
+          // Skip the latter — C4b is inline-only.
+          const urlChild = linkDestination(node.node, ctx.state.doc);
+          if (urlChild === null) {
+            return;
+          }
           let contentStart: number | null = null;
           let contentEnd: number | null = null;
           const sub = node.node.cursor();
@@ -95,8 +96,7 @@ export const linkReveal: DecorationProvider = {
           // First child should be a LinkMark `[` at node.from. Use it as
           // the start of inline content (content starts AFTER `[`).
           // Then iterate siblings: a `]` LinkMark closes the inline
-          // content; a `(` LinkMark + URL + `)` LinkMark form the URL
-          // tail. Reference-form has no `(` so urlChild stays null.
+          // content.
           do {
             if (sub.name === "LinkMark") {
               const ch = ctx.state.doc.sliceString(sub.from, sub.to);
@@ -105,14 +105,8 @@ export const linkReveal: DecorationProvider = {
               } else if (ch === "]") {
                 contentEnd = sub.from;
               }
-            } else if (sub.name === "URL") {
-              urlChild = { from: sub.from, to: sub.to };
             }
           } while (sub.nextSibling());
-          if (urlChild === null) {
-            // Reference-form (or malformed inline) — skip silently.
-            return;
-          }
           const revealed = intersectsAnySelection(ctx.selection, node.from, node.to);
           // Re-walk children to emit a decoration per LinkMark + URL,
           // bounded by the visible range (review fix #9 from C4a — outer
@@ -122,7 +116,9 @@ export const linkReveal: DecorationProvider = {
             return;
           }
           do {
-            if (LINK_MARK_NAMES.has(sub2.name)) {
+            // Every LinkMark plus the destination URL — never a URL inside
+            // the label, which is label text the user must still see.
+            if (sub2.name === "LinkMark" || sub2.from === urlChild.from) {
               if (sub2.from < range.to && range.from < sub2.to) {
                 out.push({
                   from: sub2.from,

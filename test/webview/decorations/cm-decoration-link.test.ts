@@ -290,3 +290,24 @@ describe("linkReveal — the clickable marker tracks actionability", () => {
     expect(clickableCount("see [t](https\\://example.com) end")).toBe(1);
   });
 });
+
+describe("linkReveal — a bare URL as the label", () => {
+  // Lezer emits the label's GFM autolink as a `URL` child of the Link too, so
+  // only the URL right after the `(` mark is the destination.
+  it.each([
+    ["[https://a.test](https://b.test)\n\nx", "https://a.test"],
+    ["see [https://a.test/p](https://a.test/p) here\n\nx", "https://a.test/p"],
+  ])("keeps the label visible and marks it clickable: %j", (doc, label) => {
+    const decos = decosOf(linkReveal.build(ctx(doc, EditorSelection.single(doc.length))));
+    const labelFrom = doc.indexOf(label);
+    const labelTo = labelFrom + label.length;
+    expect(decos.filter((d) => d.kind === "hide" && d.from < labelTo && labelFrom < d.to)).toEqual(
+      []
+    );
+    // `[`, `]`, `(`, the destination URL, `)`.
+    expect(decos.filter((d) => d.kind === "hide").length).toBe(5);
+    expect(decos.filter((d) => d.kind === "clickable")).toEqual([
+      { from: labelFrom, to: labelTo, kind: "clickable", class: "quoll-link-clickable" },
+    ]);
+  });
+});
