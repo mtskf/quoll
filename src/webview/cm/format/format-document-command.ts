@@ -53,12 +53,12 @@ export function runFormatDocument(view: EditorView): FormatDocumentResult {
   // the type rejects a plain `string`, but it cannot say WHICH of the two
   // DocumentEol values this call must read. See outboundContentLength's JSDoc.
   const eol = view.state.facet(quollDocumentEol);
-  // Table formatting preserves line endings, so the growth is the same after serialization.
-  const maxGrowth = MAX_CONTENT_LENGTH - outboundContentLength(source, eol);
   let edits: ReturnType<typeof formatDocumentEdits>;
   let formatted: string;
   try {
-    edits = formatDocumentEdits(source, maxGrowth);
+    edits = formatDocumentEdits(source, MAX_CONTENT_LENGTH, (text) =>
+      outboundContentLength(text, eol)
+    );
     // Connect the overlap guard to the runtime path: applyEdits THROWS on
     // overlapping edits, so a rule bug becomes a caught bail, not corruption.
     formatted = applyEdits(source, edits);

@@ -11,9 +11,16 @@ import { listRenumberEdits } from "./list-rules.js";
 import { classifyDocument } from "./segment.js";
 import { tableEdits } from "./table-format.js";
 
-/** `maxGrowth` covers tables, the only amplifying rule. Other rules are bounded
- *  by input size, and the caller's final size check remains the backstop. */
-export function formatDocumentEdits(source: string, maxGrowth = Number.POSITIVE_INFINITY): Edit[] {
+/** `maxLength` caps the formatted document, in units of `measure` (default:
+ *  UTF-16 length; the caller passes its outbound length). It is judged on the net
+ *  growth of ALL rules, and a table set whose growth exceeds what is left of the
+ *  budget throws `FormatTooLargeError` before any padding is rendered. A document
+ *  that does not grow never throws; the caller's final size check is the backstop. */
+export function formatDocumentEdits(
+  source: string,
+  maxLength = Number.POSITIVE_INFINITY,
+  measure: (text: string) => number = (text) => text.length
+): Edit[] {
   if (source.length === 0) {
     return [];
   }
@@ -24,12 +31,22 @@ export function formatDocumentEdits(source: string, maxGrowth = Number.POSITIVE_
   // directly, and CM expects changes in order. This is the ONE sort — applyEdits
   // (used to validate + string-apply) also sorts, so both consume identical
   // document-ordered, non-overlapping edits.
-  return [
-    ...tableEdits(source, tableRanges, maxGrowth),
+  const otherEdits = [
     ...listRenumberEdits(orderedLists),
     ...bulletUnifyEdits(source, bulletLists),
     ...lineEdits(source, keepOut, literalSpans),
-  ].sort((a, b) => a.from - b.from || a.to - b.to);
+  ];
+  let tableBudget = Number.POSITIVE_INFINITY;
+  if (Number.isFinite(maxLength)) {
+    const otherGrowth = otherEdits.reduce(
+      (sum, e) => sum + measure(e.insert) - measure(source.slice(e.from, e.to)),
+      0
+    );
+    tableBudget = maxLength - measure(source) - otherGrowth;
+  }
+  return [...tableEdits(source, tableRanges, tableBudget), ...otherEdits].sort(
+    (a, b) => a.from - b.from || a.to - b.to
+  );
 }
 
 export function formatDocument(source: string): string {

@@ -87,7 +87,7 @@ export function tableEdits(
   tableRanges: readonly Range[],
   maxGrowth = Number.POSITIVE_INFINITY
 ): Edit[] {
-  const edits: Edit[] = [];
+  const planned: { from: number; to: number; table: Table; widths: number[] }[] = [];
   let growth = 0;
   for (const { from, to } of tableRanges) {
     const table = parseTable(source, from, to);
@@ -130,14 +130,20 @@ export function tableEdits(
     }
     const widths = columnWidths(table);
     growth += formattedLength(table, widths) - (to - from);
-    if (growth > maxGrowth) {
-      throw new FormatTooLargeError();
-    }
+    planned.push({ from, to, table, widths });
+  }
+  // Judge the net growth once, before any padding is built. A table set that
+  // does not grow costs no more to render than its input, so it is never
+  // refused here (the caller's final size check stays the backstop).
+  if (growth > 0 && growth > maxGrowth) {
+    throw new FormatTooLargeError();
+  }
+  const edits: Edit[] = [];
+  for (const { from, to, table, widths } of planned) {
     const formatted = formatTableBlock(table, widths);
-    if (formatted === source.slice(from, to)) {
-      continue; // already normal form
+    if (formatted !== source.slice(from, to)) {
+      edits.push({ from, to, insert: formatted });
     }
-    edits.push({ from, to, insert: formatted });
   }
   return edits;
 }
