@@ -6,7 +6,11 @@ import { describe, expect, it } from "vitest";
 import { createClipboardPaste } from "../../../src/webview/cm/paste/clipboard-paste.js";
 
 import { decideTablePaste } from "../../../src/webview/cm/paste/html-table-paste.js";
+import { htmlToMarkdown } from "../../../src/webview/cm/paste/html-to-markdown.js";
 import { htmlTableToGfm } from "../../../src/webview/cm/paste/index.js";
+
+const IDSP = String.fromCharCode(0x3000);
+const NNBSP = String.fromCharCode(0x202f);
 
 describe("htmlTableToGfm — structure", () => {
   it("converts a thead + tbody table to GFM", () => {
@@ -50,6 +54,13 @@ describe("htmlTableToGfm — caption & section order", () => {
   it("emits a <caption> as a paragraph above the table (not dropped)", () => {
     const html = "<table><caption>Sales 2024</caption><tr><td>A</td><td>B</td></tr></table>";
     expect(htmlTableToGfm(html)).toBe("Sales 2024\n\n| A | B |\n| --- | --- |");
+  });
+
+  it("omits a whitespace-only caption", () => {
+    const table = (caption: string) =>
+      `<table><caption>${caption}</caption><tr><td>A</td></tr></table>`;
+    expect(htmlTableToGfm(table(IDSP))).toBe("| A |\n| --- |");
+    expect(htmlTableToGfm(table(`${IDSP}<br>${NNBSP}`))).toBe("| A |\n| --- |");
   });
 
   it("escapes leading block markers in a caption (emitted at line start)", () => {
@@ -156,11 +167,30 @@ describe("htmlTableToGfm — cell text extraction", () => {
   });
 
   it("keeps U+3000 and U+202F inside a cell while folding ASCII whitespace", () => {
-    const idsp = String.fromCharCode(0x3000);
-    const nnbsp = String.fromCharCode(0x202f);
     expect(
-      htmlTableToGfm(`<table><tr><td><b>東京${idsp}大阪</b>  \n 10${nnbsp}%</td></tr></table>`)
-    ).toContain(`| 東京${idsp}大阪 10${nnbsp}% |`);
+      htmlTableToGfm(`<table><tr><td><b>東京${IDSP}大阪</b>  \n 10${NNBSP}%</td></tr></table>`)
+    ).toContain(`| 東京${IDSP}大阪 10${NNBSP}% |`);
+  });
+
+  it("keeps Unicode spaces at cell edges and in an otherwise empty cell", () => {
+    const html = `<table><tr><td><br> \t${IDSP}本文${IDSP} <br></td><td>${IDSP}</td><td> ${NNBSP}B${NNBSP} </td></tr></table>`;
+    expect(htmlTableToGfm(html)).toBe(
+      `| ${IDSP}本文${IDSP} | ${IDSP} | ${NNBSP}B${NNBSP} |\n| --- | --- | --- |`
+    );
+    const spacer = htmlToMarkdown(`<table><tr><td>${IDSP}</td></tr></table>`);
+    expect(spacer).toEqual({ markdown: `| ${IDSP} |\n| --- |`, emittedMarkdownSyntax: false });
+  });
+
+  it("drops U+200B and U+FEFF but keeps ZWJ in cells and prose", () => {
+    const zwsp = String.fromCharCode(0x200b);
+    const bom = String.fromCharCode(0xfeff);
+    const zwj = String.fromCharCode(0x200d);
+    const source = `a${zwsp}b${bom}c${zwj}d`;
+    const expected = `abc${zwj}d`;
+    expect(htmlTableToGfm(`<table><tr><td>${source}</td></tr></table>`)).toBe(
+      `| ${expected} |\n| --- |`
+    );
+    expect(htmlToMarkdown(`<p>${source}</p>`)?.markdown).toBe(expected);
   });
 
   it("separates block-element boundaries so text does not glue", () => {

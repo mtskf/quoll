@@ -247,6 +247,24 @@ describe("htmlToMarkdown — inline constructs", () => {
     // U+00A0 keeps folding: clipboard serialisers write `&nbsp;` to protect spaces.
     expect(convert(`<p>a${NBSP} b</p>`)).toBe("a b");
   });
+  it("keeps paragraph-edge U+3000 and U+202F outside strong emphasis", () => {
+    const md = convert(`<p><br> \t${IDSP}<b>本文</b>${NNBSP} <br></p>`);
+    expect(md).toBe(`${IDSP}**本文**${NNBSP}`);
+    expect(parsesToNode(md as string, "StrongEmphasis")).toBe(true);
+    expect(convert(`<p><b> ${NNBSP}本文${IDSP} </b></p>`)).toBe(`${NNBSP}**本文**${IDSP}`);
+  });
+  it("keeps U+3000 and U+202F at heading edges", () => {
+    expect(convert(`<h2><br> ${IDSP}見出し${NNBSP} <br></h2>`)).toBe(`## ${IDSP}見出し${NNBSP}`);
+  });
+  it("drops whitespace-only paragraphs and headings", () => {
+    expect(convert(`<p>${IDSP}</p>`)).toBeNull();
+    expect(convert(`<p>${IDSP}<br>${NNBSP}</p>`)).toBeNull();
+    expect(convert(`<h2>${IDSP}</h2>`)).toBeNull();
+  });
+  it("keeps a leading U+3000 on a table caption in rich HTML", () => {
+    const html = `<table><caption> ${IDSP}# caption${NNBSP} </caption><tr><td>A</td></tr></table>`;
+    expect(convert(html)).toBe(`${IDSP}# caption${NNBSP}\n\n| A |\n| --- |`);
+  });
   it("still drops emphasis that would close against a U+3000 edge (flanking)", () => {
     // Markdown's flanking rules still read U+3000 as whitespace: a styled run that ends
     // on one must not put its closer after it.

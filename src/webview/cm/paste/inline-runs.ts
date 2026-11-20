@@ -51,7 +51,7 @@ export interface RepairBudget {
 }
 
 export interface InlineRunOptions {
-  /** Trim leading/trailing whitespace and break units (a block's edges). */
+  /** Trim leading/trailing folded spaces and break units (a block's edges). */
   readonly trimEdges: boolean;
   /** Escapes a text unit so it renders literally (the converter's `escapeInline`,
    *  injected so this module has no import from the converter). */
@@ -135,7 +135,8 @@ function toUnits(atoms: readonly InlineAtom[], opts: InlineRunOptions): Unit[] {
   for (const atom of atoms) {
     switch (atom.kind) {
       case "text":
-        for (const piece of atom.text.split(/(\s+)/)) {
+        // Split folded spaces from other whitespace so edge trimming can peel them.
+        for (const piece of atom.text.split(/( +|[^\S ]+)/)) {
           if (piece !== "") {
             units.push(textUnit(piece, atom.style));
           }
@@ -159,13 +160,19 @@ function isNeutral(u: Unit): boolean {
   return u.kind === "break" || (u.kind === "text" && u.neutral);
 }
 
-/** A unit a block edge drops: whitespace or a break (a lone joiner is kept, as the
- *  converter always has). */
+/** A block edge drops breaks and folded spaces. Other Unicode spaces and lone
+ *  joiners survive; the delimiter rules still treat Unicode spaces as neutral. */
 function isEdgeTrimmable(u: Unit): boolean {
-  return u.kind === "break" || (u.kind === "text" && WHITESPACE_RUN.test(u.text));
+  return u.kind === "break" || (u.kind === "text" && /^ +$/.test(u.text));
 }
 
 function trimUnits(units: Unit[]): Unit[] {
+  // A block holding only whitespace and breaks is empty, whatever the whitespace.
+  if (
+    units.every((u) => u.kind === "break" || (u.kind === "text" && WHITESPACE_RUN.test(u.text)))
+  ) {
+    return [];
+  }
   let start = 0;
   let end = units.length;
   while (start < end && isEdgeTrimmable(units[start])) {
