@@ -580,6 +580,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     const imageWriteWiring = createImageWriteWiring({
       documentUri: document.uri,
       canWrite: canWriteNow,
+      realContainment: resolveRealContainment,
       showError,
       post,
       writeFileOverride: () => this.harness?.writeImageFileOverride ?? null,

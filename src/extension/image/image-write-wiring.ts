@@ -14,9 +14,11 @@
 // the image-write-service + image-ingest unit suites + the image-write-readonly
 // e2e, which this only re-wires.
 
+import { lstat } from "node:fs/promises";
 import { Uri, workspace } from "vscode";
 
 import type { HostToWebview } from "../../shared/protocol.js";
+import type { RealContainment } from "../links/real-containment.js";
 import { buildImageWriteResultMessage } from "../session/document-message.js";
 import {
   createSessionVolumeBudget,
@@ -32,6 +34,9 @@ export interface ImageWriteWiringDeps {
   /** Live host write capability (canWriteNow). Lazy — a runtime read-only flip
    *  must be reflected per request. */
   readonly canWrite: () => boolean;
+  /** Production: resolveRealContainment. Checks the target against the
+   *  document folder's real path before anything is created or written. */
+  readonly realContainment: (targetPath: string, rootPath: string) => Promise<RealContainment>;
   /** Surface a user-facing toast (host showError). */
   readonly showError: (message: string) => void;
   /** Post a host→webview message (the effect executor's post). */
@@ -68,13 +73,29 @@ export function createImageWriteWiring(deps: ImageWriteWiringDeps): ImageWriteWi
           budget,
           postResult: (id, relativePath) =>
             deps.post(buildImageWriteResultMessage(id, relativePath)),
-          // writeImage creates <docFolder>/assets/ then writes — the explicit
-          // createDirectory removes any dependency on writeFile's (undocumented)
-          // parent-dir behaviour and is idempotent.
+          // writeImage checks containment, creates <docFolder>/assets/, then
+          // writes — the explicit createDirectory removes any dependency on
+          // writeFile's (undocumented) parent-dir behaviour and is idempotent.
           writeImage: async (filename, bytes) => {
-            const assetsDir = Uri.joinPath(deps.documentUri, "..", "assets");
-            await workspace.fs.createDirectory(assetsDir);
+            const docDir = Uri.joinPath(deps.documentUri, "..");
+            const assetsDir = Uri.joinPath(docDir, "assets");
             const target = Uri.joinPath(assetsDir, filename);
+            // Before any side effect. A write must not follow a link even when
+            // its referent is inside: a symlinked or hardlinked <sha>.png could
+            // point at the document itself. An existing leaf is accepted only
+            // as a single-link regular file (a same-bytes rewrite).
+            const verdict = await deps.realContainment(target.fsPath, docDir.fsPath);
+            if (
+              verdict === "outside" ||
+              (verdict === "inside" && !(await isPlainFile(target.fsPath)))
+            ) {
+              console.warn(
+                "[quoll] image-write rejected: path escapes the document folder or is a symlink",
+                { target: target.fsPath, docDir: docDir.fsPath }
+              );
+              throw new Error("image-write target refused");
+            }
+            await workspace.fs.createDirectory(assetsDir);
             const write: (uri: Uri, content: Uint8Array) => Thenable<void> =
               deps.writeFileOverride() ?? ((uri, content) => workspace.fs.writeFile(uri, content));
             await write(target, bytes);
@@ -86,4 +107,9 @@ export function createImageWriteWiring(deps: ImageWriteWiringDeps): ImageWriteWi
       );
     },
   };
+}
+
+async function isPlainFile(fsPath: string): Promise<boolean> {
+  const stat = await lstat(fsPath);
+  return stat.isFile() && stat.nlink === 1;
 }
