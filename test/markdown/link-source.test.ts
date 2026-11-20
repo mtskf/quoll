@@ -48,6 +48,31 @@ it.each([
   { label: "    `a]b`", href, escapedLabel: "    `a]b`", destination: href, text: "    a]b" },
   { label: "<div> `a]b`", href, escapedLabel: "<div> `a]b`", destination: href, text: "<div> a]b" },
   {
+    label: "https://example.test/path]",
+    href,
+    escapedLabel: "https://example.test/path&#93;",
+    destination: href,
+    text: "https://example.test/path]",
+  },
+  {
+    label: "![a [b] d](e)",
+    href,
+    escapedLabel: "![a \\[b\\] d](e)",
+    destination: href,
+    text: "![a [b] d](e)",
+  },
+  // commonMarkAltText does not flatten a link nested in image alt text, so these skip the text check.
+  { label: "![a [b](c) d](e)", href, escapedLabel: "![a \\[b\\](c) d](e)", destination: href },
+  { label: "![[x](y)](z)", href, escapedLabel: "![\\[x\\](y)](z)", destination: href },
+  {
+    label: "<!-- a]b -->",
+    href,
+    escapedLabel: "<!-- a]b -->",
+    destination: href,
+    text: "<!-- a]b -->",
+  },
+  { label: "<?x a]b?>", href, escapedLabel: "<?x a]b?>", destination: href, text: "<?x a]b?>" },
+  {
     label: "label",
     href: "https://x.test/AT&amp;T",
     escapedLabel: "label",
@@ -88,8 +113,12 @@ it.each([
     },
   });
   expect(links.map(({ from, to }) => [from, to])).toEqual([[0, source.length]]);
-  const url = links[0]?.getChild("URL");
+  const url = links[0]?.getChildren("URL").at(-1);
   expect(url).toBeDefined();
   expect(decodeMarkdownDestination(source.slice(url?.from, url?.to))).toBe(href);
-  expect(commonMarkAltText(source.slice(1, links[0]?.getChildren("LinkMark")[1]?.from))).toBe(text);
+  if (text !== undefined) {
+    expect(commonMarkAltText(source.slice(1, links[0]?.getChildren("LinkMark")[1]?.from))).toBe(
+      text
+    );
+  }
 });

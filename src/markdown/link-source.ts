@@ -16,11 +16,20 @@ const labelSourceNodes = new Set([
   "ProcessingInstruction",
   // Already an escape; escaping its backslash would expose the escaped mark.
   "Escape",
-  // Its brackets are the image syntax, which a link label may contain.
-  "Image",
   // A backslash hard break; doubling the backslash turns it into text.
   "HardBreak",
 ]);
+
+// An image's own syntax (`![`, `](`, `)`, destination, title) is kept; its alt
+// text is walked like any other label text so a `[x]` in it cannot close the link.
+const imageSyntaxNodes = new Set(["LinkMark", "URL", "LinkTitle", "LinkLabel"]);
+
+// A bare URL absorbs a backslash escape into itself, so `\]` would still end the
+// URL at the `]`. A numeric reference keeps the character literal and reads as
+// the same text.
+function entityEscapeUrl(url: string): string {
+  return url.replace(/[\\[\]]/g, (c) => `&#${c.charCodeAt(0)};`);
+}
 
 function escapePlainText(text: string): string {
   return text.replace(/[\\[\]]/g, "\\$&");
@@ -36,12 +45,20 @@ function escapeLabel(label: string): string {
   const input = labelPrefix + label;
   let escaped = "";
   let plainFrom = labelPrefix.length;
-  // A full, synchronous parse of just the label keeps the escaping deterministic.
+  // A full, synchronous parse keeps the escaping deterministic.
   gfmParser.parse(input).iterate({
     enter: (node) => {
-      if (node.from >= plainFrom && labelSourceNodes.has(node.name)) {
+      if (node.from < plainFrom) {
+        return;
+      }
+      const parent = node.node.parent?.name;
+      const keep =
+        labelSourceNodes.has(node.name) || (parent === "Image" && imageSyntaxNodes.has(node.name));
+      const bareUrl = node.name === "URL" && parent !== "Image" && parent !== "Link";
+      if (keep || bareUrl) {
         escaped += escapePlainText(input.slice(plainFrom, node.from));
-        escaped += input.slice(node.from, node.to);
+        const bytes = input.slice(node.from, node.to);
+        escaped += keep ? bytes : entityEscapeUrl(bytes);
         plainFrom = node.to;
         return false;
       }
