@@ -187,6 +187,9 @@ describe("htmlToMarkdown — inline constructs", () => {
   it("wraps inline code containing a backtick with a longer fence", () => {
     expect(convert("<p><code>a`b</code></p>")).toBe("`` a`b ``");
   });
+  it("pads inline code whose body has spaces at both ends so they survive rendering", () => {
+    expect(convert("<p>x<code> a </code>y</p>")).toBe("x`  a  `y");
+  });
   it("converts an allowlisted link", () => {
     expect(convert('<p><a href="https://x.com">t</a></p>')).toBe("[t](https://x.com)");
   });

@@ -1,5 +1,6 @@
 import { EditorSelection, EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
+import { gfmParser } from "../../../src/markdown/gfm-parser.js";
 import type { FormatAction } from "../../../src/shared/protocol.js";
 import {
   computeInlineFormat,
@@ -171,5 +172,83 @@ describe("computeLinkWrap", () => {
     const next = state.update({ changes, selection }).state;
     expect(next.doc.toString()).toBe("[]()");
     expect(next.selection.main.from).toBe(1); // inside []
+  });
+});
+
+// The rendered body of the document's code spans, read through the real GFM
+// parser: the bytes between the first and last CodeMark of each InlineCode,
+// with the one-space strip CommonMark applies when both ends are spaces and the
+// body is not all spaces.
+function renderedCodeBodies(doc: string): string[] {
+  const bodies: string[] = [];
+  gfmParser.parse(doc).iterate({
+    enter(node) {
+      if (node.name !== "InlineCode") {
+        return;
+      }
+      const marks = node.node.getChildren("CodeMark");
+      const raw = doc.slice(marks[0].to, marks[marks.length - 1].from);
+      bodies.push(
+        raw.length >= 2 && raw.startsWith(" ") && raw.endsWith(" ") && /[^ ]/.test(raw)
+          ? raw.slice(1, -1)
+          : raw
+      );
+      return false;
+    },
+  });
+  return bodies;
+}
+
+describe("computeInlineFormat — code keeps the whole selection", () => {
+  const cases = [
+    ["an inner backtick", "a`b"],
+    ["a backtick run", "a``b"],
+    ["several runs", "a`b``c"],
+    ["a leading backtick", "`a"],
+    ["a trailing backtick", "a`"],
+    ["spaces at both ends", " a "],
+    ["spaces and a backtick", " a`b "],
+    ["only backticks", "``"],
+    ["only spaces", "  "],
+  ] as const;
+
+  for (const [name, text] of cases) {
+    it(`renders a selection with ${name} as one code span of exactly that text`, () => {
+      const doc = `x ${text} y`;
+      const r = applyFormat(doc, { anchor: 2, head: 2 + text.length }, "code");
+      expect(renderedCodeBodies(r.doc)).toEqual([text]);
+      expect(r.doc.slice(r.from, r.to)).toBe(text);
+    });
+
+    it(`toggles a selection with ${name} back to the original bytes`, () => {
+      const doc = `x ${text} y`;
+      const once = applyFormat(doc, { anchor: 2, head: 2 + text.length }, "code");
+      const twice = applyFormat(once.doc, { anchor: once.from, head: once.to }, "code");
+      expect(twice.doc).toBe(doc);
+      expect(twice.doc.slice(twice.from, twice.to)).toBe(text);
+    });
+
+    it(`unwraps a whole selected span with ${name}`, () => {
+      const doc = `x ${text} y`;
+      const once = applyFormat(doc, { anchor: 2, head: 2 + text.length }, "code");
+      const spanTo = once.doc.length - 2;
+      const r = applyFormat(once.doc, { anchor: 2, head: spanTo }, "code");
+      expect(r.doc).toBe(doc);
+      expect(r.doc.slice(r.from, r.to)).toBe(text);
+    });
+  }
+
+  it("unwraps a hand-written double-backtick span from its inner text", () => {
+    expect(applyFormat("``a`b``", { anchor: 2, head: 5 }, "code").doc).toBe("a`b");
+  });
+
+  it("unwraps a hand-written double-backtick span selected whole", () => {
+    expect(applyFormat("`` a`b ``", { anchor: 0, head: 9 }, "code").doc).toBe("a`b");
+  });
+
+  it("does not unwrap when the outside runs differ in length", () => {
+    // `` ``a` `` is not one span; the selection wraps instead.
+    const r = applyFormat("``a`", { anchor: 2, head: 3 }, "code");
+    expect(r.doc).toBe("```a``");
   });
 });

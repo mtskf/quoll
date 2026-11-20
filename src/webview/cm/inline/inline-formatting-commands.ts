@@ -13,8 +13,10 @@
 // A parser under a time budget can return an incomplete tree on a large doc and
 // misclassify an existing `**foo**` as un-bolded, corrupting it into
 // `****foo****`; string matching is deterministic and parse-free so the
-// round-trip contract holds on any doc size. Single-char markers (`*`, `` ` ``)
-// disambiguate against `**`/double runs via the char just beyond the delimiter.
+// round-trip contract holds on any doc size. The single-char `*` disambiguates
+// against `**` via the char just beyond the delimiter. Code is its own toggle:
+// its fence grows past any backtick run in the selection (code-span-source.ts),
+// so it matches whole backtick runs of equal length instead of one marker.
 // Link label escaping parses only the selected string in a full, deterministic parse.
 
 import {
@@ -25,6 +27,11 @@ import {
   type Text,
 } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
+import {
+  codeSpanSource,
+  codeSpanStripsEdges,
+  hasBacktickRunOf,
+} from "../../../markdown/code-span-source.js";
 import { markdownLinkSource } from "../../../markdown/link-source.js";
 import type { FormatAction } from "../../../shared/protocol.js";
 
@@ -32,10 +39,9 @@ import type { FormatAction } from "../../../shared/protocol.js";
 // Keyed by the protocol's action set minus `link`, so an action added there
 // fails `pnpm compile` here until it has a marker (or an explicit non-marker
 // branch in computeInlineFormat) — the webview cannot silently ignore one.
-const MARKERS: Record<Exclude<FormatAction, "link">, string> = {
+const MARKERS: Record<Exclude<FormatAction, "link" | "code">, string> = {
   bold: "**",
   italic: "*",
-  code: "`",
   strike: "~~",
 };
 
@@ -113,6 +119,82 @@ function toggleMark(state: EditorState, marker: string): FormatSpec {
   };
 }
 
+/** Length of the backtick run ending at `pos` (`dir` -1) or starting there (`dir` 1). */
+function backtickRun(doc: Text, pos: number, dir: -1 | 1): number {
+  let n = 0;
+  for (let p = dir < 0 ? pos - 1 : pos; p >= 0 && p < doc.length; p += dir) {
+    if (doc.sliceString(p, p + 1) !== "`") {
+      break;
+    }
+    n++;
+  }
+  return n;
+}
+
+/** Toggle inline code so the rendered body is the whole selection: a wrap
+ *  fences it past any backtick run inside, padded as CommonMark needs, and an
+ *  unwrap removes a fence pair of equal length (plus its padding space) that
+ *  no run inside could have closed first. */
+function toggleCode(state: EditorState): FormatSpec {
+  const { from, to } = state.selection.main;
+  const doc = state.doc;
+
+  if (from === to) {
+    return {
+      changes: { from, insert: "``" },
+      selection: EditorSelection.cursor(from + 1),
+    };
+  }
+
+  // Inner text selected: the fences sit just outside it, after a padding space
+  // on each side when the body as written strips one.
+  for (const pad of [1, 0]) {
+    const open = from - pad;
+    const close = to + pad;
+    if (open < 0 || close > doc.length) {
+      continue;
+    }
+    const body = doc.sliceString(open, close);
+    if (pad === 1 && !codeSpanStripsEdges(body)) {
+      continue;
+    }
+    const fence = backtickRun(doc, open, -1);
+    if (fence > 0 && backtickRun(doc, close, 1) === fence && !hasBacktickRunOf(body, fence)) {
+      return {
+        changes: [
+          { from: open - fence, to: from },
+          { from: to, to: close + fence },
+        ],
+        selection: EditorSelection.range(open - fence, open - fence + (to - from)),
+      };
+    }
+  }
+
+  // Whole span selected, fences included.
+  const text = doc.sliceString(from, to);
+  const fence = text.length - text.replace(/^`+/, "").length;
+  if (fence > 0 && fence < text.length && text.length - text.replace(/`+$/, "").length === fence) {
+    const body = text.slice(fence, -fence);
+    if (!hasBacktickRunOf(body, fence)) {
+      const edge = fence + (codeSpanStripsEdges(body) ? 1 : 0);
+      return {
+        changes: [
+          { from, to: from + edge },
+          { from: to - edge, to },
+        ],
+        selection: EditorSelection.range(from, to - 2 * edge),
+      };
+    }
+  }
+
+  const source = codeSpanSource(text);
+  const start = from + (source.length - text.length) / 2;
+  return {
+    changes: { from, to, insert: source },
+    selection: EditorSelection.range(start, start + text.length),
+  };
+}
+
 /** Wrap the main selection as `[text]()` with the caret in the destination slot.
  *  An empty selection gets `[]()` with the caret in the label slot. */
 export function computeLinkWrap(state: EditorState): FormatSpec {
@@ -133,6 +215,9 @@ export function computeLinkWrap(state: EditorState): FormatSpec {
 export function computeInlineFormat(state: EditorState, action: FormatAction): FormatSpec {
   if (action === "link") {
     return computeLinkWrap(state);
+  }
+  if (action === "code") {
+    return toggleCode(state);
   }
   return toggleMark(state, MARKERS[action]);
 }
