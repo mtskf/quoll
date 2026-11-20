@@ -37,6 +37,7 @@
 import { ensureSyntaxTree } from "@codemirror/language";
 import {
   type ChangeSpec,
+  countColumn,
   EditorSelection,
   type EditorState,
   type SelectionRange,
@@ -108,6 +109,25 @@ export function contentColumnOf(state: EditorState, item: SyntaxNode): number {
   return columnAt(state, content.from);
 }
 
+/** CommonMark content column for a marker line. Empty items and items starting
+ *  with indented code use one column of marker padding. */
+export function contentColumnFromMarkerLine(
+  text: string,
+  markerEnd: number,
+  tabSize: number
+): number {
+  const markerEndCol = countColumn(text, tabSize, markerEnd);
+  let i = markerEnd;
+  while (text[i] === " " || text[i] === "\t") {
+    i++;
+  }
+  if (i === text.length) {
+    return markerEndCol + 1;
+  }
+  const col = countColumn(text, tabSize, i);
+  return col - markerEndCol > 4 ? markerEndCol + 1 : col;
+}
+
 /** First non-whitespace column of `line`, or `null` when the line is blank /
  *  whitespace-only. */
 function firstNonWsColumn(state: EditorState, lineNumber: number): number | null {
@@ -128,8 +148,9 @@ function firstNonWsColumn(state: EditorState, lineNumber: number): number | null
  *  marker line).
  *
  *  `ownLines` are the remaining (non-blank) lines of the subtree whose first
- *  non-whitespace column is >= the item's content column
- *  (`contentColumnOf(state, item)`). A line under that column is only part of
+ *  non-whitespace column is >= `contentCol`, which defaults to the tree-based
+ *  content column. Pass the shift boundary when moving lines so classification
+ *  uses the same column as the shift. A line under that column is only part of
  *  the item by CommonMark laziness (e.g. a flush-left paragraph continuing a
  *  loosely-indented nested item) and is excluded — moving the item must not
  *  drag lazy text that isn't structurally the item's.
@@ -140,9 +161,9 @@ function firstNonWsColumn(state: EditorState, lineNumber: number): number | null
  *  "col >= content" test would wrongly exclude it from the item's own lines. */
 export function classifyItemLines(
   state: EditorState,
-  item: SyntaxNode
+  item: SyntaxNode,
+  contentCol = contentColumnOf(state, item)
 ): { markerLine: number; ownLines: number[] } {
-  const contentCol = contentColumnOf(state, item);
   const first = state.doc.lineAt(item.from).number;
   const last = state.doc.lineAt(Math.max(item.from, item.to - 1)).number;
   const markerLine = first;
@@ -176,6 +197,128 @@ export function leadingCharsForColumns(text: string, cols: number, tabSize: numb
     i++;
   }
   return i;
+}
+
+/** Expand tabs whose width changes across nested list and quote prefixes to preserve indentation.
+ *  HTML continuation payload starts at its owning item's content column. Preserve CodeText
+ *  and any quote-padding tab immediately before it. */
+function shiftLine(
+  state: EditorState,
+  item: SyntaxNode,
+  lineNumber: number,
+  boundary: number,
+  delta: number
+): ChangeSpec | null {
+  const line = state.doc.line(lineNumber);
+  const keepThrough = Math.min(boundary, boundary + delta);
+  let i = 0;
+  let col = 0;
+  let keep = 0;
+  let keptCol = 0;
+  while (col < boundary) {
+    const ch = line.text[i];
+    if (ch === " ") {
+      col++;
+    } else if (ch === "\t") {
+      col += state.tabSize - (col % state.tabSize);
+    } else {
+      return null;
+    }
+    i++;
+    if (col <= keepThrough) {
+      keep = i;
+      keptCol = col;
+    }
+  }
+  let insert = " ".repeat(col + delta - keptCol);
+  const block = item.resolve(line.from, 1);
+  let payloadCol = Infinity;
+  if (
+    block.from < line.from &&
+    (block.name === "HTMLBlock" ||
+      block.name === "CommentBlock" ||
+      block.name === "ProcessingInstructionBlock")
+  ) {
+    let owner = block.parent;
+    while (owner && owner.name !== "ListItem") {
+      owner = owner.parent;
+    }
+    const mark = owner && listMarkOf(owner);
+    payloadCol = boundary;
+    if (mark) {
+      const markerLine = state.doc.lineAt(mark.from);
+      payloadCol = contentColumnFromMarkerLine(
+        markerLine.text,
+        mark.to - markerLine.from,
+        state.tabSize
+      );
+    }
+  }
+  while (i < line.length && col < payloadCol) {
+    const pos = line.from + i;
+    const node = item.resolve(pos, 1);
+    if (
+      node.name === "CodeText" ||
+      (line.text[i] === "\t" &&
+        item.resolve(pos, -1).name === "QuoteMark" &&
+        item.resolve(pos + 1, 1).name === "CodeText")
+    ) {
+      break;
+    }
+
+    const ch = line.text[i];
+    if (ch === "\t") {
+      const width = state.tabSize - (col % state.tabSize);
+      const shiftedWidth = state.tabSize - ((col + delta) % state.tabSize);
+      insert += width === shiftedWidth ? ch : " ".repeat(width);
+      col += width;
+    } else if (ch === " ") {
+      insert += ch;
+      col++;
+    } else if (node.from === pos && (node.name === "ListMark" || node.name === "QuoteMark")) {
+      insert += line.text.slice(i, node.to - line.from);
+      col += node.to - pos;
+      i = node.to - line.from;
+      continue;
+    } else {
+      break;
+    }
+    i++;
+  }
+  return line.text.slice(keep, i) === insert
+    ? null
+    : { from: line.from + keep, to: line.from + i, insert };
+}
+
+/** Move the item's own lines using CommonMark marker padding on both sides
+ *  of a split or renumber so nested content keeps its relative indentation. */
+export function shiftOwnLines(
+  state: EditorState,
+  item: SyntaxNode,
+  newContentCol: number
+): ChangeSpec[] {
+  const mark = listMarkOf(item);
+  if (mark === null) {
+    return [];
+  }
+  const markerLine = state.doc.lineAt(mark.from);
+  const boundary = contentColumnFromMarkerLine(
+    markerLine.text,
+    mark.to - markerLine.from,
+    state.tabSize
+  );
+  const delta = newContentCol - boundary;
+  if (delta === 0) {
+    return [];
+  }
+  const changes: ChangeSpec[] = [];
+  for (const lineNo of classifyItemLines(state, item, boundary).ownLines) {
+    const change = shiftLine(state, item, lineNo, boundary, delta);
+    if (change !== null) {
+      changes.push(change);
+    }
+  }
+  return changes;
 }
 
 /** True when the item has no continuable content: a bare `- ` / `1. `, a
@@ -253,14 +396,9 @@ export function continuationMarkerFor(state: EditorState, item: SyntaxNode): str
  *  sibling item, not between siblings), blockquote-prefixed lists (positions
  *  are absolute), and tab-mixed indent.
  *
- *  Width-aware (the latent bug this consolidation fixes): when a rewrite
- *  changes the marker's BYTE WIDTH (e.g. `9.` → `10.`, 1 digit → 2), the
- *  sibling's content column shifts, so its own body/descendant lines
- *  (`classifyItemLines(state, sib).ownLines`) must shift with it — otherwise a
- *  nested child that was exactly at the OLD content column falls out of the
- *  widened item (a genuinely nested child reads as a lazy/sibling line
- *  instead). Emits a leading-space insert (width grew) or removal (width
- *  shrank) for each own line, sized to the byte-width delta.
+ *  Recompute each rewritten sibling's content column because a tab after the
+ *  marker can absorb a width change. Shift its own lines to that column to
+ *  keep nested content under the rewritten marker.
  *
  *  Fail-closed: a null `ensureSyntaxTree` (parse did not reach EOF within
  *  budget — the list tail may be unparsed) or any resulting marker out of the
@@ -309,24 +447,18 @@ export function renumberRun(
       return []; // out of the 0..9-digit ListMark range (over cap OR driven
       // negative by the delta) — fail closed rather than emit a corrupt marker
     }
-    const oldWidth = sibMark.to - sibMark.from;
     const newMarker = formatMarker(next);
     changes.push({ from: sibMark.from, to: sibMark.to, insert: newMarker });
-    const deltaWidth = newMarker.length - oldWidth;
-    if (deltaWidth !== 0) {
-      const { ownLines } = classifyItemLines(state, sib);
-      for (const lineNo of ownLines) {
-        const line = state.doc.line(lineNo);
-        if (deltaWidth > 0) {
-          changes.push({ from: line.from, insert: " ".repeat(deltaWidth) });
-        } else {
-          const remove = leadingCharsForColumns(line.text, -deltaWidth, state.tabSize);
-          if (remove > 0) {
-            changes.push({ from: line.from, to: line.from + remove });
-          }
-        }
-      }
-    }
+    const { from, text } = state.doc.lineAt(sibMark.from);
+    const markFromRel = sibMark.from - from;
+    const markToRel = sibMark.to - from;
+    const newText = text.slice(0, markFromRel) + newMarker + text.slice(markToRel);
+    const newContentCol = contentColumnFromMarkerLine(
+      newText,
+      markFromRel + newMarker.length,
+      state.tabSize
+    );
+    changes.push(...shiftOwnLines(state, sib, newContentCol));
   }
   return changes;
 }

@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
 import { history, undo } from "@codemirror/commands";
+import { ensureSyntaxTree } from "@codemirror/language";
 import { EditorSelection, EditorState, type SelectionRange } from "@codemirror/state";
 import { type EditorView, runScopeHandlers } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
@@ -218,6 +219,332 @@ describe("continueListOnEnter — ordered renumber", () => {
       expect(view.state.doc.toString()).toBe("1. a\n2. \n3. b");
       expect(undo(view)).toBe(true);
       expect(view.state.doc.toString()).toBe("1. a\n2. b");
+    } finally {
+      view.destroy();
+    }
+  });
+});
+
+/** The marker text of the ListItem that structurally OWNS the ListItem whose
+ *  content contains `needle` — i.e. the parent item a nested child hangs under,
+ *  or null when the child's list sits directly under Document. */
+function parentMarkerOf(view: EditorView, needle: string): string | null {
+  const { state } = view;
+  const tree = ensureSyntaxTree(state, state.doc.length, 5000);
+  if (tree === null) {
+    throw new Error("parse did not reach EOF");
+  }
+  const node = tree.resolveInner(state.doc.toString().indexOf(needle), 1);
+  let seenOwn = false;
+  for (let n: typeof node | null = node; n !== null; n = n.parent) {
+    if (n.name !== "ListItem") {
+      continue;
+    }
+    if (!seenOwn) {
+      seenOwn = true;
+      continue;
+    }
+    const mark = n.getChild("ListMark");
+    return mark === null ? null : state.doc.sliceString(mark.from, mark.to);
+  }
+  return null;
+}
+
+describe("continueListOnEnter — split keeps the item's children nested", () => {
+  const cases: { name: string; doc: string; caretAfter: string; out: string; parent: string }[] = [
+    {
+      name: "9 → 10 (marker widens by one column)",
+      doc: "9. abcd\n   - child",
+      caretAfter: "9. ab",
+      out: "9. ab\n10. cd\n    - child",
+      parent: "10.",
+    },
+    {
+      name: "99 → 100",
+      doc: "99. abcd\n    - child",
+      caretAfter: "99. ab",
+      out: "99. ab\n100. cd\n     - child",
+      parent: "100.",
+    },
+    {
+      // A leading tab alone would open indented code, so nest under a bullet
+      // (blank-separated: `9.` cannot interrupt a paragraph). The shift must land
+      // after the tab — a space prepended before it is absorbed by the tab stop.
+      name: "tab-indented item and child",
+      doc: "- p\n\n\t9. abcd\n\t   - child",
+      caretAfter: "9. ab",
+      out: "- p\n\n\t9. ab\n\t10. cd\n\t    - child",
+      parent: "10.",
+    },
+    {
+      name: "tab after the marker (content column unchanged)",
+      doc: "9.\tabcd\n\t- child",
+      caretAfter: "9.\tab",
+      out: "9.\tab\n10. cd\n\t- child",
+      parent: "10.",
+    },
+    {
+      name: "tab after a bullet marker",
+      doc: "-\tabcd\n\t- child",
+      caretAfter: "-\tab",
+      out: "-\tab\n- cd\n  - child",
+      parent: "-",
+    },
+    {
+      name: "tab after a single-digit ordered marker",
+      doc: "1.\tabcd\n\t- child",
+      caretAfter: "1.\tab",
+      out: "1.\tab\n2. cd\n   - child",
+      parent: "2.",
+    },
+    {
+      name: "extra spaces after the marker (new item uses one space)",
+      doc: "9.   abcd\n     - child",
+      caretAfter: "9.   ab",
+      out: "9.   ab\n10. cd\n    - child",
+      parent: "10.",
+    },
+    {
+      name: "tab and space before a child under an aligned ordered marker",
+      doc: "9.   abcd\n\t - child",
+      caretAfter: "9.   ab",
+      out: "9.   ab\n10. cd\n\t- child",
+      parent: "10.",
+    },
+    {
+      name: "bullet with extra spaces after the marker",
+      doc: "-   abcd\n    - child",
+      caretAfter: "-   ab",
+      out: "-   ab\n- cd\n  - child",
+      parent: "-",
+    },
+    {
+      name: "space in the split tail adds marker padding",
+      doc: "-   ab cd\n    - child",
+      caretAfter: "-   ab",
+      out: "-   ab\n-  cd\n   - child",
+      parent: "-",
+    },
+    {
+      name: "paragraph continuation line follows the split tail",
+      doc: "9. abcd\n   more\n   - child",
+      caretAfter: "9. ab",
+      out: "9. ab\n10. cd\n    more\n    - child",
+      parent: "10.",
+    },
+  ];
+
+  for (const c of cases) {
+    it(`${c.name}: child stays under the new item, one undo restores`, () => {
+      const view = mount(c.doc, at(c.doc.indexOf(c.caretAfter) + c.caretAfter.length), {
+        withHistory: true,
+      });
+      try {
+        expect(parentMarkerOf(view, "child")).not.toBeNull();
+        expect(continueListOnEnter(view)).toBe(true);
+        expect(view.state.doc.toString()).toBe(c.out);
+        expect(parentMarkerOf(view, "child")).toBe(c.parent);
+        expect(undo(view)).toBe(true);
+        expect(view.state.doc.toString()).toBe(c.doc);
+      } finally {
+        view.destroy();
+      }
+    });
+  }
+
+  it("does not shift a lazy-continuation line (not structurally the item's)", () => {
+    const view = mount("9. abcd\nlazy", at(5));
+    try {
+      expect(continueListOnEnter(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("9. ab\n10. cd\nlazy");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("shifts the widened sibling's children alongside the split's (both corrections compose)", () => {
+    const doc = "8. abcd\n   - x\n9. e\n   - y";
+    const view = mount(doc, at(5));
+    try {
+      expect(continueListOnEnter(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("8. ab\n9. cd\n   - x\n10. e\n    - y");
+      expect(parentMarkerOf(view, "x")).toBe("9.");
+      expect(parentMarkerOf(view, "y")).toBe("10.");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("keeps the child nested when a tab absorbs the sibling's marker widening", () => {
+    const doc = "1. abcd\n9.\txyz\n\n\t   - child";
+    const view = mount(doc, at("1. ab".length), { withHistory: true });
+    try {
+      expect(parentMarkerOf(view, "child")).toBe("9.");
+      expect(continueListOnEnter(view)).toBe(true);
+      expect(parentMarkerOf(view, "child")).toBe("10.");
+      expect(view.state.doc.toString()).toBe("1. ab\n2. cd\n10.\txyz\n\n\t   - child");
+      expect(undo(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(doc);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("keeps both lines in the indented code block when renumbering a same-width marker", () => {
+    const doc = "1. abcd\n2.     first\n       second";
+    const view = mount(doc, at("1. ab".length), { withHistory: true });
+    try {
+      expect(continueListOnEnter(view)).toBe(true);
+      const { state } = view;
+      const output = state.doc.toString();
+      expect(output).toBe("1. ab\n2. cd\n3.     first\n       second");
+      const tree = ensureSyntaxTree(state, state.doc.length, 5000);
+      let block = tree?.resolveInner(output.indexOf("second"), 1);
+      while (block && block.name !== "CodeBlock") {
+        block = block.parent ?? undefined;
+      }
+      expect(block && state.doc.sliceString(block.from, block.to)).toBe("first\n       second");
+      expect(undo(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(doc);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("keeps a child nested when a tab just past the boundary would widen", () => {
+    const doc = "9. abcd\n\n   \t- child";
+    const view = mount(doc, at("9. ab".length), { withHistory: true });
+    try {
+      expect(parentMarkerOf(view, "child")).toBe("9.");
+      expect(continueListOnEnter(view)).toBe(true);
+      expect(parentMarkerOf(view, "child")).toBe("10.");
+      expect(view.state.doc.toString()).toBe("9. ab\n10. cd\n\n     - child");
+      expect(undo(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(doc);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("preserves the tab inside fenced code when the split marker widens", () => {
+    const doc = "9. abcd\n   ```\n   \treturn\n   ```";
+    const view = mount(doc, at("9. ab".length), { withHistory: true });
+    try {
+      expect(continueListOnEnter(view)).toBe(true);
+      expect(view.state.doc.line(4).text).toBe("    \treturn");
+      expect(undo(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(doc);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("preserves the payload tab in a Python fence", () => {
+    const doc = "9. abcd\n   ```python\n   \treturn\n   ```";
+    const view = mount(doc, at("9. ab".length), { withHistory: true });
+    try {
+      expect(continueListOnEnter(view)).toBe(true);
+      expect(view.state.doc.line(4).text).toBe("    \treturn");
+      expect(undo(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(doc);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("keeps the grandchild under a nested marker followed by a tab", () => {
+    const doc = "9. abcd\n      -\tx\n        - y";
+    const view = mount(doc, at("9. ab".length), { withHistory: true });
+    try {
+      expect(parentMarkerOf(view, "y")).toBe("-");
+      expect(continueListOnEnter(view)).toBe(true);
+      expect(parentMarkerOf(view, "y")).toBe("-");
+      expect(view.state.doc.toString()).toBe("9. ab\n10. cd\n       - x\n         - y");
+      expect(undo(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(doc);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("preserves the payload tab on an HTML block continuation", () => {
+    const doc = "9. abcd\n\n   <pre>\n   \tvalue\n   </pre>";
+    const view = mount(doc, at("9. ab".length), { withHistory: true });
+    try {
+      expect(continueListOnEnter(view)).toBe(true);
+      expect(view.state.doc.line(5).text).toBe("    \tvalue");
+      expect(undo(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(doc);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("keeps HTML continuation lines inside the nested bullet", () => {
+    const doc = "9. abcd\n      - <pre>\n    \tvalue\n        </pre>";
+    const view = mount(doc, at("9. ab".length), { withHistory: true });
+    try {
+      expect(continueListOnEnter(view)).toBe(true);
+      const { state } = view;
+      const tree = ensureSyntaxTree(state, state.doc.length, 5000);
+      const html = tree?.resolve(state.doc.toString().indexOf("value"), 1);
+      expect(html?.name).toBe("HTMLBlock");
+      expect(html?.parent?.name).toBe("ListItem");
+      expect(html?.parent?.parent?.name).toBe("BulletList");
+      expect(html?.to).toBe(state.doc.length);
+      expect(state.doc.line(4).text).toBe("         value");
+      expect(undo(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(doc);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("keeps fenced code inside the nested bullet after a structural indent tab", () => {
+    const doc = "9. abcd\n      - ```\n    \tvalue\n        ```";
+    const view = mount(doc, at("9. ab".length), { withHistory: true });
+    function codeText() {
+      const { state } = view;
+      const tree = ensureSyntaxTree(state, state.doc.length, 5000);
+      expect(tree?.toString()).not.toContain("CodeBlock");
+      const code = tree?.resolve(state.doc.toString().indexOf("value"), 1);
+      expect(code?.name).toBe("CodeText");
+      const fence = code?.parent;
+      expect(fence?.name).toBe("FencedCode");
+      expect(fence?.parent?.name).toBe("ListItem");
+      expect(fence?.parent?.parent?.name).toBe("BulletList");
+      expect(fence?.to).toBe(state.doc.length);
+      return code && state.doc.sliceString(code.from, code.to);
+    }
+    try {
+      const before = codeText();
+      expect(before).toBe("value");
+      expect(continueListOnEnter(view)).toBe(true);
+      expect(codeText()).toBe(before);
+      expect(undo(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(doc);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("preserves CodeText after a quote padding tab", () => {
+    const doc = "9. abcd\n   > ```python\n   >\t\treturn\n   > ```";
+    const view = mount(doc, at("9. ab".length), { withHistory: true });
+    function codeText() {
+      const { state } = view;
+      const tree = ensureSyntaxTree(state, state.doc.length, 5000);
+      const code = tree?.resolve(state.doc.toString().indexOf("return"), 1);
+      expect(code?.name).toBe("CodeText");
+      return code && state.doc.sliceString(code.from, code.to);
+    }
+    try {
+      const before = codeText();
+      expect(before).toBe("\treturn");
+      expect(continueListOnEnter(view)).toBe(true);
+      expect(codeText()).toBe(before);
+      expect(undo(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(doc);
     } finally {
       view.destroy();
     }
