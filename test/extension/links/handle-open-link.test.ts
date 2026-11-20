@@ -1,12 +1,15 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Uri } from "vscode"; // vitest-aliased to test/extension/vscode-stub.ts (joinPath only)
 import {
   type HandleOpenLinkDeps,
   handleOpenLink,
 } from "../../../src/extension/links/handle-open-link.js";
-import { resolveRealContainment } from "../../../src/extension/links/real-containment.js";
+import {
+  type RealContainment,
+  resolveRealContainment,
+} from "../../../src/extension/links/real-containment.js";
 import { isWithinDir } from "../../../src/extension/links/within-dir.js";
 import {
   OPEN_LINK_CONTAINMENT_ONLY_REJECTIONS,
@@ -15,7 +18,7 @@ import {
 } from "../../fixtures/open-link-destinations.js";
 import { makeUnitTempDir } from "../temp-root.js";
 
-const makeUri = (path: string) => ({ path, fsPath: path, scheme: "file" }) as import("vscode").Uri;
+const makeUri = (path: string, scheme = "file") => ({ path, fsPath: path, scheme }) as Uri;
 
 // documentUri = /ws/notes/doc.md ; workspace root = /ws — taken from the shared
 // fixture, since every `hostRoutes` verdict in the matrix is stated against
@@ -190,7 +193,7 @@ describe("handleOpenLink", () => {
 
   it("shows the failure toast when openWith rejects asynchronously", async () => {
     const { deps, errors } = makeDeps({ openWith: () => Promise.reject(new Error("boom")) });
-    await handleOpenLink("./other.md", deps);
+    await expect(handleOpenLink("./other.md", deps)).resolves.toBeUndefined();
     expect(errors).toEqual([expect.stringContaining("couldn't open the linked file")]);
   });
 
@@ -202,6 +205,62 @@ describe("handleOpenLink", () => {
     });
     await handleOpenLink("./other.md", deps);
     expect(errors).toEqual([expect.stringContaining("couldn't open the linked file")]);
+  });
+});
+
+describe("handleOpenLink — async containment", () => {
+  it.each([
+    "resolves",
+    "rejects",
+  ])("stays quiet when containment %s after disposal", async (outcome) => {
+    let disposed = false;
+    let settle!: () => void;
+    const pending = new Promise<RealContainment>((resolve, reject) => {
+      settle = () => {
+        if (outcome === "resolves") {
+          resolve("inside");
+        } else {
+          reject(new Error("containment failed"));
+        }
+      };
+    });
+    const realContainment = vi.fn(() => pending);
+    const { deps, opened, errors } = makeDeps({ realContainment, isDisposed: () => disposed });
+
+    const handling = handleOpenLink("./other.md", deps);
+    expect(realContainment).toHaveBeenCalled();
+    disposed = true;
+    settle();
+
+    await expect(handling).resolves.toBeUndefined();
+    expect(opened).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+
+  it("shows the failure toast when containment throws on a live panel", async () => {
+    const { deps, opened, errors } = makeDeps({
+      realContainment: () => {
+        throw new Error("containment failed");
+      },
+    });
+
+    await expect(handleOpenLink("./other.md", deps)).resolves.toBeUndefined();
+    expect(opened).toEqual([]);
+    expect(errors).toEqual([expect.stringContaining("couldn't open the linked file")]);
+  });
+
+  it("opens an in-scope non-file link without calling realContainment", async () => {
+    const realContainment = vi.fn<HandleOpenLinkDeps["realContainment"]>();
+    const { deps, opened, errors } = makeDeps({
+      documentUri: makeUri(OPEN_LINK_DOC_LAYOUT.documentPath, "memfs"),
+      workspaceFolderOf: () => undefined,
+      realContainment,
+    });
+
+    await handleOpenLink("./other.md", deps);
+    expect(opened).toEqual(["/ws/notes/other.md"]);
+    expect(errors).toEqual([]);
+    expect(realContainment).not.toHaveBeenCalled();
   });
 });
 
