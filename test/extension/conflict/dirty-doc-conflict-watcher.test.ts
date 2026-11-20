@@ -216,6 +216,25 @@ describe("createDirtyDocConflictWatcher", () => {
       expect(w.spies.promptReload).toHaveBeenCalledTimes(1);
     });
 
+    it("does not recheck early while a newer signal is still debouncing", async () => {
+      const r = heldRead();
+      const w = makeWatcher({ readDiskText: r.readDiskText });
+      w.emit();
+      await fireDebounce(); // first read in flight
+      w.emit();
+      await fireDebounce(); // debounce expired mid-read: a recheck is requested
+      w.emit(); // a fresh write burst starts: its debounce timer is pending
+
+      r.release("buffer-content");
+      await vi.advanceTimersByTimeAsync(DEBOUNCE - 1);
+      expect(r.readDiskText).toHaveBeenCalledTimes(1); // must not read mid-burst
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(r.readDiskText).toHaveBeenCalledTimes(2); // the timer's own check
+      await vi.runAllTimersAsync();
+      expect(r.readDiskText).toHaveBeenCalledTimes(2);
+    });
+
     it("keeps the request when the in-flight read fails", async () => {
       const r = heldRead();
       const w = makeWatcher({ readDiskText: r.readDiskText });

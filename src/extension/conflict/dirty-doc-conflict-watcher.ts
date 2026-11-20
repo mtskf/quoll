@@ -178,7 +178,8 @@ export function createDirtyDocConflictWatcher(
       );
     } finally {
       conflictActionInFlight = false;
-      const recheck = recheckRequested && !prompted && !watcherDisposed;
+      // A pending debounce timer will run the check itself once the burst settles.
+      const recheck = recheckRequested && !prompted && !watcherDisposed && conflictTimer === null;
       recheckRequested = false;
       if (recheck) {
         void checkConflict();
