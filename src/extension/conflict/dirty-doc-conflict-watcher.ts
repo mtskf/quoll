@@ -75,6 +75,10 @@ export function createDirtyDocConflictWatcher(
   // watcher event mid-prompt or mid-reload cannot start a second prompt
   // (Codex C84).
   let conflictActionInFlight = false;
+  // A check that arrived while an action was in flight, folded into one. The
+  // action runs it next, serially, unless it prompted (the user has just been
+  // told disk diverged) or the watcher is gone.
+  let recheckRequested = false;
   // What this document last wrote to disk, or null when unknown. A save's own fs
   // signal can be checked after the user has typed on, so the dirty buffer then
   // differs from a disk that holds nothing but our save: matching it is how the
@@ -93,7 +97,11 @@ export function createDirtyDocConflictWatcher(
   };
 
   const checkConflict = async (): Promise<void> => {
-    if (deps.isDisposed() || conflictActionInFlight) {
+    if (deps.isDisposed()) {
+      return;
+    }
+    if (conflictActionInFlight) {
+      recheckRequested = true;
       return;
     }
     // Clean docs auto-revert via the platform, so a clean doc has nothing to
@@ -108,6 +116,7 @@ export function createDirtyDocConflictWatcher(
     // reload); `finally` always releases it (return / throw both run it).
     conflictActionInFlight = true;
     const savedBeforeRead = savedText;
+    let prompted = false;
     try {
       let diskText: string | null;
       try {
@@ -129,9 +138,9 @@ export function createDirtyDocConflictWatcher(
         return;
       }
       // A save that landed during readFile makes these bytes stale. Drop the
-      // result and reschedule the check so a newer write can still be seen.
+      // result and check again so a newer write can still be seen.
       if (savedText !== savedBeforeRead) {
-        onSignal(deps.documentUriString);
+        recheckRequested = true;
         return;
       }
       if (savedText !== null) {
@@ -143,6 +152,7 @@ export function createDirtyDocConflictWatcher(
       if (!shouldPromptDiskConflict(deps.isDirty(), diskText, deps.readBufferText())) {
         return;
       }
+      prompted = true;
       const choice = await deps.promptReload();
       if (deps.isDisposed() || choice !== deps.reloadChoice) {
         // "Keep my edits" / dismissed → no-op: unsaved edits stay, and the
@@ -168,6 +178,12 @@ export function createDirtyDocConflictWatcher(
       );
     } finally {
       conflictActionInFlight = false;
+      // A pending debounce timer will run the check itself once the burst settles.
+      const recheck = recheckRequested && !prompted && !watcherDisposed && conflictTimer === null;
+      recheckRequested = false;
+      if (recheck) {
+        void checkConflict();
+      }
     }
   };
 

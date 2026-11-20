@@ -166,6 +166,124 @@ describe("createDirtyDocConflictWatcher", () => {
     await vi.runAllTimersAsync();
   });
 
+  describe("checks requested during an in-flight action", () => {
+    // A read that stays pending until the test releases it (or fails it).
+    function heldRead() {
+      let release: (v: string) => void = () => undefined;
+      let fail: (e: Error) => void = () => undefined;
+      let reads = 0;
+      let concurrent = 0;
+      let maxConcurrent = 0;
+      const readDiskText = vi.fn(async (): Promise<string | null> => {
+        reads++;
+        concurrent++;
+        maxConcurrent = Math.max(maxConcurrent, concurrent);
+        try {
+          if (reads === 1) {
+            return await new Promise<string>((resolve, reject) => {
+              release = resolve;
+              fail = reject;
+            });
+          }
+          return "disk-content";
+        } finally {
+          concurrent--;
+        }
+      });
+      return {
+        readDiskText,
+        release: (v: string) => release(v),
+        fail: (e: Error) => fail(e),
+        maxConcurrent: () => maxConcurrent,
+      };
+    }
+
+    it("rechecks after the read when a write landed during it, never reading concurrently", async () => {
+      const r = heldRead();
+      const w = makeWatcher({ readDiskText: r.readDiskText });
+      w.emit();
+      await fireDebounce(); // first read in flight
+      w.emit(); // an external write lands while it is pending
+      await fireDebounce();
+      w.emit();
+      await fireDebounce();
+      expect(r.readDiskText).toHaveBeenCalledTimes(1);
+
+      r.release("buffer-content"); // the stale snapshot: no divergence yet
+      await vi.runAllTimersAsync();
+      expect(r.readDiskText).toHaveBeenCalledTimes(2); // the requests coalesced
+      expect(r.maxConcurrent()).toBe(1);
+      expect(w.spies.promptReload).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not recheck early while a newer signal is still debouncing", async () => {
+      const r = heldRead();
+      const w = makeWatcher({ readDiskText: r.readDiskText });
+      w.emit();
+      await fireDebounce(); // first read in flight
+      w.emit();
+      await fireDebounce(); // debounce expired mid-read: a recheck is requested
+      w.emit(); // a fresh write burst starts: its debounce timer is pending
+
+      r.release("buffer-content");
+      await vi.advanceTimersByTimeAsync(DEBOUNCE - 1);
+      expect(r.readDiskText).toHaveBeenCalledTimes(1); // must not read mid-burst
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(r.readDiskText).toHaveBeenCalledTimes(2); // the timer's own check
+      await vi.runAllTimersAsync();
+      expect(r.readDiskText).toHaveBeenCalledTimes(2);
+    });
+
+    it("keeps the request when the in-flight read fails", async () => {
+      const r = heldRead();
+      const w = makeWatcher({ readDiskText: r.readDiskText });
+      w.emit();
+      await fireDebounce();
+      w.emit();
+      await fireDebounce();
+
+      r.fail(new Error("EBUSY"));
+      await vi.runAllTimersAsync();
+      expect(r.readDiskText).toHaveBeenCalledTimes(2);
+      expect(w.spies.promptReload).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not recheck after an action that prompted", async () => {
+      let answer: (v: string | undefined) => void = () => undefined;
+      const promptReload = vi.fn(
+        () =>
+          new Promise<string | undefined>((resolve) => {
+            answer = resolve;
+          })
+      );
+      const w = makeWatcher({ promptReload });
+      w.emit();
+      await fireDebounce(); // prompt open
+      w.emit();
+      await fireDebounce();
+
+      answer(undefined); // keep my edits
+      await vi.runAllTimersAsync();
+      expect(w.spies.readDiskText).toHaveBeenCalledTimes(1);
+      expect(promptReload).toHaveBeenCalledTimes(1);
+    });
+
+    it("drops the request when the watcher is disposed during the read", async () => {
+      const r = heldRead();
+      const w = makeWatcher({ readDiskText: r.readDiskText });
+      w.emit();
+      await fireDebounce();
+      w.emit();
+      await fireDebounce();
+
+      w.watcher.dispose();
+      r.release("buffer-content");
+      await vi.runAllTimersAsync();
+      expect(r.readDiskText).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("reloads on the reload choice, no error toast on a clean revert", async () => {
     const w = makeWatcher();
     w.setDirty(true);
