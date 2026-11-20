@@ -33,9 +33,10 @@ import { markdownLinkSource } from "../../../markdown/link-source.js";
 import type { FormatAction } from "../../../shared/protocol.js";
 
 // open === close for every inline mark; a single `marker` string is enough.
-// Keyed by the protocol's action set minus `link`, so an action added there
-// fails `pnpm compile` here until it has a marker (or an explicit non-marker
-// branch in computeInlineFormat) — the webview cannot silently ignore one.
+// Keyed by the protocol's action set minus `link` and `code` (each has its own
+// branch in computeInlineFormat), so an action added there fails `pnpm compile`
+// here until it has a marker (or an explicit non-marker branch) — the webview
+// cannot silently ignore one.
 const MARKERS: Record<Exclude<FormatAction, "link" | "code">, string> = {
   bold: "**",
   italic: "*",

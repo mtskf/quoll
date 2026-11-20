@@ -4,7 +4,8 @@
 // opener, and strips one space from each end when the body both starts and
 // ends with a space (or line ending) without being all of them. So the fence
 // is one backtick longer than any run inside, and a space pads each side when
-// the text borders a backtick or would lose its edge spaces to that strip.
+// the text contains a backtick (so one at its edge cannot join the fence) or
+// would lose its edge spaces to that strip.
 
 const BACKTICK_RUN = /`+/g;
 
