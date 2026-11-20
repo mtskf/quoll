@@ -60,7 +60,7 @@ export interface DirtyDocConflictWatcherDeps {
 }
 
 export interface DirtyDocConflictWatcher {
-  /** Cancel any pending debounce and tear down the signal subscription. */
+  /** Cancel any pending debounce and tear down both subscriptions. */
   dispose(): void;
 }
 
@@ -124,8 +124,8 @@ export function createDirtyDocConflictWatcher(
       if (diskText === null) {
         return;
       }
-      // A save that landed during readFile makes these bytes stale; its own fs
-      // signal triggers a fresh check.
+      // A save that landed during readFile makes these bytes stale: judging them
+      // against the newer save would forget it as foreign. Drop this check.
       if (savedText !== savedBeforeRead) {
         return;
       }
@@ -135,7 +135,6 @@ export function createDirtyDocConflictWatcher(
         }
         savedText = null;
       }
-      // Re-read isDirty / buffer FRESH after the await.
       if (!shouldPromptDiskConflict(deps.isDirty(), diskText, deps.readBufferText())) {
         return;
       }

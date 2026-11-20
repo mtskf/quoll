@@ -116,7 +116,7 @@ describe("createDirtyDocConflictWatcher", () => {
     expect(w.spies.readDiskText).not.toHaveBeenCalled();
   });
 
-  it("early-exits without a disk read when the model is clean", async () => {
+  it("skips the disk read when the model is clean and no save is tracked", async () => {
     const w = makeWatcher();
     w.setDirty(false);
     w.emit();
@@ -279,7 +279,7 @@ describe("createDirtyDocConflictWatcher", () => {
       w.emit();
       buffer = "saved\nappended\n";
       w.setDirty(true);
-      return { ...w, readDiskText, setBuffer: (v: string) => (buffer = v) };
+      return { ...w, readDiskText };
     }
 
     it("does not prompt when a self-save is followed by an append before the check", async () => {
