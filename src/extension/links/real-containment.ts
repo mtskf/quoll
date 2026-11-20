@@ -1,11 +1,15 @@
 import { lstat, realpath } from "node:fs/promises";
-import { dirname, isAbsolute, relative, sep } from "node:path";
+import { dirname, resolve, sep } from "node:path";
 
 /** True when `realTarget` is `realRoot` itself or a descendant of it.
- *  Both paths have already been resolved by the caller. */
+ *  Both paths have already been resolved by the caller. A separator-terminated
+ *  prefix compare is used because win32 `path.relative` ignores case, which
+ *  would treat a per-directory case-sensitive sibling (NTFS) as inside. */
 export function isRealPathWithinRoot(realTarget: string, realRoot: string): boolean {
-  const rel = relative(realRoot, realTarget);
-  return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+  const root = resolve(realRoot);
+  const target = resolve(realTarget);
+  const prefix = root.endsWith(sep) ? root : root + sep;
+  return target === root || target.startsWith(prefix);
 }
 
 export type RealContainment = "inside" | "outside" | "missing";
