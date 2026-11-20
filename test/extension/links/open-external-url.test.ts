@@ -42,6 +42,8 @@ describe("openExternalUrl", () => {
   it.each([
     "HTTP://example.com/a%2Fb",
     "https://localhost:9/a%2Fb?q=x+y#z",
+    "https://localhost:9?q=a%26b",
+    "https://localhost:9#section%20one",
   ])("opens local %s with the original string", async (href) => {
     expect(await openExternalUrl(href)).toBe(true);
     expect(commands.executeCommand).toHaveBeenCalledExactlyOnceWith("vscode.open", href);
