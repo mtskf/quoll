@@ -2,11 +2,10 @@ name: Open VSX Token Liveness
 
 # Weekly liveness ping for the one long-lived publish credential, OPENVSX_PAT.
 #
-# WHY: `ovsx publish` is the LAST step of publish.yml, after the reachability
-# gate, the audits, the build, the SBOM and both attestations. An expired token
-# therefore burns a whole release run and blocks the release at the worst
-# possible moment — `VSCODE_PAT` expiry killed the v0.1.66 publish that way, and
-# `OPENVSX_PAT` sat invalid for ~5 releases without anyone noticing. This job
+# WHY: Open VSX publishes after the build, both attestations and Marketplace.
+# An expired or empty OPENVSX_PAT fails that final job, which can be retried
+# with the audited .vsix after the secret is fixed. OPENVSX_PAT previously sat
+# invalid for ~5 releases without anyone noticing. This job
 # moves that discovery off the release path — it asks Open VSX whether the
 # stored secret is still valid, on a schedule, and goes red when the answer is
 # no. `ovsx verify-pat` is a genuine publish-capability check, not just a
@@ -155,7 +154,7 @@ jobs:
           NAMESPACE: ${{ steps.publisher.outputs.id }}
         run: |
           if [ -z "${OVSX_PAT:-}" ]; then
-            echo "::error::OPENVSX_PAT is unset or empty — publish.yml SKIPS its Open VSX step in this state, so releases would silently stop reaching Open VSX."
+            echo "::error::OPENVSX_PAT is unset or empty. The Open VSX publish job fails until the secret is set."
             exit 1
           fi
           pnpm exec ovsx verify-pat "$NAMESPACE"
