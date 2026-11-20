@@ -17,19 +17,31 @@ const CODE_BLOCK = /^(?:FencedCode|CodeBlock)$/;
 // cosmetic whitespace, never a correctness issue.
 export const noMultipleBlanks: LintRule = (ctx: LintContext): LintDiagnostic[] => {
   // [from, to) spans of code blocks; a blank line whose start falls inside one is
-  // exempt. Built from the same Lezer tree the editor renders. Spans per document
-  // are few and the rule runs debounced off the keystroke path, so the per-blank
-  // `.some()` lookup below is acceptable (no sorted-pointer sweep needed).
+  // exempt. Built from the same Lezer tree the editor renders. The pre-order walk
+  // yields spans sorted by `from`, and not descending into a code block keeps them
+  // disjoint, so lines (also visited in document order) advance a single cursor:
+  // O(lines + spans) instead of a per-blank scan over every span, which went
+  // quadratic on a document with thousands of fences and blank runs.
   const codeSpans: { from: number; to: number }[] = [];
   ctx.tree.iterate({
     enter: (node) => {
       if (CODE_BLOCK.test(node.name)) {
         codeSpans.push({ from: node.from, to: node.to });
+        return false;
       }
+      return undefined;
     },
   });
-  const inCodeBlock = (offset: number): boolean =>
-    codeSpans.some((s) => offset >= s.from && offset < s.to);
+  let span = 0;
+  // Only ever called with non-decreasing offsets.
+  const inCodeBlock = (offset: number): boolean => {
+    let s = codeSpans[span];
+    while (s !== undefined && s.to <= offset) {
+      span += 1;
+      s = codeSpans[span];
+    }
+    return s !== undefined && offset >= s.from;
+  };
 
   const lines = scanLines(ctx.text);
   // scanLines always appends a final terminator-less entry. When the document
