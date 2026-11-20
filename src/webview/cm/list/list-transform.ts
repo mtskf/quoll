@@ -178,6 +178,44 @@ export function leadingCharsForColumns(text: string, cols: number, tabSize: numb
   return i;
 }
 
+/** The whitespace `ChangeSpec` that moves line `lineNumber`'s first
+ *  non-whitespace char by `delta` columns, or null for a zero delta / a blank
+ *  line (no trailing-space noise). Spaces are inserted AFTER the existing
+ *  leading whitespace, not at `line.from`: a space prepended before a tab is
+ *  absorbed by the tab's next stop and moves nothing. A negative delta removes
+ *  leading whitespace per `leadingCharsForColumns`. */
+function shiftLine(state: EditorState, lineNumber: number, delta: number): ChangeSpec | null {
+  const line = state.doc.line(lineNumber);
+  if (delta === 0 || line.text.trim() === "") {
+    return null;
+  }
+  if (delta > 0) {
+    const wsLen = line.text.length - line.text.trimStart().length;
+    return { from: line.from + wsLen, insert: " ".repeat(delta) };
+  }
+  const remove = leadingCharsForColumns(line.text, -delta, state.tabSize);
+  return remove > 0 ? { from: line.from, to: line.from + remove } : null;
+}
+
+/** Shift every one of `item`'s own body/descendant lines
+ *  (`classifyItemLines(...).ownLines` — lazy lines excluded) by `delta`
+ *  columns: the correction that keeps nested content inside an item whose
+ *  content column moved (a renumber widening `9.` → `10.`, or Enter moving the
+ *  item's tail under a new marker). The marker line is the caller's. */
+export function shiftOwnLines(state: EditorState, item: SyntaxNode, delta: number): ChangeSpec[] {
+  if (delta === 0) {
+    return [];
+  }
+  const changes: ChangeSpec[] = [];
+  for (const lineNo of classifyItemLines(state, item).ownLines) {
+    const change = shiftLine(state, lineNo, delta);
+    if (change !== null) {
+      changes.push(change);
+    }
+  }
+  return changes;
+}
+
 /** True when the item has no continuable content: a bare `- ` / `1. `, a
  *  content-less bare task marker (`- [ ]`, which the grammar leaves as a 3-byte
  *  Paragraph), or a `Task` node with only whitespace after its 3-byte
@@ -259,8 +297,8 @@ export function continuationMarkerFor(state: EditorState, item: SyntaxNode): str
  *  (`classifyItemLines(state, sib).ownLines`) must shift with it — otherwise a
  *  nested child that was exactly at the OLD content column falls out of the
  *  widened item (a genuinely nested child reads as a lazy/sibling line
- *  instead). Emits a leading-space insert (width grew) or removal (width
- *  shrank) for each own line, sized to the byte-width delta.
+ *  instead). Shifts each own line by the byte-width delta via `shiftOwnLines`
+ *  (the same correction Enter applies to a split item's tail).
  *
  *  Fail-closed: a null `ensureSyntaxTree` (parse did not reach EOF within
  *  budget — the list tail may be unparsed) or any resulting marker out of the
@@ -313,20 +351,7 @@ export function renumberRun(
     const newMarker = formatMarker(next);
     changes.push({ from: sibMark.from, to: sibMark.to, insert: newMarker });
     const deltaWidth = newMarker.length - oldWidth;
-    if (deltaWidth !== 0) {
-      const { ownLines } = classifyItemLines(state, sib);
-      for (const lineNo of ownLines) {
-        const line = state.doc.line(lineNo);
-        if (deltaWidth > 0) {
-          changes.push({ from: line.from, insert: " ".repeat(deltaWidth) });
-        } else {
-          const remove = leadingCharsForColumns(line.text, -deltaWidth, state.tabSize);
-          if (remove > 0) {
-            changes.push({ from: line.from, to: line.from + remove });
-          }
-        }
-      }
-    }
+    changes.push(...shiftOwnLines(state, sib, deltaWidth));
   }
   return changes;
 }
@@ -402,20 +427,9 @@ function addLineDelta(map: Map<number, number>, lineFrom: number, delta: number)
 function materialiseLineDeltas(state: EditorState, map: Map<number, number>): ChangeSpec[] {
   const changes: ChangeSpec[] = [];
   for (const [lineFrom, delta] of map) {
-    if (delta === 0) {
-      continue;
-    }
-    const line = state.doc.lineAt(lineFrom);
-    if (line.text.trim() === "") {
-      continue;
-    }
-    if (delta > 0) {
-      changes.push({ from: line.from, insert: " ".repeat(delta) });
-    } else {
-      const remove = leadingCharsForColumns(line.text, -delta, state.tabSize);
-      if (remove > 0) {
-        changes.push({ from: line.from, to: line.from + remove });
-      }
+    const change = shiftLine(state, state.doc.lineAt(lineFrom).number, delta);
+    if (change !== null) {
+      changes.push(change);
     }
   }
   return changes;

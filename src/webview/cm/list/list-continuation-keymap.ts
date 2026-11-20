@@ -34,12 +34,14 @@ import { type ChangeSpec, EditorSelection, type EditorState, Prec } from "@codem
 import { type Command, keymap } from "@codemirror/view";
 
 import { leadingFrontmatterEnd } from "../frontmatter/detect.js";
-import { findTaskMarker } from "./list-geometry.js";
+import { columnAt, findTaskMarker } from "./list-geometry.js";
 import {
+  contentColumnOf,
   continuationMarkerFor,
   isEmptyItem,
   parseListMark,
   renumberRun,
+  shiftOwnLines,
   warnBudgetMiss,
 } from "./list-transform.js";
 import {
@@ -156,11 +158,20 @@ export const continueListOnEnter: Command = (view) => {
   const insert = `\n${indent}${markerStr}`;
   const caret = head + insert.length;
   const changes: ChangeSpec[] = [{ from: head, insert }];
+  // Re-resolve from an EOF-bounded tree: the caret-bounded `item` above sees
+  // neither its own lines below the caret nor the following siblings. All edits
+  // below sit past `head`, so the caret is unaffected.
+  const eofItem = resolveAtEof(state, mark.from);
+  if (eofItem !== null) {
+    // The item's own lines below the caret now belong to the NEW item, whose
+    // content column is `markCol + <new list marker> + 1 space` (markerStr is
+    // `<marker> ` or `<marker> [ ] `, so its first space ends the marker). Shift
+    // them by the column change so a nested child stays nested (`9.` → `10.`).
+    const newContentCol = columnAt(state, mark.from) + markerStr.indexOf(" ") + 1;
+    changes.push(...shiftOwnLines(state, eofItem, newContentCol - contentColumnOf(state, eofItem)));
+  }
   if (ordered) {
-    // Keep the contiguous ordered run sequential; caret is unaffected because the
-    // renumber edits sit past `head`. Re-resolve from an EOF-bounded tree (the
-    // caret-bounded `item` above does not see siblings past the caret).
-    const eofItem = resolveAtEof(state, mark.from);
+    // Keep the contiguous ordered run sequential.
     const precedingShape = parseListMark(state.doc.sliceString(mark.from, mark.to));
     if (eofItem !== null && precedingShape !== null && precedingShape.kind === "ordered") {
       // The inserted item's own number is precedingNumber + 1 (continuationMarkerFor's

@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
 import { history, undo } from "@codemirror/commands";
+import { ensureSyntaxTree } from "@codemirror/language";
 import { EditorSelection, EditorState, type SelectionRange } from "@codemirror/state";
 import { type EditorView, runScopeHandlers } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
@@ -218,6 +219,129 @@ describe("continueListOnEnter — ordered renumber", () => {
       expect(view.state.doc.toString()).toBe("1. a\n2. \n3. b");
       expect(undo(view)).toBe(true);
       expect(view.state.doc.toString()).toBe("1. a\n2. b");
+    } finally {
+      view.destroy();
+    }
+  });
+});
+
+/** The marker text of the ListItem that structurally OWNS the ListItem whose
+ *  content contains `needle` — i.e. the parent item a nested child hangs under,
+ *  or null when the child's list sits directly under Document. */
+function parentMarkerOf(view: EditorView, needle: string): string | null {
+  const { state } = view;
+  const tree = ensureSyntaxTree(state, state.doc.length, 5000);
+  if (tree === null) {
+    throw new Error("parse did not reach EOF");
+  }
+  const node = tree.resolveInner(state.doc.toString().indexOf(needle), 1);
+  let seenOwn = false;
+  for (let n: typeof node | null = node; n !== null; n = n.parent) {
+    if (n.name !== "ListItem") {
+      continue;
+    }
+    if (!seenOwn) {
+      seenOwn = true;
+      continue;
+    }
+    const mark = n.getChild("ListMark");
+    return mark === null ? null : state.doc.sliceString(mark.from, mark.to);
+  }
+  return null;
+}
+
+describe("continueListOnEnter — split keeps the item's children nested", () => {
+  const cases: { name: string; doc: string; caretAfter: string; out: string; parent: string }[] = [
+    {
+      name: "9 → 10 (marker widens by one column)",
+      doc: "9. abcd\n   - child",
+      caretAfter: "9. ab",
+      out: "9. ab\n10. cd\n    - child",
+      parent: "10.",
+    },
+    {
+      name: "99 → 100",
+      doc: "99. abcd\n    - child",
+      caretAfter: "99. ab",
+      out: "99. ab\n100. cd\n     - child",
+      parent: "100.",
+    },
+    {
+      // A leading tab alone would open indented code, so nest under a bullet
+      // (blank-separated: `9.` cannot interrupt a paragraph). The shift must land
+      // after the tab — a space prepended before it is absorbed by the tab stop.
+      name: "tab-indented item and child",
+      doc: "- p\n\n\t9. abcd\n\t   - child",
+      caretAfter: "9. ab",
+      out: "- p\n\n\t9. ab\n\t10. cd\n\t    - child",
+      parent: "10.",
+    },
+    {
+      name: "tab after the marker (content column unchanged)",
+      doc: "9.\tabcd\n\t- child",
+      caretAfter: "9.\tab",
+      out: "9.\tab\n10. cd\n\t- child",
+      parent: "10.",
+    },
+    {
+      name: "extra spaces after the marker (new item uses one space)",
+      doc: "9.   abcd\n     - child",
+      caretAfter: "9.   ab",
+      out: "9.   ab\n10. cd\n    - child",
+      parent: "10.",
+    },
+    {
+      name: "bullet with extra spaces after the marker",
+      doc: "-   abcd\n    - child",
+      caretAfter: "-   ab",
+      out: "-   ab\n- cd\n  - child",
+      parent: "-",
+    },
+    {
+      name: "paragraph continuation line follows the split tail",
+      doc: "9. abcd\n   more\n   - child",
+      caretAfter: "9. ab",
+      out: "9. ab\n10. cd\n    more\n    - child",
+      parent: "10.",
+    },
+  ];
+
+  for (const c of cases) {
+    it(`${c.name}: child stays under the new item, one undo restores`, () => {
+      const view = mount(c.doc, at(c.doc.indexOf(c.caretAfter) + c.caretAfter.length), {
+        withHistory: true,
+      });
+      try {
+        expect(parentMarkerOf(view, "child")).not.toBeNull();
+        expect(continueListOnEnter(view)).toBe(true);
+        expect(view.state.doc.toString()).toBe(c.out);
+        expect(parentMarkerOf(view, "child")).toBe(c.parent);
+        expect(undo(view)).toBe(true);
+        expect(view.state.doc.toString()).toBe(c.doc);
+      } finally {
+        view.destroy();
+      }
+    });
+  }
+
+  it("does not shift a lazy-continuation line (not structurally the item's)", () => {
+    const view = mount("9. abcd\nlazy", at(5));
+    try {
+      expect(continueListOnEnter(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("9. ab\n10. cd\nlazy");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("shifts the widened sibling's children alongside the split's (both corrections compose)", () => {
+    const doc = "8. abcd\n   - x\n9. e\n   - y";
+    const view = mount(doc, at(5));
+    try {
+      expect(continueListOnEnter(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("8. ab\n9. cd\n   - x\n10. e\n    - y");
+      expect(parentMarkerOf(view, "x")).toBe("9.");
+      expect(parentMarkerOf(view, "y")).toBe("10.");
     } finally {
       view.destroy();
     }
