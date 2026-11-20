@@ -51,6 +51,8 @@ function escapeLabel(label: string): string {
       const parent = node.node.parent?.name;
       if (
         labelSourceNodes.has(node.name) ||
+        // A reference image (`![a]`, `![a][]`, `![a][ref]`) matches its definition by source spelling.
+        (node.name === "Image" && !node.node.getChild("URL")) ||
         (parent === "Image" && imageSyntaxNodes.has(node.name))
       ) {
         escaped += escapeBrackets(input.slice(plainFrom, node.from));

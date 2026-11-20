@@ -170,6 +170,26 @@ it.each([
     text: "[https://x.test/p]]",
   },
   {
+    label: "[https://x.test/p]\\[",
+    href,
+    escapedLabel: "&#91;https://x.test/p&#93;&#91;",
+    destination: href,
+    text: "[https://x.test/p][",
+  },
+  { label: "a\\[b", href, escapedLabel: "a&#91;b", destination: href, text: "a[b" },
+  // Inline image alt is walked: an escaped bracket in it is rewritten.
+  {
+    label: "![a\\]b](e)",
+    href,
+    escapedLabel: "![a&#93;b](e)",
+    destination: href,
+    text: "a]b",
+  },
+  // A reference image matches its definition by source spelling, so it is kept.
+  { label: "![a\\]b]", href, escapedLabel: "![a\\]b]", destination: href, text: "![a]b]" },
+  { label: "![a\\]b][]", href, escapedLabel: "![a\\]b][]", destination: href, text: "![a]b][]" },
+  { label: "![a][r]", href, escapedLabel: "![a][r]", destination: href, text: "![a][r]" },
+  {
     label: "[][https://x.test/p]",
     href,
     escapedLabel: "&#91;&#93;&#91;https://x.test/p&#93;",
