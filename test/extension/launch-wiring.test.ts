@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import { afterEach, describe, expect, it, type Mock, vi } from "vitest";
 import { runE2E, VSCODE_VERSION_ENV } from "./launch";
 import type { RunTempRoot } from "./temp-root";
@@ -29,7 +30,15 @@ describe("runE2E wiring", () => {
     await runE2E({ runTests, createRoot: () => run, preflight: noopPreflight });
 
     const opts = runTests.mock.calls[0][0];
-    expect(opts.extensionTestsEnv).toEqual({ QUOLL_E2E_TEMP_ROOT: "/t/r" });
+    expect(opts.extensionTestsEnv).toEqual({
+      QUOLL_E2E_TEMP_ROOT: "/t/r",
+      ...(process.platform !== "win32" && {
+        PATH: [path.resolve(__dirname, "e2e/fixtures/external-browser"), process.env.PATH].join(
+          path.delimiter
+        ),
+        QUOLL_E2E_EXTERNAL_OPEN_LOG: path.join(run.root, "external-open.log"),
+      }),
+    });
     expect(opts.launchArgs).toContain("--user-data-dir=/t/r/ud");
     // The explicit `.js` is what the opt-in newer-host probe needs; the
     // extensionless form still resolves on the pinned host, so nothing else notices.

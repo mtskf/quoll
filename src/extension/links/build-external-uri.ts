@@ -1,36 +1,10 @@
-// Encoding-preserving external-URL → vscode.Uri builder for env.openExternal.
+// Build a Uri for the non-verbatim external-open path (mailto and remote windows).
+// The WHATWG split keeps percent escapes in the stored components, while
+// Uri.parse would decode them. VS Code 1.94 applies encodeURI to the Uri
+// handoff, so an escape such as %2F can still arrive as %252F.
 //
-// WHY NOT Uri.parse(url): Uri.parse DECODES percent-escapes into the stored
-// components (`%2F` in the path becomes `/`, unrecoverable) and re-encodes on
-// serialisation, silently changing GitLab-style `%2F` API paths and `+`-bearing
-// search queries. The WHATWG URL parser PRESERVES percent-encoding in
-// pathname/search/hash — in particular the reported `%2F` (path) and `+`
-// (query) — so splitting with it and rebuilding via Uri.from(...) keeps those
-// bytes intact through to the browser: VS Code's OpenerService
-// delivers the href as `encodeURI(uri.toString(true))` (skipEncoding, then an
-// encodeURI that leaves %, %2F, +, %20, &, =, # untouched — read from the
-// installed VS Code 1.130.0 source, `workbench.desktop.main.js`).
-//
-// SCOPE OF THE GUARANTEE (deliberately NOT a byte-for-byte echo of arbitrary
-// input): what is preserved is the percent-encoding of path/query/fragment —
-// notably `%2F` and `+`, the reported bug. `new URL()` (and Uri.from's own
-// serialisation) apply destination-PRESERVING canonicalisation a browser would
-// apply anyway: lower-cased scheme/host, punycoded IDN host, dropped default
-// port, resolved dot-segments, `?`/`#` present only when non-empty, trailing `/`
-// on a bare authority. We accept that over hand-rolling a lexical URL splitter:
-// a bespoke splitter feeding an external-open is a security risk (a mis-split
-// authority opens a different HOST), and Uri.from/toString(true) normalises
-// regardless, so a splitter would not buy true byte-identity either. `new URL()`
-// DROPS userinfo from `.host`, so the authority is rebuilt below.
-//
-// VERSION NOTE: the encodeURI(toString(true)) opener behaviour is a long-stable
-// VS Code trait (query strings would break universally otherwise) but is an
-// implementation detail, not a documented API contract. It was read from VS Code
-// 1.130.0 source, while the extension's engines.vscode floor is older (~1.94), so
-// the exact opener internals on the floor were not source-verified — the E2E
-// asserts the Uri-level contract (which is version-independent), and the opener's
-// encodeURI(toString(true)) step is the residual assumption. If external links
-// ever start arriving mangled after a VS Code upgrade, re-verify this path first.
+// new URL() also canonicalises the scheme, host, port and dot-segments.
+// It omits userinfo from .host, so the authority is rebuilt below.
 
 import { Uri } from "vscode";
 

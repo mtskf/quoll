@@ -1,0 +1,5 @@
+#!/bin/sh
+for arg do
+    last_arg=$arg
+done
+printf '%s\n' "$last_arg" >> "$QUOLL_E2E_EXTERNAL_OPEN_LOG"

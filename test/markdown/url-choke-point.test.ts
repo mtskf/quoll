@@ -28,8 +28,8 @@
 // allowlist incl. "the webview render-gate helper". Reality has no single
 // render-gate helper — the live DOM writes are `.href`/`.src` PROPERTY
 // assignments in two widget files (cell-render.ts, image-widget.ts), the
-// `env.openExternal` binding lives in quoll-editor-panel.ts (plus the host
-// gate handle-open-external.ts). One primitive remains
+// `env.openExternal` binding lives in open-external-url.ts (plus the
+// injected call in handle-open-external.ts). One primitive remains
 // unused anywhere in `src/**` and so carries an empty allow set:
 //   - `setAttribute("href"|"src")`: the widgets write `.href`/`.src` as
 //     properties, never via setAttribute.
@@ -132,10 +132,9 @@ const HTML_TABLE_PASTE_PARSE = [
   "src/webview/cm/paste/html-to-markdown.ts",
 ] as const;
 
-//   - build-external-uri.ts: splits an ALREADY-`isAllowedUrl`-gated external URL
-//     with `new URL` to preserve path/query percent-encoding (`%2F`/`+`) before
-//     rebuilding a `vscode.Uri` for `env.openExternal`. The parse re-derives
-//     components from a gated href; it mints no new destination.
+//   - build-external-uri.ts: splits an already-gated href into components
+//     for the Uri path used by mailto links and remote windows. It reuses
+//     the gated destination.
 const URL_PARSE_ENDPOINTS = [
   "src/markdown/url-allowlist.ts",
   "src/webview/cm/image/resource-base.ts",
@@ -171,16 +170,21 @@ const CHOKE_POINTS: readonly ChokePoint[] = [
   {
     name: "host env.openExternal()",
     pattern: /\.openExternal\s*\(/,
-    // handle-open-external.ts is the host gate; quoll-editor-panel.ts holds the
-    // real `env.openExternal` binding. effect-executor.ts invokes the injected
-    // open-external delegate via a local alias (`runOpenExternal`), NOT
-    // `deps.openExternal(...)`, so it does not textually match this pattern and
-    // is intentionally kept OUT of this allowlist — a future raw
-    // `env.openExternal(...)` added there would still be flagged.
-    allow: new Set([
-      "src/extension/links/handle-open-external.ts",
-      "src/extension/session/quoll-editor-panel.ts",
-    ]),
+    // The launcher owns this API call. The gate and effect executor call
+    // their delegates as functions, so direct API calls there are flagged.
+    allow: new Set(["src/extension/links/open-external-url.ts"]),
+  },
+  {
+    // The string form opens any http(s) URL externally.
+    name: '"vscode.open" command',
+    pattern: /["'`]vscode\.open["'`]/,
+    allow: new Set(["src/extension/links/open-external-url.ts"]),
+  },
+  {
+    // Only the host gate may import the launcher.
+    name: "openExternalUrl import",
+    pattern: /["'`][^"'`]*\/open-external-url(?:\.js)?["'`]/,
+    allow: new Set(["src/extension/links/handle-open-external.ts"]),
   },
   {
     // Live-DOM-from-string promotion. Quoll builds ALL DOM via
@@ -342,6 +346,7 @@ describe("URL/security choke-point lint", () => {
           "image.src = userInput;",
           'node.setAttribute("href", userInput);',
           "env.openExternal(userInput);",
+          'commands.executeCommand("vscode.open", userInput);',
           "el.innerHTML = userInput;",
           "el.outerHTML = userInput;",
           'el.insertAdjacentHTML("beforeend", userInput);',
@@ -367,6 +372,7 @@ describe("URL/security choke-point lint", () => {
         ".href / .src assignment",
         'setAttribute("href"|"src")',
         "host env.openExternal()",
+        '"vscode.open" command',
         ".innerHTML / .outerHTML assignment",
         "insertAdjacentHTML(",
         "document.write(",
@@ -395,6 +401,10 @@ describe("URL/security choke-point lint", () => {
       { line: 'node.setAttribute("href", userInput);', primitive: 'setAttribute("href"|"src")' },
       { line: 'node.setAttribute("src", userInput);', primitive: 'setAttribute("href"|"src")' },
       { line: "env.openExternal(userInput);", primitive: "host env.openExternal()" },
+      {
+        line: 'commands.executeCommand("vscode.open", userInput);',
+        primitive: '"vscode.open" command',
+      },
       { line: "el.innerHTML = userInput;", primitive: ".innerHTML / .outerHTML assignment" },
       { line: "el.outerHTML = userInput;", primitive: ".innerHTML / .outerHTML assignment" },
       {
@@ -413,6 +423,22 @@ describe("URL/security choke-point lint", () => {
     for (const { line, primitive } of expectations) {
       const v = findViolations([{ rel: "src/webview/cm/some-future-widget.ts", content: line }]);
       expect(v.map((x) => x.primitive)).toContain(primitive);
+    }
+  });
+
+  it("flags direct launcher imports from the panel and sibling modules", () => {
+    const fixtures: SourceFile[] = [
+      {
+        rel: "src/extension/session/quoll-editor-panel.ts",
+        content: 'import { openExternalUrl } from "../links/open-external-url.js";',
+      },
+      {
+        rel: "src/extension/links/other.ts",
+        content: 'import { openExternalUrl } from "./open-external-url.js";',
+      },
+    ];
+    for (const fixture of fixtures) {
+      expect(findViolations([fixture]).map((v) => v.primitive)).toEqual(["openExternalUrl import"]);
     }
   });
 
@@ -439,7 +465,7 @@ describe("URL/security choke-point lint", () => {
     const fixture: SourceFile[] = [
       { rel: "src/webview/cm/image/image-widget.ts", content: "img.src = this.safeUrl;" },
       {
-        rel: "src/extension/session/quoll-editor-panel.ts",
+        rel: "src/extension/links/open-external-url.ts",
         content: "openExternal: (url) => env.openExternal(Uri.parse(url)),",
       },
     ];

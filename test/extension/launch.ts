@@ -121,7 +121,17 @@ export async function runE2E(
       version: override || VS_CODE_VERSION,
       extensionDevelopmentPath,
       extensionTestsPath,
-      extensionTestsEnv: { [RUN_TEMP_ROOT_ENV]: run.root },
+      extensionTestsEnv: {
+        [RUN_TEMP_ROOT_ENV]: run.root,
+        ...(process.platform !== "win32" && {
+          // On macOS the shim shadows /usr/bin/open for the whole E2E host.
+          PATH: [
+            path.join(extensionDevelopmentPath, "test/extension/e2e/fixtures/external-browser"),
+            process.env.PATH,
+          ].join(path.delimiter),
+          QUOLL_E2E_EXTERNAL_OPEN_LOG: path.join(run.root, "external-open.log"),
+        }),
+      },
       launchArgs: ["--disable-extensions", `--user-data-dir=${run.userDataDir}`],
     });
   } catch (err) {

@@ -1,5 +1,5 @@
-// Host-side gate for webview "open-external" requests. Pure-function
-// design (deps injected) so it unit-tests without a live VS Code host.
+// Host-side gate for webview "open-external" requests. Unit tests can
+// inject an opener without a live VS Code host.
 // The wire shape comes from src/shared/protocol.ts; the security gate
 // is isAllowedUrl from src/markdown/url-allowlist.ts (the same predicate
 // render, open-link and link-insert consumers use — defense in depth).
@@ -36,15 +36,14 @@
 // a third file in the C9b deletion footprint).
 
 import { isAllowedUrl } from "../../markdown/url-allowlist.js";
+import { openExternalUrl } from "./open-external-url.js";
 
 const OPENABLE_SCHEMES = new Set(["http", "https", "mailto"]);
 
 /** User-facing toast shown when a gated, launchable URL still fails to open.
- *  Covers all three post-gate failure modes symmetrically — a fulfilled
- *  `false` (the OS has no handler for the scheme), an async rejection
- *  (system browser missing, OS denial), and a synchronous throw (buildExternalUri's
- *  `Uri.parse` fallback on malformed input). The specific cause goes to the host log; the toast
- *  just tells the user the click did something. */
+ *  Covers a fulfilled `false`, an async rejection, or a synchronous throw.
+ *  On the verbatim path, `vscode.open` resolves void, so only a rejection signals
+ *  failure. Details go to the host log. */
 const OPEN_EXTERNAL_FAILURE_MESSAGE =
   "Quoll: couldn't open the link. See the extension host log for details.";
 
@@ -65,25 +64,21 @@ function sanitizeForLog(href: string): string {
 }
 
 export type HandleOpenExternalDeps = {
-  /** vscode.env.openExternal binding (or a test mock). Returns a Thenable
-   *  per VS Code's API contract. The QuollEditorPanel wire-up wraps
-   *  `(url) => env.openExternal(buildExternalUri(url))`; `buildExternalUri`
-   *  (or its `Uri.parse` fallback) can throw synchronously on malformed input
-   *  that isAllowedUrl missed (review fix #6) — handleOpenExternal absorbs
-   *  that throw. */
-  openExternal: (url: string) => Thenable<boolean>;
+  /** Unit tests can override the default opener. */
+  openExternal?: (url: string) => Thenable<boolean>;
   /** Host showError (a window.showErrorMessage wrapper). Surfaces a
    *  user-visible toast when a launch fails so a failed link click is not
-   *  silently dropped — see OPEN_EXTERNAL_FAILURE_MESSAGE for the three
-   *  failure modes it covers. Required (not optional) so a future caller
-   *  cannot re-introduce the silent-failure bug by forgetting to wire it. */
+   *  silently dropped. Required so callers always provide failure feedback. */
   showError: (message: string) => void;
 };
 
 /** Gate-and-dispatch an "open-external" request. Caller is
  *  QuollEditorPanel.handleInbound; href is the already-decoded URL string
  *  the webview sent (post decodeMarkdownDestination). */
-export function handleOpenExternal(href: string, deps: HandleOpenExternalDeps): void {
+export function handleOpenExternal(
+  href: string,
+  { openExternal = openExternalUrl, showError }: HandleOpenExternalDeps
+): void {
   if (!isAllowedUrl(href)) {
     // Symmetric with the inbound-validation reject path in QuollEditorPanel
     // — log at console.warn so a triage report has a single greppable line.
@@ -107,35 +102,24 @@ export function handleOpenExternal(href: string, deps: HandleOpenExternalDeps): 
     });
     return;
   }
-  // Synchronous-throw guard (review fix #6): the production deps closure
-  // `(url) => env.openExternal(buildExternalUri(url))` can throw synchronously
-  // — buildExternalUri's `Uri.parse` fallback arm rejects inputs even
-  // non-strict mode refuses (rare post-isAllowedUrl, but defense in depth).
-  // Without try/catch, that throw escapes handleOpenExternal, breaks
-  // QuollEditorPanel.handleInbound's switch, and corrupts subsequent
-  // inbound-message handling.
-  //
-  // openExternal returns a Thenable<boolean>; the boolean is the platform
-  // delivery signal (false = "no handler registered for this scheme"). All
-  // three failure modes — a fulfilled `false`, an asynchronous rejection
-  // (system browser missing, OS denial), and the synchronous throw arm —
-  // surface a user-visible toast via deps.showError so a failed link click
-  // is not silently dropped; the specific cause still goes to the host log.
+  // Keep synchronous throws from the injected opener within this handler.
+  // A fulfilled false on the Uri path or a rejection from either path
+  // also gets a toast and a host log entry.
   try {
-    void Promise.resolve(deps.openExternal(href)).then(
+    void Promise.resolve(openExternal(href)).then(
       (delivered: boolean) => {
         if (!delivered) {
-          deps.showError(OPEN_EXTERNAL_FAILURE_MESSAGE);
-          console.warn("[quoll] env.openExternal reported no handler for the URL scheme");
+          showError(OPEN_EXTERNAL_FAILURE_MESSAGE);
+          console.warn("[quoll] open-external returned false");
         }
       },
       (err: unknown) => {
-        deps.showError(OPEN_EXTERNAL_FAILURE_MESSAGE);
-        console.error("[quoll] env.openExternal rejected", err);
+        showError(OPEN_EXTERNAL_FAILURE_MESSAGE);
+        console.error("[quoll] open-external rejected", err);
       }
     );
   } catch (err) {
-    deps.showError(OPEN_EXTERNAL_FAILURE_MESSAGE);
-    console.error("[quoll] env.openExternal threw synchronously", err);
+    showError(OPEN_EXTERNAL_FAILURE_MESSAGE);
+    console.error("[quoll] open-external threw synchronously", err);
   }
 }
