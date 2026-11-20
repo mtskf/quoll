@@ -17,9 +17,14 @@ describe("openExternalUrl", () => {
     vi.restoreAllMocks();
   });
 
-  it("opens local mailto links with env.openExternal", async () => {
-    const href = "mailto:person@example.com?subject=a%26b";
-
+  it.each([
+    "mailto:person@example.com?subject=a%26b",
+    "http://localhost%2F@evil.example/x",
+    "http://user@example.com/",
+    "http://[::1]:9/x",
+    "http://localhost\\path",
+    "https://",
+  ])("uses env.openExternal for local %s", async (href) => {
     expect(await openExternalUrl(href)).toBe(false);
     expect(env.openExternal).toHaveBeenCalledExactlyOnceWith({ built: href });
     expect(commands.executeCommand).not.toHaveBeenCalled();
@@ -34,9 +39,10 @@ describe("openExternalUrl", () => {
     expect(commands.executeCommand).not.toHaveBeenCalled();
   });
 
-  it("opens local HTTP links with the original string", async () => {
-    const href = "HTTP://example.com/a%2Fb";
-
+  it.each([
+    "HTTP://example.com/a%2Fb",
+    "https://localhost:9/a%2Fb?q=x+y#z",
+  ])("opens local %s with the original string", async (href) => {
     expect(await openExternalUrl(href)).toBe(true);
     expect(commands.executeCommand).toHaveBeenCalledExactlyOnceWith("vscode.open", href);
     expect(env.openExternal).not.toHaveBeenCalled();
