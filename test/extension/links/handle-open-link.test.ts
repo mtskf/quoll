@@ -1,16 +1,24 @@
-import { describe, expect, it } from "vitest";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Uri } from "vscode"; // vitest-aliased to test/extension/vscode-stub.ts (joinPath only)
 import {
   type HandleOpenLinkDeps,
   handleOpenLink,
 } from "../../../src/extension/links/handle-open-link.js";
 import {
+  type RealContainment,
+  resolveRealContainment,
+} from "../../../src/extension/links/real-containment.js";
+import { isWithinDir } from "../../../src/extension/links/within-dir.js";
+import {
   OPEN_LINK_CONTAINMENT_ONLY_REJECTIONS,
   OPEN_LINK_DOC_LAYOUT,
   OPEN_LINK_STRUCTURAL_MATRIX,
 } from "../../fixtures/open-link-destinations.js";
+import { makeUnitTempDir } from "../temp-root.js";
 
-const makeUri = (path: string) => ({ path }) as unknown as import("vscode").Uri;
+const makeUri = (path: string, scheme = "file") => ({ path, fsPath: path, scheme }) as Uri;
 
 // documentUri = /ws/notes/doc.md ; workspace root = /ws — taken from the shared
 // fixture, since every `hostRoutes` verdict in the matrix is stated against
@@ -21,7 +29,12 @@ function makeDeps(overrides: Partial<HandleOpenLinkDeps> = {}) {
   const deps: HandleOpenLinkDeps = {
     documentUri: makeUri(OPEN_LINK_DOC_LAYOUT.documentPath),
     joinPath: (base, ...segments) => Uri.joinPath(base, ...segments),
-    isInWorkspace: (uri) => uri.path.startsWith(`${OPEN_LINK_DOC_LAYOUT.workspaceRoot}/`),
+    workspaceFolderOf: (uri) =>
+      uri.path.startsWith(`${OPEN_LINK_DOC_LAYOUT.workspaceRoot}/`)
+        ? makeUri(OPEN_LINK_DOC_LAYOUT.workspaceRoot)
+        : undefined,
+    realContainment: async () => "inside",
+    isDisposed: () => false,
     openWith: (uri) => {
       opened.push(uri.path);
       return Promise.resolve(undefined);
@@ -41,9 +54,9 @@ function makeDeps(overrides: Partial<HandleOpenLinkDeps> = {}) {
 // header for what the matrix does and does not claim.
 describe("handleOpenLink — shared open-link structural matrix", () => {
   for (const { destination, hostRoutes, why } of OPEN_LINK_STRUCTURAL_MATRIX) {
-    it(`${hostRoutes ? "routes" : "does not route"} — ${why}`, () => {
+    it(`${hostRoutes ? "routes" : "does not route"} — ${why}`, async () => {
       const { deps, opened, errors } = makeDeps();
-      handleOpenLink(destination, deps);
+      await handleOpenLink(destination, deps);
       // Whether it routed, not where to: the resolved path is host-only
       // information the shared fixture cannot carry, and is pinned below.
       expect(opened.length > 0).toBe(hostRoutes);
@@ -66,9 +79,9 @@ describe("handleOpenLink — shared open-link structural matrix", () => {
 // rather than looking like the drift the matrix above exists to catch.
 describe("handleOpenLink — containment rejects what the structural gates let through", () => {
   for (const { destination, why } of OPEN_LINK_CONTAINMENT_ONLY_REJECTIONS) {
-    it(`drops a posted destination that escapes scope — ${why}`, () => {
+    it(`drops a posted destination that escapes scope — ${why}`, async () => {
       const { deps, opened } = makeDeps();
-      handleOpenLink(destination, deps);
+      await handleOpenLink(destination, deps);
       expect(opened).toEqual([]);
     });
 
@@ -78,9 +91,9 @@ describe("handleOpenLink — containment rejects what the structural gates let t
     // one gate it cannot run. Dropping silently here spends a real click on
     // nothing observable. Pinned per-destination so the signal cannot be lost
     // for the decoded form while surviving for the plain one.
-    it(`tells the user it refused, without naming the target — ${why}`, () => {
+    it(`tells the user it refused, without naming the target — ${why}`, async () => {
       const { deps, errors } = makeDeps();
-      handleOpenLink(destination, deps);
+      await handleOpenLink(destination, deps);
       expect(errors).toEqual([
         "Quoll: that link points outside this workspace and the document's folder — it wasn't opened.",
       ]);
@@ -92,27 +105,27 @@ describe("handleOpenLink — containment rejects what the structural gates let t
 });
 
 describe("handleOpenLink", () => {
-  it("opens a same-directory .md link", () => {
+  it("opens a same-directory .md link", async () => {
     const { deps, opened } = makeDeps();
-    handleOpenLink("./other.md", deps);
+    await handleOpenLink("./other.md", deps);
     expect(opened).toEqual(["/ws/notes/other.md"]);
   });
 
-  it("opens a parent-relative .md link that stays in the workspace", () => {
+  it("opens a parent-relative .md link that stays in the workspace", async () => {
     const { deps, opened } = makeDeps();
-    handleOpenLink("../sibling/other.md", deps);
+    await handleOpenLink("../sibling/other.md", deps);
     expect(opened).toEqual(["/ws/sibling/other.md"]);
   });
 
-  it("strips a #fragment before resolving", () => {
+  it("strips a #fragment before resolving", async () => {
     const { deps, opened } = makeDeps();
-    handleOpenLink("./other.md#section", deps);
+    await handleOpenLink("./other.md#section", deps);
     expect(opened).toEqual(["/ws/notes/other.md"]);
   });
 
-  it("falls back to the document directory when there is no workspace (single-file open)", () => {
-    const { deps, opened, errors } = makeDeps({ isInWorkspace: () => false });
-    handleOpenLink("./other.md", deps);
+  it("falls back to the document directory when there is no workspace (single-file open)", async () => {
+    const { deps, opened, errors } = makeDeps({ workspaceFolderOf: () => undefined });
+    await handleOpenLink("./other.md", deps);
     expect(opened).toEqual(["/ws/notes/other.md"]);
     // ...and says NOTHING while doing it. The two containment conditions are an
     // AND: being outside the workspace is only half a refusal, because the
@@ -125,9 +138,9 @@ describe("handleOpenLink", () => {
     expect(errors).toEqual([]);
   });
 
-  it("rejects a parent escape when there is no workspace", () => {
-    const { deps, opened, errors } = makeDeps({ isInWorkspace: () => false });
-    handleOpenLink("../other.md", deps);
+  it("rejects a parent escape when there is no workspace", async () => {
+    const { deps, opened, errors } = makeDeps({ workspaceFolderOf: () => undefined });
+    await handleOpenLink("../other.md", deps);
     expect(opened).toEqual([]);
     // Same refusal toast on the no-workspace arm: containment there is the
     // document's own directory, and the user is owed the same signal.
@@ -140,59 +153,207 @@ describe("handleOpenLink", () => {
   // of the cascade to it. Only what the fixture cannot express stays here: deps
   // overrides, resolved paths, and the failure toast.
 
-  it("rejects a sibling dir that shares the doc-dir name as a prefix (no workspace)", () => {
+  it("rejects a sibling dir that shares the doc-dir name as a prefix (no workspace)", async () => {
     // /ws/notes vs /ws/notes-evil must NOT match on a bare prefix — guards the
     // trailing-slash normalisation in isWithinDir (without it, startsWith would
     // wrongly accept the sibling).
-    const { deps, opened, errors } = makeDeps({ isInWorkspace: () => false });
-    handleOpenLink("../notes-evil/secret.md", deps);
+    const { deps, opened, errors } = makeDeps({ workspaceFolderOf: () => undefined });
+    await handleOpenLink("../notes-evil/secret.md", deps);
     expect(opened).toEqual([]);
     expect(errors).toEqual([expect.stringContaining("points outside this workspace")]);
   });
 
-  it("decodes a percent-encoded space so my%20notes.md opens my notes.md", () => {
+  it("decodes a percent-encoded space so my%20notes.md opens my notes.md", async () => {
     const { deps, opened } = makeDeps();
-    handleOpenLink("./my%20notes.md", deps);
+    await handleOpenLink("./my%20notes.md", deps);
     expect(opened).toEqual(["/ws/notes/my notes.md"]);
   });
 
-  it("decodes a percent-encoded space inside a subdirectory segment", () => {
+  it("decodes a percent-encoded space inside a subdirectory segment", async () => {
     const { deps, opened } = makeDeps();
-    handleOpenLink("./sub%20dir/my%20notes.md", deps);
+    await handleOpenLink("./sub%20dir/my%20notes.md", deps);
     expect(opened).toEqual(["/ws/notes/sub dir/my notes.md"]);
   });
 
-  it("leaves a malformed percent-escape literal (no decode, still opens)", () => {
+  it("leaves a malformed percent-escape literal (no decode, still opens)", async () => {
     // decodeURIComponent throws on `%of`; we fall back to the raw form so a real
     // file literally named `50%off.md` still opens (no regression vs pre-fix).
     const { deps, opened } = makeDeps();
-    handleOpenLink("./50%off.md", deps);
+    await handleOpenLink("./50%off.md", deps);
     expect(opened).toEqual(["/ws/notes/50%off.md"]);
   });
 
-  it("falls back to the raw form when a segment mixes a valid and invalid escape", () => {
+  it("falls back to the raw form when a segment mixes a valid and invalid escape", async () => {
     // decodeURIComponent is all-or-nothing: %20 is NOT partially decoded when a
     // later %off is malformed. Whole-string raw fallback → literal-named target.
     const { deps, opened } = makeDeps();
-    handleOpenLink("./sub%20dir/50%off.md", deps);
+    await handleOpenLink("./sub%20dir/50%off.md", deps);
     expect(opened).toEqual(["/ws/notes/sub%20dir/50%off.md"]);
   });
 
   it("shows the failure toast when openWith rejects asynchronously", async () => {
     const { deps, errors } = makeDeps({ openWith: () => Promise.reject(new Error("boom")) });
-    handleOpenLink("./other.md", deps);
-    await Promise.resolve();
-    await Promise.resolve();
+    await expect(handleOpenLink("./other.md", deps)).resolves.toBeUndefined();
     expect(errors).toEqual([expect.stringContaining("couldn't open the linked file")]);
   });
 
-  it("shows the failure toast when openWith throws synchronously", () => {
+  it("shows the failure toast when openWith throws synchronously", async () => {
     const { deps, errors } = makeDeps({
       openWith: () => {
         throw new Error("sync boom");
       },
     });
-    handleOpenLink("./other.md", deps);
+    await handleOpenLink("./other.md", deps);
     expect(errors).toEqual([expect.stringContaining("couldn't open the linked file")]);
+  });
+});
+
+describe("handleOpenLink — async containment", () => {
+  it.each([
+    "resolves",
+    "rejects",
+  ])("stays quiet when containment %s after disposal", async (outcome) => {
+    let disposed = false;
+    let settle!: () => void;
+    const pending = new Promise<RealContainment>((resolve, reject) => {
+      settle = () => {
+        if (outcome === "resolves") {
+          resolve("inside");
+        } else {
+          reject(new Error("containment failed"));
+        }
+      };
+    });
+    const realContainment = vi.fn(() => pending);
+    const { deps, opened, errors } = makeDeps({ realContainment, isDisposed: () => disposed });
+
+    const handling = handleOpenLink("./other.md", deps);
+    expect(realContainment).toHaveBeenCalled();
+    disposed = true;
+    settle();
+
+    await expect(handling).resolves.toBeUndefined();
+    expect(opened).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+
+  it("shows the failure toast when containment throws on a live panel", async () => {
+    const { deps, opened, errors } = makeDeps({
+      realContainment: () => {
+        throw new Error("containment failed");
+      },
+    });
+
+    await expect(handleOpenLink("./other.md", deps)).resolves.toBeUndefined();
+    expect(opened).toEqual([]);
+    expect(errors).toEqual([expect.stringContaining("couldn't open the linked file")]);
+  });
+
+  it("opens an in-scope non-file link without calling realContainment", async () => {
+    const realContainment = vi.fn<HandleOpenLinkDeps["realContainment"]>();
+    const { deps, opened, errors } = makeDeps({
+      documentUri: makeUri(OPEN_LINK_DOC_LAYOUT.documentPath, "memfs"),
+      workspaceFolderOf: () => undefined,
+      realContainment,
+    });
+
+    await handleOpenLink("./other.md", deps);
+    expect(opened).toEqual(["/ws/notes/other.md"]);
+    expect(errors).toEqual([]);
+    expect(realContainment).not.toHaveBeenCalled();
+  });
+});
+
+describe("handleOpenLink — symlink containment", () => {
+  let temp: ReturnType<typeof makeUnitTempDir>;
+  let wsUri: Uri;
+  let notes: string;
+
+  beforeEach(() => {
+    temp = makeUnitTempDir("open-link");
+    const ws = path.join(temp.dir, "workspace");
+    const outside = path.join(temp.dir, "outside");
+    notes = path.join(ws, "notes");
+    wsUri = makeUri(ws);
+    fs.mkdirSync(notes, { recursive: true });
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, "secret.md"), "# secret\n");
+    fs.writeFileSync(path.join(notes, "doc.md"), "[x](./escape.md)\n");
+    fs.writeFileSync(path.join(notes, "other.md"), "# Other\n");
+    fs.writeFileSync(path.join(notes, "..notes.md"), "# Notes\n");
+    fs.symlinkSync(path.join(outside, "secret.md"), path.join(notes, "escape.md"), "file");
+    fs.symlinkSync(outside, path.join(notes, "linked-dir"), "dir");
+    fs.symlinkSync("./renamed.md", path.join(notes, "old.md"), "file");
+  });
+
+  afterEach(() => temp?.dispose());
+
+  function makeFileDeps(docDir = notes) {
+    return makeDeps({
+      documentUri: makeUri(path.join(docDir, "doc.md")),
+      workspaceFolderOf: (uri) => (isWithinDir(uri, wsUri) ? wsUri : undefined),
+      realContainment: resolveRealContainment,
+    });
+  }
+
+  it("refuses a symlink escape out of the workspace", async () => {
+    const { deps, opened, errors } = makeFileDeps();
+    await handleOpenLink("./escape.md", deps);
+    expect(opened).toEqual([]);
+    expect(errors).toEqual([expect.stringContaining("points outside this workspace")]);
+  });
+
+  it.each([
+    "./linked-dir/secret.md",
+    "./linked-dir/absent.md",
+    "./old.md",
+  ])("refuses %s with the out-of-scope toast", async (href) => {
+    const { deps, opened, errors } = makeFileDeps();
+    await handleOpenLink(href, deps);
+    expect(opened).toEqual([]);
+    expect(errors).toEqual([expect.stringContaining("points outside this workspace")]);
+  });
+
+  it.each([
+    "other.md",
+    "..notes.md",
+    "new.md",
+  ])("dispatches an in-scope link to %s", async (name) => {
+    const { deps, opened, errors } = makeFileDeps();
+    await handleOpenLink(`./${name}`, deps);
+    expect(opened).toEqual([path.join(notes, name)]);
+    expect(errors).toEqual([]);
+  });
+
+  describe("symlinked document folder", () => {
+    let vault: string;
+
+    beforeEach(() => {
+      const realVault = path.join(temp.dir, "outside2", "vault");
+      vault = path.join(wsUri.fsPath, "vault");
+      fs.mkdirSync(realVault, { recursive: true });
+      fs.writeFileSync(path.join(realVault, "doc.md"), "[x](./other.md)\n");
+      fs.writeFileSync(path.join(realVault, "other.md"), "# Other\n");
+      fs.symlinkSync(
+        path.join(temp.dir, "outside", "secret.md"),
+        path.join(realVault, "out.md"),
+        "file"
+      );
+      fs.symlinkSync(realVault, vault, "dir");
+    });
+
+    it("opens vault/other.md beside the document", async () => {
+      const { deps, opened, errors } = makeFileDeps(vault);
+      await handleOpenLink("./other.md", deps);
+      expect(opened).toEqual([path.join(vault, "other.md")]);
+      expect(errors).toEqual([]);
+    });
+
+    it("refuses vault/out.md when its real path is outside both roots", async () => {
+      const { deps, opened, errors } = makeFileDeps(vault);
+      await handleOpenLink("./out.md", deps);
+      expect(opened).toEqual([]);
+      expect(errors).toEqual([expect.stringContaining("points outside this workspace")]);
+    });
   });
 });

@@ -71,6 +71,7 @@ import { buildExternalUri } from "../links/build-external-uri.js";
 import { handleOpenCodeReference } from "../links/handle-open-code-reference.js";
 import { handleOpenExternal } from "../links/handle-open-external.js";
 import { handleOpenLink } from "../links/handle-open-link.js";
+import { resolveRealContainment } from "../links/real-containment.js";
 import { toLintDiagnostics } from "../lint/lint-diagnostics.js";
 import { LintMirror } from "../lint/lint-mirror.js";
 import type { StatusBarSlots } from "../status-bar.js";
@@ -579,6 +580,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     const imageWriteWiring = createImageWriteWiring({
       documentUri: document.uri,
       canWrite: canWriteNow,
+      realContainment: resolveRealContainment,
       showError,
       post,
       writeFileOverride: () => this.harness?.writeImageFileOverride ?? null,
@@ -901,10 +903,12 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           // document and reads only the stable document.uri (never the in-flight
           // content/dirty state). Dropped when disposed by the top-of-handleInbound
           // guard, like every other side channel.
-          handleOpenLink(raw.href, {
+          void handleOpenLink(raw.href, {
             documentUri: document.uri,
             joinPath: (base, ...segments) => Uri.joinPath(base, ...segments),
-            isInWorkspace: (uri) => workspace.getWorkspaceFolder(uri) !== undefined,
+            workspaceFolderOf: (uri) => workspace.getWorkspaceFolder(uri)?.uri,
+            realContainment: resolveRealContainment,
+            isDisposed: () => disposed,
             openWith:
               this.harness?.openLinkOverride ??
               ((uri) => openInQuollEditor(uri, QuollEditorPanel.viewType)),

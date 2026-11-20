@@ -2,6 +2,12 @@
 
 All notable changes to Quoll are documented here.
 
+## Unreleased
+
+### Changed
+
+- Relative links and pasted images now stay inside the workspace even through symlinks. A link whose real target lives outside the workspace and the document's folder is declined with a notice instead of opening.
+
 ## 0.1.87 — 2026-11-20
 
 ### Added
