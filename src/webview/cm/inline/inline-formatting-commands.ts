@@ -9,16 +9,17 @@
 // edit-sync -> host write-lock pipeline via view.dispatch. There is no raw write
 // path; normal write settlement and recovery apply to these edits too.
 //
-// Nothing here reads the editor's syntax tree. That tree is parsed under a time
-// budget, can be incomplete on a large doc, and would misclassify an existing
-// `**foo**` as un-bolded, corrupting it into `****foo****`. Bold, italic and
-// strike unwrap by delimiter matching instead; the single-char `*`
-// disambiguates against `**` via the char just beyond the delimiter. Code and
-// link labels need CommonMark's own pairing, so each runs its own full,
-// deterministic gfmParser parse of a bounded string: code parses the
-// selection's paragraph to find the span it unwraps, and a link label parses
-// only the selected string.
+// Bold, italic and strike never read the editor's syntax tree. That tree is
+// parsed under a time budget, can be incomplete on a large doc, and would
+// misclassify an existing `**foo**` as un-bolded, corrupting it into
+// `****foo****`. They unwrap by delimiter matching instead; the single-char `*`
+// disambiguates against `**` via the char just beyond the delimiter. Code needs
+// CommonMark's own pairing in its real container context (list, quote, fenced
+// block), so it reads the editor's tree, and only once the tree is final through
+// the end of the selection's block: before that it leaves the document as it is.
+// A link label runs its own full gfmParser parse of the selected string only.
 
+import { syntaxTree, syntaxTreeAvailable } from "@codemirror/language";
 import {
   type ChangeSpec,
   EditorSelection,
@@ -28,9 +29,9 @@ import {
 } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import { codeSpanSource, codeSpanStripsEdges } from "../../../markdown/code-span-source.js";
-import { gfmParser } from "../../../markdown/gfm-parser.js";
 import { markdownLinkSource } from "../../../markdown/link-source.js";
 import type { FormatAction } from "../../../shared/protocol.js";
+import { expandToEnclosingBlock } from "../structural-guard.js";
 
 // open === close for every inline mark; a single `marker` string is enough.
 // Keyed by the protocol's action set minus `link` and `code` (each has its own
@@ -117,65 +118,88 @@ function toggleMark(state: EditorState, marker: string): FormatSpec {
   };
 }
 
-const isBlankLine = (text: string) => /^[ \t]*$/.test(text);
+type CodeSpan = { from: number; to: number; body: string };
 
-/** The selected lines widened to the nearest blank line on each side: a code
- *  span cannot cross a blank line, so this holds every span the selection
- *  could touch, with its list or quote markers for the parser to read. */
-function paragraphAround(doc: Text, from: number, to: number): { start: number; text: string } {
-  let first = doc.lineAt(from);
-  while (first.number > 1 && !isBlankLine(doc.line(first.number - 1).text)) {
-    first = doc.line(first.number - 1);
-  }
-  let last = doc.lineAt(to);
-  while (last.number < doc.lines && !isBlankLine(doc.line(last.number + 1).text)) {
-    last = doc.line(last.number + 1);
-  }
-  return { start: first.from, text: doc.sliceString(first.from, last.to) };
-}
-
-/** The code span the selection is, or is the body of — as written or with the
- *  one-space strip applied — and the text it renders as. */
-function selectedCodeSpan(
-  doc: Text,
+/** What the editor's tree says about inline code around the selection: the span
+ *  it is (or is the body of, as written or with the one-space strip applied),
+ *  whether it cuts into code it must not split, and the lengths of backtick
+ *  runs before it in its block that may be unmatched. `null` while the tree is
+ *  not final through the end of that block. */
+function codeContext(
+  state: EditorState,
   from: number,
   to: number
-): { from: number; to: number; body: string } | null {
-  const { start, text } = paragraphAround(doc, from, to);
-  let span: { from: number; to: number; body: string } | null = null;
-  gfmParser.parse(text).iterate({
+): { span: CodeSpan | null; splitsCode: boolean; literalRuns: Set<number> } | null {
+  const doc = state.doc;
+  // A code span cannot cross a blank line, so every one the selection can meet
+  // or pair with sits in this run of lines.
+  const block = expandToEnclosingBlock(state, from, to);
+  if (!syntaxTreeAvailable(state, block.to)) {
+    return null;
+  }
+  let span: CodeSpan | null = null;
+  let splitsCode = false;
+  // The block's text before the selection with its code spans cut out: their
+  // runs are already paired, every other run may still take a new opener.
+  const before: string[] = [];
+  let cursor = block.from;
+  syntaxTree(state).iterate({
+    from: block.from,
+    to,
     enter(node) {
-      if (span || node.name !== "InlineCode") {
+      const inline = node.name === "InlineCode";
+      if (!inline && node.name !== "FencedCode" && node.name !== "CodeBlock") {
         return;
       }
-      const marks = node.node.getChildren("CodeMark");
-      const open = start + marks[0].to;
-      const close = start + marks[marks.length - 1].from;
-      const raw = doc.sliceString(open, close);
-      const strips = codeSpanStripsEdges(raw);
-      const spanFrom = start + node.from;
-      const spanTo = start + node.to;
-      if (from === spanFrom && to === spanTo) {
-        span = { from: spanFrom, to: spanTo, body: strips ? raw.slice(1, -1) : raw };
-      } else if (
-        (from === open && to === close) ||
-        (strips && from === open + 1 && to === close - 1)
-      ) {
-        span = { from: spanFrom, to: spanTo, body: doc.sliceString(from, to) };
+      if (node.to <= from) {
+        if (inline) {
+          before.push(doc.sliceString(cursor, node.from), " ");
+          cursor = node.to;
+        }
+        return false;
+      }
+      if (node.from >= to) {
+        return false;
+      }
+      if (inline) {
+        const marks = node.node.getChildren("CodeMark");
+        const open = marks[0].to;
+        const close = marks[marks.length - 1].from;
+        const raw = doc.sliceString(open, close);
+        const strips = codeSpanStripsEdges(raw);
+        if (from === node.from && to === node.to) {
+          span = { from: node.from, to: node.to, body: strips ? raw.slice(1, -1) : raw };
+          return false;
+        }
+        if ((from === open && to === close) || (strips && from === open + 1 && to === close - 1)) {
+          span = { from: node.from, to: node.to, body: doc.sliceString(from, to) };
+          return false;
+        }
+      }
+      if (node.from < from || node.to > to) {
+        splitsCode = true;
       }
       return false;
     },
   });
-  return span;
+  before.push(doc.sliceString(cursor, from));
+  const literalRuns = new Set<number>();
+  for (const [run] of before.join("").matchAll(/`+/g)) {
+    literalRuns.add(run.length);
+  }
+  return { span, splitsCode, literalRuns };
 }
 
-/** Toggle inline code so the rendered body is the whole selection. A full parse
- *  of the paragraph finds the span the selection is (or is the body of) and
+/** Toggle inline code so the rendered body is the whole selection. The
+ *  editor's tree finds the span the selection is (or is the body of) and
  *  unwraps it to that body; otherwise the selection is fenced past any backtick
- *  run inside, padded as CommonMark needs. */
+ *  run inside and any length an earlier unmatched run could pair with, padded
+ *  as CommonMark needs. The document stays as it is while the tree is not
+ *  final, and when a fence would split code or join a neighbouring backtick. */
 function toggleCode(state: EditorState): FormatSpec {
   const { from, to } = state.selection.main;
   const doc = state.doc;
+  const unchanged: FormatSpec = { changes: [], selection: state.selection.main };
 
   if (from === to) {
     return {
@@ -184,7 +208,11 @@ function toggleCode(state: EditorState): FormatSpec {
     };
   }
 
-  const span = selectedCodeSpan(doc, from, to);
+  const context = codeContext(state, from, to);
+  if (!context) {
+    return unchanged;
+  }
+  const { span } = context;
   if (span) {
     return {
       changes: { from: span.from, to: span.to, insert: span.body },
@@ -192,14 +220,14 @@ function toggleCode(state: EditorState): FormatSpec {
     };
   }
 
-  // A fence beside a backtick would join that run and take in text outside the
-  // selection, so leave the document as it is.
-  if (matchAt(doc, from - 1, "`") || matchAt(doc, to, "`")) {
-    return { changes: [], selection: state.selection.main };
+  // Code the selection only partly covers would be split; a fence beside a
+  // backtick would join that run and take in text outside the selection.
+  if (context.splitsCode || matchAt(doc, from - 1, "`") || matchAt(doc, to, "`")) {
+    return unchanged;
   }
 
   const text = doc.sliceString(from, to);
-  const source = codeSpanSource(text);
+  const source = codeSpanSource(text, context.literalRuns);
   const start = from + (source.length - text.length) / 2;
   return {
     changes: { from, to, insert: source },
