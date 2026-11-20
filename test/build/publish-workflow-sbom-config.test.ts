@@ -422,13 +422,15 @@ describe("CI rehearses the release SBOM sequence", () => {
 });
 
 // `id-token: write` is the Marketplace publish credential under Trusted
-// Publishing, and GitHub exposes it to every step of a job that holds it. So
-// the grant must sit only on the job that publishes, and that job must run no
-// third-party code beyond pnpm/action-setup. The `build` job keeps its own
-// grant for Sigstore — it runs anchore/sbom-action, which is exactly why the
-// Marketplace step may not live there. Read as text with the same caveats as
-// the suite above; flat `key: value` permission maps are the only form
-// accepted, so `permissions: write-all` or a flow map fails closed.
+// Publishing, and GitHub exposes it to every step of a job that holds it. With
+// a policy that matches on the workflow file rather than the job, a token
+// minted in ANY job of this file can publish. So only `publish` holds the
+// grant (for both Sigstore attestation and the Marketplace exchange) and runs
+// no third-party code beyond pnpm/action-setup; `build`, which runs
+// anchore/sbom-action, holds `contents: read` and nothing else. Read as text
+// with the same caveats as the suite above; flat `key: value` permission maps
+// are the only form accepted, so `permissions: write-all` or a flow map fails
+// closed.
 describe("release OIDC publish scope", () => {
   const workflow = stripComments(publishYml);
   const buildJob = jobBlock(workflow, "build", "publish.yml");
@@ -474,12 +476,12 @@ describe("release OIDC publish scope", () => {
   });
 
   it("scopes each job's token to what it uses", () => {
-    expect(permissionsAt(buildJob, 4)).toEqual([
+    expect(permissionsAt(buildJob, 4)).toEqual(["contents: read"]);
+    expect(permissionsAt(publishJob, 4)).toEqual([
       "attestations: write",
       "contents: read",
       "id-token: write",
     ]);
-    expect(permissionsAt(publishJob, 4)).toEqual(["contents: read", "id-token: write"]);
   });
 
   it("starts publish only after build succeeds", () => {
@@ -491,10 +493,10 @@ describe("release OIDC publish scope", () => {
 
   it("runs only first-party actions and pnpm/action-setup, SHA-pinned, in publish", () => {
     const uses = rawPublishJob.split("\n").filter((line) => /^\s*(?:- )?uses\s*:/.test(line));
-    expect(uses.length).toBeGreaterThanOrEqual(4);
+    expect(uses.length).toBeGreaterThanOrEqual(6);
     for (const line of uses) {
       expect(line).toMatch(
-        /^ {6,8}(?:- )?uses: (?:actions\/(?:checkout|setup-node|download-artifact)|pnpm\/action-setup)@[0-9a-f]{40} # v\d+\.\d+\.\d+$/
+        /^ {6,8}(?:- )?uses: (?:actions\/(?:checkout|setup-node|download-artifact|attest)|pnpm\/action-setup)@[0-9a-f]{40} # v\d+\.\d+\.\d+$/
       );
     }
     // Same flow-style guard as the gate suite: a `- { uses: … }` step would
@@ -511,25 +513,54 @@ describe("release OIDC publish scope", () => {
       /^ {8}run: pnpm exec vsce publish --oidc --no-dependencies --packagePath extension\.vsix$/m
     );
 
-    // build uploads only after audit + both attestations; publish downloads
-    // that same artifact before publishing.
+    // build uploads the .vsix and its SBOM only after the audit; publish
+    // downloads that same artifact, attests it, then publishes it.
     const buildSteps = stepNames(buildJob);
-    const upload = buildSteps.indexOf("Upload audited .vsix");
-    for (const gate of ["Audit .vsix contents", "Attest build provenance", "Attest SBOM"]) {
-      const at = buildSteps.indexOf(gate);
-      expect(at, gate).not.toBe(-1);
-      expect(at, gate).toBeLessThan(upload);
-    }
+    const audit = buildSteps.indexOf("Audit .vsix contents");
+    expect(audit).not.toBe(-1);
+    expect(audit).toBeLessThan(buildSteps.indexOf("Upload audited .vsix"));
     const uploadStep = stepBlock(buildJob, "Upload audited .vsix", "publish.yml");
-    expect(uploadStep).toMatch(/^ {10}path: extension\.vsix$/m);
+    expect(uploadStep).toMatch(/^ {10}path: \|\n {12}extension\.vsix\n {12}sbom\.spdx\.json$/m);
     expect(uploadStep).toMatch(/^ {10}name: extension-vsix$/m);
 
     const publishSteps = stepNames(publishJob);
-    const download = publishSteps.indexOf("Download audited .vsix");
-    expect(download).not.toBe(-1);
-    expect(download).toBeLessThan(publishSteps.indexOf("Publish to VS Code Marketplace"));
+    const order = [
+      "Download audited .vsix",
+      "Attest build provenance",
+      "Attest SBOM",
+      "Publish to VS Code Marketplace",
+      "Publish to Open VSX",
+    ].map((name) => [name, publishSteps.indexOf(name)] as const);
+    for (const [name, at] of order) {
+      expect(at, name).not.toBe(-1);
+    }
+    for (let i = 1; i < order.length; i++) {
+      expect(order[i][1], order[i][0]).toBeGreaterThan(order[i - 1][1]);
+    }
     expect(stepBlock(publishJob, "Download audited .vsix", "publish.yml")).toMatch(
       /^ {10}name: extension-vsix$/m
     );
+  });
+
+  // Attestation needs `id-token`, so it must live where the grant lives — and
+  // it must sign the downloaded bytes the registries then receive.
+  it("attests the downloaded .vsix in publish, never in build", () => {
+    expect(buildJob).not.toMatch(/actions\/attest@/);
+    expect(stepBlock(publishJob, "Attest build provenance", "publish.yml")).toMatch(
+      /^ {10}subject-path: extension\.vsix$/m
+    );
+    const sbom = stepBlock(publishJob, "Attest SBOM", "publish.yml");
+    expect(sbom).toMatch(/^ {10}subject-path: extension\.vsix$/m);
+    expect(sbom).toMatch(/^ {10}sbom-path: sbom\.spdx\.json$/m);
+  });
+
+  // A failed Marketplace publish must stop Open VSX, and both registries must
+  // ship the audited extension.vsix.
+  it("publishes to Open VSX from the same .vsix, with neither registry step allowed to fail open", () => {
+    const marketplace = stepBlock(publishJob, "Publish to VS Code Marketplace", "publish.yml");
+    const ovsx = stepBlock(publishJob, "Publish to Open VSX", "publish.yml");
+    expect(marketplace).not.toMatch(/continue-on-error/);
+    expect(ovsx).not.toMatch(/continue-on-error/);
+    expect(ovsx).toMatch(/^ {8}run: pnpm exec ovsx publish extension\.vsix$/m);
   });
 });

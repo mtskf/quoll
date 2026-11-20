@@ -27,16 +27,22 @@ on:
 # single job would hand publish rights to the third-party anchore/sbom-action,
 # the build toolchain and scripts/*. The old VSCE_PAT sat in one step's env;
 # the job boundary is the narrowest OIDC equivalent.
-#   - `build` (gates → build → SBOM → package → audit → attest → upload)
-#     needs `id-token: write` only for Sigstore signing in the attest steps,
-#     plus `attestations: write`. It holds no registry credential.
-#   - `publish` runs no third-party action besides pnpm/action-setup, and
-#     publishes the exact .vsix `build` audited and attested. It only starts
-#     after `build` succeeds (`needs:`), so every gate in `build` still blocks
-#     both registries.
-# The Trusted Publishing policy is assumed to match on the workflow FILE
-# (owner mtskf, repo quoll, workflow publish.yml, no environment), not on the
-# job — unverified; confirm on the first OIDC publish.
+#   - `build` (gates → build → SBOM → package → audit → upload) holds
+#     `contents: read` only — no `id-token`, so no step there can mint an
+#     OIDC token of any audience.
+#   - `publish` (download → attest → Marketplace → Open VSX) holds the only
+#     `id-token: write` (Sigstore signing for the attest steps AND the
+#     Marketplace exchange) plus `attestations: write`. It runs no
+#     third-party action besides pnpm/action-setup. It attests the bytes it
+#     downloaded, before either registry step, so the attested digest is the
+#     published one. It only starts after `build` succeeds (`needs:`), so
+#     every gate in `build` still blocks both registries.
+# Why the attest steps live in `publish` rather than `build`: the Trusted
+# Publishing policy is assumed to match on the workflow FILE (owner mtskf,
+# repo quoll, workflow publish.yml, no environment), not on the job —
+# unverified; confirm on the first OIDC publish. Under that policy a token
+# minted in `build` would be as good as one minted in `publish`, so any
+# `id-token` in `build` would hand publish rights to its third-party code.
 # (No `artifact-metadata: write` — that is only needed for registry storage
 # records, which this file-subject attestation does not create.)
 permissions:
@@ -47,8 +53,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
-      attestations: write
     steps:
       # All GitHub Actions are pinned to commit SHAs — supply-chain hardening.
       # The threat (tag remutation against a compromised maintainer / repo) applies
@@ -137,7 +141,7 @@ jobs:
       # drift from that baked default) catalogs the staging prod tree into an
       # SPDX SBOM: the shipped runtime dependency closure at exact resolved
       # versions, with devDependencies (vitest/biome/@types/*, etc.) excluded.
-      # That SBOM is bound to the .vsix digest by the Attest SBOM step below, so
+      # That SBOM is bound to the .vsix digest by `publish`'s Attest SBOM step, so
       # a consumer verifying the attestation sees only the shipped surface — no
       # false-positive advisory matches against build-only tooling.
       #
@@ -148,17 +152,18 @@ jobs:
       # future refinement. The verify step below pins the guarantees this SBOM
       # must hold.
       #
-      # Ordering: this is the only third-party action on the build→package→attest
+      # Ordering: this is the only third-party action on the build→package→upload
       # critical path (pnpm/action-setup is a third-party action too, but runs
       # earlier during setup, before any artifact exists), and it still runs
       # BEFORE Package .vsix, so audit-vsix (below) remains the last gate before
-      # attest + upload — a compromised action here cannot mutate an
-      # already-audited .vsix (none exists yet). It scans the staging tree, not
-      # the workspace, so it does not need the packaged .vsix. It runs in this
-      # job, which can mint OIDC tokens for Sigstore but holds no registry
-      # credential: Marketplace publishing lives in the separate `publish` job
-      # (see the header). Release-asset upload is disabled — `contents` is
-      # read-only; the SBOM is kept as the sbom-action workflow artifact instead.
+      # upload — a compromised action here cannot mutate an already-audited
+      # .vsix (none exists yet). It scans the staging tree, not the workspace,
+      # so it does not need the packaged .vsix. This job holds no `id-token`,
+      # so nothing here can mint an OIDC token: attestation and publishing both
+      # live in the separate `publish` job (see the header). Release-asset
+      # upload is disabled — `contents` is read-only; sbom.spdx.json travels to
+      # `publish` in the handoff artifact (and stays as the sbom-action workflow
+      # artifact too).
       #
       # `config:` is REQUIRED, not cosmetic: syft's package.json cataloger is
       # image-scan-only, so a directory scan of the lockfile-less staging tree
@@ -199,48 +204,27 @@ jobs:
       - name: Audit .vsix contents
         run: node scripts/audit-vsix.mjs extension.vsix
 
-      # Signed build provenance for the exact bytes we are about to publish, via
-      # the unified actions/attest (Provenance mode = no sbom-path). GitHub has
-      # folded the older attest-build-provenance / attest-sbom wrappers into this
-      # action (attest-sbom is deprecated), so we use the canonical core action
-      # for both legs. Attests extension.vsix against the workflow run through
-      # Sigstore; consumers verify with
-      # `gh attestation verify extension.vsix --repo mtskf/quoll`. Placed before
-      # publish so an attestation failure blocks the release rather than shipping
-      # an unattested artifact, and so the attested digest equals the bytes
-      # handed to Marketplace + Open VSX.
-      - name: Attest build provenance
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
-        with:
-          subject-path: extension.vsix
-
-      # Bind the SBOM to the same .vsix digest (SBOM mode = sbom-path) so a
-      # consumer can retrieve the dependency graph for the artifact they got.
-      - name: Attest SBOM
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
-        with:
-          subject-path: extension.vsix
-          sbom-path: sbom.spdx.json
-
-      # Hand the audited + attested bytes to `publish`. Uploaded only after
-      # both attest steps, so the artifact always has an attestation; the
-      # artifact digest is validated again on download.
+      # Hand the audited bytes and their SBOM to `publish`, which attests and
+      # publishes them. The artifact digest is validated again on download.
       - name: Upload audited .vsix
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: extension-vsix
-          path: extension.vsix
+          path: |
+            extension.vsix
+            sbom.spdx.json
           if-no-files-found: error
           retention-days: 1
 
   publish:
     needs: build
     runs-on: ubuntu-latest
-    # Only the Marketplace OIDC exchange. No `attestations: write`: the
-    # attestations were recorded in `build`.
+    # The only job that can mint OIDC tokens: Sigstore signing for the attest
+    # steps, and the Marketplace Trusted Publishing exchange.
     permissions:
       contents: read
       id-token: write
+      attestations: write
     steps:
       # First-party actions + pnpm/action-setup only — every step of this job
       # can mint a Marketplace publish token. Same pins as `build`.
@@ -264,6 +248,29 @@ jobs:
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: extension-vsix
+
+      # Signed build provenance for the exact bytes we are about to publish, via
+      # the unified actions/attest (Provenance mode = no sbom-path). GitHub has
+      # folded the older attest-build-provenance / attest-sbom wrappers into this
+      # action (attest-sbom is deprecated), so we use the canonical core action
+      # for both legs. Attests extension.vsix against the workflow run through
+      # Sigstore; consumers verify with
+      # `gh attestation verify extension.vsix --repo mtskf/quoll`. Placed before
+      # publish so an attestation failure blocks the release rather than shipping
+      # an unattested artifact, and so the attested digest equals the bytes
+      # handed to Marketplace + Open VSX.
+      - name: Attest build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: extension.vsix
+
+      # Bind the SBOM to the same .vsix digest (SBOM mode = sbom-path) so a
+      # consumer can retrieve the dependency graph for the artifact they got.
+      - name: Attest SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: extension.vsix
+          sbom-path: sbom.spdx.json
 
       # OIDC Trusted Publishing: vsce exchanges this job's GitHub OIDC token
       # (audience marketplace.visualstudio.com, via this job's
