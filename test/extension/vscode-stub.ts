@@ -209,12 +209,9 @@ export const workspace = {
   applyEdit: (_edit: unknown): Thenable<boolean> => Promise.resolve(true),
 };
 
-// Stub for `vscode.env`. QuollEditorPanel imports `env` to call
-// env.openExternal on inbound open-external messages (C4b). The stub
-// returns a settled-true Thenable so non-test paths that never trigger
-// open-external are unaffected; tests that exercise the open-external
-// arm install a per-test override before importing QuollEditorPanel.
+// Defaults to a local window and a successful env.openExternal call.
 export const env = {
+  remoteName: undefined as string | undefined,
   openExternal: (_url: { toString(): string }): Thenable<boolean> => Promise.resolve(true),
 };
 

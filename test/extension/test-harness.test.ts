@@ -64,23 +64,20 @@ describe("TestHarness.reset clears every override hook", () => {
   // added but its teardown is forgotten, the registry-wide clear still
   // catches it — and this test catches a reset() that stops clearing the
   // registry. No per-hook nulling exists for one to miss.
-  it("nulls all four override hooks through the single registry clear", () => {
+  it("nulls installed override hooks through the single registry clear", () => {
     const harness = new TestHarness();
     harness.applyEditOverride = async () => true;
     harness.webviewPostMessageOverride = async () => true;
-    harness.openExternalOverride = async () => true;
     harness.buildWebviewHtmlOverride = () => "<html></html>";
 
     expect(harness.applyEditOverride).not.toBeNull();
     expect(harness.webviewPostMessageOverride).not.toBeNull();
-    expect(harness.openExternalOverride).not.toBeNull();
     expect(harness.buildWebviewHtmlOverride).not.toBeNull();
 
     harness.reset();
 
     expect(harness.applyEditOverride).toBeNull();
     expect(harness.webviewPostMessageOverride).toBeNull();
-    expect(harness.openExternalOverride).toBeNull();
     expect(harness.buildWebviewHtmlOverride).toBeNull();
   });
 });
@@ -93,18 +90,16 @@ describe("TestHarness.clearEvents leaves override hooks intact", () => {
   // override; if clearEvents() ever started clearing `_overrides`, those
   // tests would break only at the slower E2E layer. This pins the
   // invariant at the unit layer so the regression surfaces immediately.
-  it("keeps all four override hooks set after clearEvents()", () => {
+  it("keeps installed override hooks set after clearEvents()", () => {
     const harness = new TestHarness();
     harness.applyEditOverride = async () => true;
     harness.webviewPostMessageOverride = async () => true;
-    harness.openExternalOverride = async () => true;
     harness.buildWebviewHtmlOverride = () => "<html></html>";
 
     harness.clearEvents();
 
     expect(harness.applyEditOverride).not.toBeNull();
     expect(harness.webviewPostMessageOverride).not.toBeNull();
-    expect(harness.openExternalOverride).not.toBeNull();
     expect(harness.buildWebviewHtmlOverride).not.toBeNull();
   });
 });

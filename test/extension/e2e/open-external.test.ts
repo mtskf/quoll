@@ -1,32 +1,71 @@
 import * as assert from "node:assert";
-import type { Uri } from "vscode";
+import { readFileSync } from "node:fs";
+import { ConfigurationTarget, workspace } from "vscode";
 import { PROTOCOL_VERSION } from "./constants";
-import { cleanupBetweenTests, getHarness, isDocumentEvent, openFixtureWithQuoll } from "./harness";
+import {
+  cleanupBetweenTests,
+  getHarness,
+  isDocumentEvent,
+  openFixtureWithQuoll,
+  tick,
+} from "./harness";
+
+function readExternalOpenLog(): string[] {
+  const logPath = process.env.QUOLL_E2E_EXTERNAL_OPEN_LOG;
+  assert.ok(logPath, "missing QUOLL_E2E_EXTERNAL_OPEN_LOG");
+  try {
+    return readFileSync(logPath, "utf8").split("\n").slice(0, -1);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    throw err;
+  }
+}
+
+function markExternalOpenLog(): number {
+  return readExternalOpenLog().length;
+}
+
+async function waitForExternalOpen(
+  mark: number,
+  expected: string,
+  timeoutMs = 8000
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let observed = readExternalOpenLog().slice(mark);
+  while (!observed.includes(expected)) {
+    if (Date.now() >= deadline) {
+      assert.fail(
+        `expected external open ${JSON.stringify(expected)}, observed ${JSON.stringify(observed)}`
+      );
+    }
+    await tick();
+    observed = readExternalOpenLog().slice(mark);
+  }
+}
 
 /**
- * Integration coverage for `case "open-external"` in QuollEditorPanel.handleInbound.
- *
- * The unit suite (test/extension/handle-open-external.test.ts) pins
- * `handleOpenExternal` in isolation, but the case-arm's wiring — label
- * spelling, fallthrough behaviour, delegate target — has zero coverage.
- * A typo on the case label, an accidental fallthrough, or a swapped
- * delegate target would be invisible to CI.
- *
- * The production closure builds the encoding-preserving `Uri` via
- * `buildExternalUri` (WHATWG split + `Uri.from`) BEFORE the override
- * boundary, so `openExternalOverride` now receives the fully-built
- * `vscode.Uri` env.openExternal would open — NOT a pre-Uri string. These
- * tests therefore pin the full production handoff
- * `closure → buildExternalUri → Uri → env.openExternal`, and the byte-exact
- * test below proves `%2F`/`+` survive that path. The harness seam is used
- * because the test process cannot spy on `env.openExternal` through the
- * vscode module namespace.
+ * Exercises the panel's open-external wiring through VS Code's real opener.
+ * The configured browser and PATH shims record the final URL argument.
+ * Loopback hosts pass the trusted-domain check without a dialog.
  */
-describe("open-external", function () {
-  this.timeout(15000);
+const describeExternalOpen = process.platform === "win32" ? describe.skip : describe;
+
+describeExternalOpen("open-external", function () {
+  this.timeout(20000);
 
   before(async () => {
-    await getHarness(); // force activation before any test in this file runs
+    await getHarness();
+    await workspace
+      .getConfiguration("workbench")
+      .update("externalBrowser", "quoll-e2e-browser", ConfigurationTarget.Global);
+  });
+
+  after(async () => {
+    await workspace
+      .getConfiguration("workbench")
+      .update("externalBrowser", undefined, ConfigurationTarget.Global);
   });
 
   afterEach(async () => {
@@ -34,153 +73,50 @@ describe("open-external", function () {
     await cleanupBetweenTests(harness);
   });
 
-  it("invokes openExternal with the allowlisted href for a safe URL", async () => {
+  it("hands off an allowlisted URL", async () => {
+    const mark = markExternalOpenLog();
     const harness = await getHarness();
     await openFixtureWithQuoll("sample.md");
     await harness.waitForEvent(isDocumentEvent, 8000);
-
-    const calls: string[] = [];
-    harness.openExternalOverride = async (uri: Uri): Promise<boolean> => {
-      calls.push(uri.toString(true));
-      return true;
-    };
 
     const panel = harness.activePanel;
     assert.ok(panel, "no active panel after openFixtureWithQuoll");
     panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "open-external",
-      href: "https://example.com",
+      href: "http://localhost:9",
     });
 
-    // handleOpenExternal is synchronous through the gate; the override
-    // resolves on the microtask queue. Two awaits flush both the `then`
-    // continuation and any timer setup.
-    await Promise.resolve();
-    await Promise.resolve();
-
-    assert.deepStrictEqual(
-      calls,
-      ["https://example.com/"],
-      "expected env.openExternal to be invoked once with the safe URL (new URL() adds the trailing / on a bare authority)"
-    );
+    await waitForExternalOpen(mark, "http://localhost:9");
   });
 
-  it("does NOT invoke openExternal for a javascript: URL", async () => {
+  it("hands the OS the original string byte-for-byte", async () => {
+    const mark = markExternalOpenLog();
     const harness = await getHarness();
     await openFixtureWithQuoll("sample.md");
     await harness.waitForEvent(isDocumentEvent, 8000);
 
-    const calls: string[] = [];
-    harness.openExternalOverride = async (uri: Uri): Promise<boolean> => {
-      calls.push(uri.toString(true));
-      return true;
-    };
-
-    const panel = harness.activePanel;
-    assert.ok(panel);
-    panel.simulateInbound({
-      protocol: PROTOCOL_VERSION,
-      type: "open-external",
-      href: "javascript:alert(1)",
-    });
-
-    await Promise.resolve();
-    await Promise.resolve();
-
-    assert.deepStrictEqual(
-      calls,
-      [],
-      "expected the allowlist gate to drop the javascript: URL — openExternal must not be reached"
-    );
-  });
-
-  it("does NOT invoke openExternal for a fragment-only URL (allowlist-true but unlaunchable)", async () => {
-    // Pins the OPENABLE_SCHEMES fallthrough at the integration boundary:
-    // `#frag` passes `isAllowedUrl` (no scheme to reject) but has no
-    // launchable scheme, so handleOpenExternal's second gate refuses to
-    // delegate. A regression that widened OPENABLE_SCHEMES to include
-    // schemeless URLs would surface here.
-    const harness = await getHarness();
-    await openFixtureWithQuoll("sample.md");
-    await harness.waitForEvent(isDocumentEvent, 8000);
-
-    const calls: string[] = [];
-    harness.openExternalOverride = async (uri: Uri): Promise<boolean> => {
-      calls.push(uri.toString(true));
-      return true;
-    };
-
-    const panel = harness.activePanel;
-    assert.ok(panel);
-    panel.simulateInbound({
-      protocol: PROTOCOL_VERSION,
-      type: "open-external",
-      href: "#frag",
-    });
-
-    await Promise.resolve();
-    await Promise.resolve();
-
-    assert.deepStrictEqual(
-      calls,
-      [],
-      "expected OPENABLE_SCHEMES fallthrough to drop the fragment-only URL — openExternal must not be reached"
-    );
-  });
-
-  it("hands env.openExternal a Uri that preserves %2F and + byte-exactly", async () => {
-    const harness = await getHarness();
-    await openFixtureWithQuoll("sample.md");
-    await harness.waitForEvent(isDocumentEvent, 8000);
-
-    const calls: string[] = [];
-    harness.openExternalOverride = async (uri: Uri): Promise<boolean> => {
-      calls.push(uri.toString(true));
-      return true;
-    };
-
-    const raw = "https://gitlab.com/api/v4/projects/foo%2Fbar/pipelines?q=a+b";
+    const raw = "https://localhost:9/p/foo%2Fbar%20baz/日本語?q=a+b%20c&r=%26#x%20y";
     const panel = harness.activePanel;
     assert.ok(panel);
     panel.simulateInbound({ protocol: PROTOCOL_VERSION, type: "open-external", href: raw });
 
-    await Promise.resolve();
-    await Promise.resolve();
-
-    // toString(true) is the skipEncoding form VS Code's opener feeds to
-    // encodeURI(...) (which leaves %2F / + untouched) — so this is what reaches
-    // the browser. The old Uri.parse path would show `.../foo/bar/...?q=a+b`.
-    assert.deepStrictEqual(calls, [raw], "expected the built Uri to preserve %2F and +");
+    await waitForExternalOpen(mark, raw);
   });
 
-  it("still reaches openExternal via the Uri.parse fallback when WHATWG rejects the href", async () => {
-    // "https://" passes isAllowedUrl (scheme-only check) but has no host, so
-    // `new URL()` throws inside splitExternalUrl — buildExternalUri falls back
-    // to `Uri.parse(href)` (see build-external-uri.ts's FALLBACK doc). This
-    // pins that the fallback does not throw synchronously and still reaches
-    // env.openExternal through handleOpenExternal's try/catch (review fix #6).
+  it("still hands off the next URL after an empty authority", async () => {
+    const mark = markExternalOpenLog();
     const harness = await getHarness();
     await openFixtureWithQuoll("sample.md");
     await harness.waitForEvent(isDocumentEvent, 8000);
 
-    const calls: string[] = [];
-    harness.openExternalOverride = async (uri: Uri): Promise<boolean> => {
-      calls.push(uri.toString(true));
-      return true;
-    };
-
+    const sentinel = "http://127.0.0.1:9/sentinel";
     const panel = harness.activePanel;
     assert.ok(panel);
+    // The rejected https:// open raises an expected error toast.
     panel.simulateInbound({ protocol: PROTOCOL_VERSION, type: "open-external", href: "https://" });
+    panel.simulateInbound({ protocol: PROTOCOL_VERSION, type: "open-external", href: sentinel });
 
-    await Promise.resolve();
-    await Promise.resolve();
-
-    assert.strictEqual(
-      calls.length,
-      1,
-      "expected the Uri.parse fallback to reach env.openExternal exactly once, without throwing"
-    );
+    await waitForExternalOpen(mark, sentinel);
   });
 });

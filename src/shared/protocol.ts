@@ -470,14 +470,14 @@ export type EditMessage = Envelope & {
 /** Webview→host request to open an external URL. The webview's click
  *  handler (link-handlers.ts) posts this after a local sanity check
  *  (decodeMarkdownDestination + isAllowedUrl); the host (QuollEditorPanel)
- *  RE-validates via isAllowedUrl before calling env.openExternal — defense
+ *  RE-validates via isAllowedUrl before opening the URL — defense
  *  in depth so a malicious or buggy webview cannot bypass the URL gate.
  *
  *  `href` is the already-decoded URL string (post
  *  decodeMarkdownDestination) — NOT raw Markdown source bytes. The host
- *  feeds it to isAllowedUrl, then rebuilds the URL via `buildExternalUri`
- *  (WHATWG split + `Uri.from`) so path/query percent-encoding (`%2F`/`+`)
- *  reaches the browser intact — no `Uri.parse` round-trip, no further decode. */
+ *  passes it verbatim to `vscode.open` for local HTTP(S), preserving
+ *  percent-encoding at the OS handoff. Mailto links and remote windows
+ *  use `env.openExternal(buildExternalUri(href))`. */
 export type OpenExternalMessage = Envelope & {
   type: "open-external";
   href: string;

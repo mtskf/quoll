@@ -171,16 +171,6 @@ interface TestOverrides {
    *  post-records-accepted-only.test to pin that `recordEvent` only
    *  fires on `ok === true`. */
   webviewPostMessage: ((message: HostToWebview) => Thenable<boolean>) | null;
-  /** When non-null, the panel's `case "open-external"` arm routes
-   *  `handleOpenExternal`'s injected `openExternal` dep through this
-   *  instead of `(uri) => env.openExternal(uri)`. The production closure
-   *  builds the encoding-preserving `Uri` via `buildExternalUri(href)`
-   *  BEFORE this override boundary, so the override sees the fully-built
-   *  `vscode.Uri` env.openExternal would open — letting the open-external
-   *  E2E assert the exact Uri (and its byte-exact `%2F`/`+` preservation)
-   *  without depending on the real `env` binding (which the test process
-   *  cannot spy on through the vscode module namespace). */
-  openExternal: ((uri: Uri) => Thenable<boolean>) | null;
   /** When non-null, the panel's `case "open-link"` arm routes
    *  `handleOpenLink`'s injected `openWith` dep through this instead of
    *  `(uri) => openInQuollEditor(uri, QuollEditorPanel.viewType)`. The
@@ -237,7 +227,6 @@ function createOverrides(): TestOverrides {
   return {
     applyEdit: null,
     webviewPostMessage: null,
-    openExternal: null,
     openLink: null,
     openCodeReference: null,
     codeReferenceExists: null,
@@ -309,17 +298,6 @@ export class TestHarness {
 
   set webviewPostMessageOverride(override: ((message: HostToWebview) => Thenable<boolean>) | null) {
     this._overrides.webviewPostMessage = override;
-  }
-
-  /** Read by the panel's `case "open-external"` arm to route the
-   *  `openExternal` dep through a test override — see
-   *  `TestOverrides.openExternal`. Receives the built `vscode.Uri`. */
-  get openExternalOverride(): ((uri: Uri) => Thenable<boolean>) | null {
-    return this._overrides.openExternal;
-  }
-
-  set openExternalOverride(override: ((uri: Uri) => Thenable<boolean>) | null) {
-    this._overrides.openExternal = override;
   }
 
   /** Read by the panel's `case "open-link"` arm to route the
