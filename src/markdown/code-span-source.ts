@@ -25,10 +25,16 @@ export function codeSpanStripsEdges(body: string): boolean {
 }
 
 /** Fence `text` as an inline-code span. Content is verbatim (never escaped).
- *  The body starts `(source.length - text.length) / 2` chars in. */
-export function codeSpanSource(text: string): string {
+ *  The body starts `(source.length - text.length) / 2` chars in. The fence
+ *  skips every length in `avoid`: an unmatched backtick run of that length
+ *  earlier in the same block would take the new opener as its closer. */
+export function codeSpanSource(text: string, avoid: ReadonlySet<number> = new Set()): string {
   const longest = longestBacktickRun(text);
-  const fence = "`".repeat(longest + 1);
+  let fenceLength = longest + 1;
+  while (avoid.has(fenceLength)) {
+    fenceLength++;
+  }
+  const fence = "`".repeat(fenceLength);
   const pad = longest > 0 || codeSpanStripsEdges(text) ? " " : "";
   return `${fence}${pad}${text}${pad}${fence}`;
 }
