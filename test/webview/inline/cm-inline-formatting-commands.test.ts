@@ -1,3 +1,4 @@
+import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
 import { EditorSelection, EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
 import { gfmParser } from "../../../src/markdown/gfm-parser.js";
@@ -342,5 +343,62 @@ describe("computeInlineFormat — code keeps the whole selection", () => {
     const r = applyFormat(doc, { anchor: start, head: end }, "code");
     expect(r.doc).toBe(doc);
     expect([r.from, r.to]).toEqual([start, end]);
+  });
+
+  it("leaves the document as it is when the selection starts a span and ends inside it", () => {
+    // Fencing "`a" would render it whole, but only by breaking `ab` apart.
+    const doc = "`ab` c";
+    const r = applyFormat(doc, { anchor: 0, head: 2 }, "code");
+    expect(r.doc).toBe(doc);
+    expect([r.from, r.to]).toEqual([0, 2]);
+  });
+
+  it("leaves part of an indented code block alone", () => {
+    // Fencing from the line start would end the code block and render that
+    // text as a code span in a paragraph.
+    const doc = "para\n\n    code `x` here\n";
+    const from = doc.indexOf("    code");
+    const to = from + "    code".length;
+    const r = applyFormat(doc, { anchor: from, head: to }, "code");
+    expect(r.doc).toBe(doc);
+    expect([r.from, r.to]).toEqual([from, to]);
+  });
+
+  it("leaves the document as it is when the fence would open a fenced block at a line start", () => {
+    // Earlier runs of 1 and 2 push the fence to three backticks, which at the
+    // start of a line opens a fenced code block instead of a code span.
+    const doc = "x ` and ``\nfoo\nbar rest\ntrailing";
+    const from = doc.indexOf("foo");
+    const to = doc.indexOf(" rest");
+    const r = applyFormat(doc, { anchor: from, head: to }, "code");
+    expect(r.doc).toBe(doc);
+    expect([r.from, r.to]).toEqual([from, to]);
+  });
+
+  describe("after the parse has run ahead of the state's stored tree", () => {
+    // About 112KB: the state's own parse stops short of the tail, and
+    // ensureSyntaxTree advances only the parse, not the tree the state holds.
+    const filler = "lorem ipsum dolor sit amet\n\n".repeat(4000);
+    const doc = `${filler}tail \`foobar\` end`;
+    const span = doc.indexOf("`foobar`");
+
+    function parsedAhead(start: number, end: number): EditorState {
+      const state = codeStateFor(doc, { anchor: start, head: end });
+      ensureSyntaxTree(state, doc.length, 20_000);
+      expect(syntaxTree(state).length).toBeLessThan(doc.length);
+      return state;
+    }
+
+    function run(state: EditorState): string {
+      return state.update(computeInlineFormat(state, "code")).state.doc.toString();
+    }
+
+    it("unwraps a whole selected span past the stored tree's end", () => {
+      expect(run(parsedAhead(span, span + 8))).toBe(`${filler}tail foobar end`);
+    });
+
+    it("leaves the middle of a span past the stored tree's end alone", () => {
+      expect(run(parsedAhead(span + 2, span + 5))).toBe(doc);
+    });
   });
 });
