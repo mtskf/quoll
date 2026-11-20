@@ -293,10 +293,14 @@ describe("linkReveal — the clickable marker tracks actionability", () => {
 
 describe("linkReveal — a bare URL as the label", () => {
   // Lezer emits the label's GFM autolink as a `URL` child of the Link too, so
-  // only the URL right after the `(` mark is the destination.
+  // only the first URL after the `(` mark is the destination.
   it.each([
     ["[https://a.test](https://b.test)\n\nx", "https://a.test"],
     ["see [https://a.test/p](https://a.test/p) here\n\nx", "https://a.test/p"],
+    // Destination on a blockquote continuation line: a QuoteMark sits between
+    // the `(` mark and the URL.
+    ["> [https://a.test](\n> https://b.test)\n\nx", "https://a.test"],
+    ["> > [https://a.test](\n> > https://b.test)\n\nx", "https://a.test"],
   ])("keeps the label visible and marks it clickable: %j", (doc, label) => {
     const decos = decosOf(linkReveal.build(ctx(doc, EditorSelection.single(doc.length))));
     const labelFrom = doc.indexOf(label);
@@ -309,5 +313,11 @@ describe("linkReveal — a bare URL as the label", () => {
     expect(decos.filter((d) => d.kind === "clickable")).toEqual([
       { from: labelFrom, to: labelTo, kind: "clickable", class: "quoll-link-clickable" },
     ]);
+  });
+
+  it("decorates nothing for reference form, even though the label is a URL", () => {
+    const doc = "[https://a.test][ref]\n\n[ref]: https://b.test\n\nx";
+    const decos = decosOf(linkReveal.build(ctx(doc, EditorSelection.single(doc.length))));
+    expect(decos.filter((d) => d.kind === "hide" || d.kind === "clickable")).toEqual([]);
   });
 });

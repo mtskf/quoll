@@ -1084,11 +1084,24 @@ describe("tryOpenLinkAt — a bare URL as the label", () => {
   it.each([
     ["[https://a.test](https://b.test)\n\nx", "https://a.test", "https://b.test"],
     ["see [https://a.test/p](https://b.test/q) here\n\nx", "https://a.test/p", "https://b.test/q"],
+    // Destination on a blockquote continuation line: a QuoteMark sits between
+    // the `(` mark and the URL.
+    ["> [https://a.test](\n> https://b.test)\n\nx", "https://a.test", "https://b.test"],
+    ["> > [https://a.test](\n> > https://b.test)\n\nx", "https://a.test", "https://b.test"],
   ])("opens the destination, not the label's autolink: %j", (doc, label, href) => {
     const posted: WebviewToHost[] = [];
     const host: LinkOpenHost = { postMessage: (m) => posted.push(m) };
     const state = stateOf(doc, { anchor: doc.length });
     expect(tryOpenLinkAt(state, posOf(doc, label) + 1, host, noScroll)).toBe(true);
     expect(posted).toEqual([{ protocol: PROTOCOL_VERSION, type: "open-external", href }]);
+  });
+
+  it("opens nothing for reference form, even though the label is a URL", () => {
+    const doc = "[https://a.test][ref]\n\n[ref]: https://b.test\n\nx";
+    const posted: WebviewToHost[] = [];
+    const host: LinkOpenHost = { postMessage: (m) => posted.push(m) };
+    const state = stateOf(doc, { anchor: doc.length });
+    expect(tryOpenLinkAt(state, posOf(doc, "https://a.test") + 1, host, noScroll)).toBe(false);
+    expect(posted).toEqual([]);
   });
 });
