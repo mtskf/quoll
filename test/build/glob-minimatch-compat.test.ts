@@ -57,7 +57,8 @@ describe("glob / minimatch lockfile compatibility", () => {
   });
 
   it("parses a CRLF lockfile the same as an LF one", () => {
-    expect(snapshots(lock.replace(/\n/g, "\r\n"))).toEqual(all);
+    const lf = lock.replace(/\r\n/g, "\n");
+    expect(snapshots(lf.replace(/\n/g, "\r\n"))).toEqual(snapshots(lf));
   });
 
   it("pairs minimatch 11+ only with a glob that can drive it", () => {
