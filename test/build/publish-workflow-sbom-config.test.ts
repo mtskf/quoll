@@ -88,6 +88,29 @@ const mappingKeys = (text: string, pattern: RegExp) =>
 const jobAttributeKeys = (job: string) =>
   mappingKeys(job, /^ {4}(?:"([^"]*)"|'([^']*)'|([^\s:]+))\s*:/gm);
 
+// A workflow-wide or job-level defaults.run.shell can discard a gate's exit
+// code. Pin the surrounding key sets and keep step keys visible to text scans.
+const topLevelKeys = (yaml: string) =>
+  mappingKeys(stripComments(yaml), /^(?:"([^"]*)"|'([^']*)'|([^\s:]+))\s*:/gm);
+
+function expectBlockSteps(job: string) {
+  // Flow-mapped steps hide their attributes mid-line from the text helpers.
+  for (const step of job.split("\n").filter((line) => /^ {6}- /.test(line))) {
+    expect(step).toMatch(/^ {6}- (?:name|uses): [^\s{[&*!]/);
+  }
+}
+
+// Unnamed setup steps also occupy a slot, so an insertion between two
+// named steps is visible to the ordering checks.
+const stepLabels = (job: string) =>
+  job
+    .split("\n")
+    .filter((line) => /^ {6}- /.test(line))
+    .map((line) => {
+      const named = line.match(/^ {6}- name: (.*)$/);
+      return named ? named[1] : "<unnamed step>";
+    });
+
 describe("release SBOM cataloger wiring", () => {
   const workflow = stripComments(publishYml);
   const syftConfig = stripComments(read(".github/syft-release.yaml"));
@@ -221,25 +244,6 @@ describe("CI rehearses the release SBOM sequence", () => {
   // named step inserted between Generate and Verify in one file only, a
   // reordering, or a duplicate step name all leave every assertion above green.
   // Pin the sequence itself.
-  // EVERY step, not just the named ones. Anchored to the step indent (6 spaces
-  // inside a job) rather than trimmed, so a `- `-looking line inside a future
-  // `run: |` block scalar cannot shift the sequence.
-  //
-  // Unnamed steps must appear here or the adjacency assertion below has a hole:
-  // this repo writes every `actions/*` setup step as a bare `- uses:`, and
-  // splicing one BETWEEN two shared steps is invisible to a names-only list —
-  // the equality blocks stop at it (stepBlock terminates on `- `), so nothing
-  // else would catch it either. Placeholder-name the unnamed ones so they still
-  // occupy a slot in the ordering.
-  const stepLabels = (job: string) =>
-    job
-      .split("\n")
-      .filter((line) => /^ {6}- /.test(line))
-      .map((line) => {
-        const named = line.match(/^ {6}- name: (.*)$/);
-        return named ? named[1] : "<unnamed step>";
-      });
-
   it.each([
     ["publish.yml", releaseBuildJob],
     ["ci.yml", sbomJob],
@@ -323,94 +327,10 @@ describe("CI rehearses the release SBOM sequence", () => {
   // task. Read these as a tripwire for the plausible mid-release edit, not as
   // proof the gate cannot be un-gated.
 
-  // Same idea at the top of the file, where a workflow-wide `defaults:` would
-  // live — no job block would ever show it.
-  const topLevelKeys = (yaml: string) =>
-    mappingKeys(stripComments(yaml), /^(?:"([^"]*)"|'([^']*)'|([^\s:]+))\s*:/gm);
-
-  // A `run:` step's shell comes from the job's — or the workflow's —
-  // `defaults.run.shell`, and a custom shell template's exit code IS the step
-  // outcome, so `shell: bash -c "bash {0}; exit 0" bash` runs every command and
-  // discards every failure without touching a single step block. Pin the key
-  // SETS instead of blocklisting the attribute: each job declares exactly the
-  // keys listed (publish.yml's `build` adds only its per-job `permissions`,
-  // which cannot change a shell), and neither file declares anything at the
-  // top level beyond its trigger and permissions.
-  it.each([
-    [
-      "publish.yml",
-      publishYml,
-      releaseBuildJob,
-      ["permissions", "runs-on", "steps"],
-      ["name", "on", "permissions", "jobs"],
-    ],
-    [
-      "ci.yml",
-      ciYml,
-      sbomJob,
-      ["runs-on", "steps"],
-      ["name", "on", "permissions", "concurrency", "jobs"],
-    ],
-  ])("keeps the gate's execution context unmodified in %s", (_label, raw, job, jobKeys, top) => {
-    expect(jobAttributeKeys(job)).toEqual(jobKeys);
-    expect(topLevelKeys(raw)).toEqual([...top].sort());
-    // Every step opens block-style. A flow-mapped step — `- { name: …, if:
-    // always(), run: … }` — is valid YAML that GHA honours, and it carries its
-    // keys mid-line where no line-oriented helper in this file can see them:
-    // `ifScalars` misses the `if:`, `stepLabels` reads it as an unnamed step,
-    // and the non-vacuity guard still finds the Open VSX step's block-style
-    // `if:` and passes. Requiring a plain `name`/`uses` scalar after the dash
-    // forces attributes onto their own lines, where the rest of this file works.
-    for (const step of job.split("\n").filter((line) => /^ {6}- /.test(line))) {
-      expect(step).toMatch(/^ {6}- (?:name|uses): [^\s{[&*!]/);
-    }
-  });
-
-  // In publish.yml a red verify step blocks the release solely because every
-  // later step carries the implicit `if: success()`. `if: always()` on Package /
-  // Audit / Publish ships the release — unattested — straight past a failed
-  // gate. GHA resurrects a step after a failure through exactly three status
-  // functions, and its expression language is case-insensitive, so read each
-  // `if:` as a whole scalar (a folded `if: >-` puts the expression on the NEXT
-  // line) and reject those three however they are cased.
-  const ifScalars = (job: string) => {
-    const lines = job.split("\n");
-    const scalars: string[] = [];
-    lines.forEach((line, i) => {
-      const match = line.match(/^(\s*)(?:"if"|'if'|if)\s*:(.*)$/);
-      if (!match) {
-        return;
-      }
-      const indent = match[1].length;
-      const continuation: string[] = [];
-      for (const next of lines.slice(i + 1)) {
-        if (next.trim() !== "" && next.length - next.trimStart().length <= indent) {
-          break;
-        }
-        continuation.push(next);
-      }
-      scalars.push([match[2], ...continuation].join("\n"));
-    });
-    return scalars;
-  };
-
-  // The publish steps now live in a second job, reached only through
-  // `needs: build` — so a red gate in `build` blocks them only while that job
-  // keeps the implicit `if: success()` too. The `publish` job's key set is
-  // pinned in the OIDC-scope suite below (no job-level `if:` at all); here its
-  // step-level `if:`s are read alongside `build`'s.
-  it("keeps a red gate blocking every later publish.yml step", () => {
-    const scalars = [
-      ...ifScalars(releaseBuildJob),
-      ...ifScalars(jobBlock(stripComments(publishYml), "publish", "publish.yml")),
-    ];
-    // Non-vacuity: publish.yml has exactly one `if:` today (the Open VSX step's
-    // token check). An empty result would satisfy the loop below while proving
-    // the collector never collected.
-    expect(scalars.filter((s) => s.includes("OVSX_PAT"))).toHaveLength(1);
-    for (const scalar of scalars) {
-      expect(scalar).not.toMatch(/(?:always|failure|cancelled)\s*\(/i);
-    }
+  it("keeps the gate's execution context unmodified in ci.yml", () => {
+    expect(jobAttributeKeys(sbomJob)).toEqual(["runs-on", "steps"]);
+    expect(topLevelKeys(ciYml)).toEqual(["concurrency", "jobs", "name", "on", "permissions"]);
+    expectBlockSteps(sbomJob);
   });
 
   // The ci.yml rehearsal only rehearses if it can FAIL the PR — which also
@@ -421,21 +341,45 @@ describe("CI rehearses the release SBOM sequence", () => {
   });
 });
 
-// `id-token: write` is the Marketplace publish credential under Trusted
-// Publishing, and GitHub exposes it to every step of a job that holds it. With
-// a policy that matches on the workflow file rather than the job, a token
-// minted in ANY job of this file can publish. So only `publish` holds the
-// grant (for both Sigstore attestation and the Marketplace exchange) and runs
-// no third-party code beyond pnpm/action-setup; `build`, which runs
-// anchore/sbom-action, holds `contents: read` and nothing else. Read as text
-// with the same caveats as the suite above; flat `key: value` permission maps
-// are the only form accepted, so `permissions: write-all` or a flow map fails
-// closed.
-describe("release OIDC publish scope", () => {
+describe("registry split layout", () => {
   const workflow = stripComments(publishYml);
-  const buildJob = jobBlock(workflow, "build", "publish.yml");
-  const publishJob = jobBlock(workflow, "publish", "publish.yml");
-  const rawPublishJob = jobBlock(publishYml, "publish", "publish.yml");
+  const label = "publish.yml";
+  const jobNames = [
+    ...workflow.slice(workflow.indexOf("\njobs:\n")).matchAll(/^ {2}(\S[^:\n]*):/gm),
+  ].map((match) => match[1]);
+  const expectedJobs = ["build", "attest", "publish-marketplace", "publish-openvsx"];
+  const buildJob = jobBlock(workflow, "build", label);
+
+  function needs(job: string): string[] {
+    const flow = job.match(/^ {4}needs: \[([a-z-]+(?:, [a-z-]+)*)\]$/m);
+    if (!flow) {
+      throw new Error("expected needs in flow style");
+    }
+    return flow[1].split(", ");
+  }
+
+  it("declares exactly the build, attest and registry jobs", () => {
+    expect(jobNames).toEqual(expectedJobs);
+  });
+
+  it("keeps the build gate's execution context unmodified", () => {
+    expect(topLevelKeys(publishYml)).toEqual(["jobs", "name", "on", "permissions"]);
+    expect(jobAttributeKeys(buildJob)).toEqual(["outputs", "permissions", "runs-on", "steps"]);
+    expectBlockSteps(buildJob);
+  });
+
+  it.each([
+    { name: "attest", dependencies: ["build"] },
+    { name: "publish-marketplace", dependencies: ["build", "attest"] },
+    { name: "publish-openvsx", dependencies: ["build", "attest", "publish-marketplace"] },
+  ])("gates $name on its predecessors", ({ name, dependencies }) => {
+    // Directly needing build makes its output available to every consumer.
+    // The preceding job's success is required for the next job to run.
+    const job = jobBlock(workflow, name, label);
+    expect(jobAttributeKeys(job)).toEqual(["needs", "permissions", "runs-on", "steps"]);
+    expect(needs(job)).toEqual(dependencies);
+    expectBlockSteps(job);
+  });
 
   // The `permissions:` mapping opened at `indent`, as sorted `key: value`
   // lines; null when no block-style mapping opens there.
@@ -457,124 +401,172 @@ describe("release OIDC publish scope", () => {
     return entries.sort();
   };
 
-  const stepNames = (job: string) =>
-    job
-      .split("\n")
-      .filter((line) => /^ {6}- /.test(line))
-      .map((line) => line.match(/^ {6}- name: (.*)$/)?.[1] ?? "<unnamed step>");
-
   it("grants nothing beyond read at the workflow level", () => {
     expect(permissionsAt(workflow, 0)).toEqual(["contents: read"]);
   });
 
-  it("declares exactly the build and publish jobs", () => {
-    const afterJobs = workflow.slice(workflow.indexOf("\njobs:\n"));
-    expect([...afterJobs.matchAll(/^ {2}(\S[^:]*):\s*$/gm)].map((m) => m[1])).toEqual([
-      "build",
-      "publish",
-    ]);
+  it.each([
+    { name: "build", permissions: ["contents: read"] },
+    { name: "attest", permissions: ["attestations: write", "contents: read", "id-token: write"] },
+    { name: "publish-marketplace", permissions: ["contents: read", "id-token: write"] },
+    { name: "publish-openvsx", permissions: ["contents: read"] },
+  ])("scopes $name to the permissions it uses", ({ name, permissions }) => {
+    // Every step with id-token can mint an OIDC token for Trusted Publishing.
+    expect(permissionsAt(jobBlock(workflow, name, label), 4)).toEqual(permissions);
   });
 
-  it("scopes each job's token to what it uses", () => {
-    expect(permissionsAt(buildJob, 4)).toEqual(["contents: read"]);
-    expect(permissionsAt(publishJob, 4)).toEqual([
-      "attestations: write",
-      "contents: read",
-      "id-token: write",
-    ]);
+  const publisherActions = [
+    "actions/checkout",
+    "pnpm/action-setup",
+    "actions/setup-node",
+    "actions/download-artifact",
+  ];
+
+  it.each([
+    { name: "attest", actions: ["actions/download-artifact", "actions/attest", "actions/attest"] },
+    { name: "publish-marketplace", actions: publisherActions },
+    { name: "publish-openvsx", actions: publisherActions },
+  ])("runs only the SHA-pinned actions needed by $name", ({ name, actions }) => {
+    const rawJob = jobBlock(publishYml, name, label);
+    const uses = rawJob.split("\n").filter((line) => /^\s*(?:- )?uses\s*:/.test(line));
+    expect(
+      uses.map(
+        (line) =>
+          line.match(/^ {6,8}(?:- )?uses: ([\w.-]+\/[\w.-]+)@[0-9a-f]{40} # v\d+\.\d+\.\d+$/)?.[1]
+      )
+    ).toEqual(actions);
   });
 
-  it("starts publish only after build succeeds", () => {
-    // No job-level `if:` (so no `always()` past a red `build`), no
-    // `defaults:` shell override, no `environment:` the policy does not name.
-    expect(jobAttributeKeys(publishJob)).toEqual(["needs", "permissions", "runs-on", "steps"]);
-    expect(publishJob).toMatch(/^ {4}needs: build$/m);
-  });
+  const attestSteps = ["Attest build provenance", "Attest SBOM"];
 
-  it("runs only first-party actions and pnpm/action-setup, SHA-pinned, in publish", () => {
-    const uses = rawPublishJob.split("\n").filter((line) => /^\s*(?:- )?uses\s*:/.test(line));
-    expect(uses.length).toBeGreaterThanOrEqual(6);
-    for (const line of uses) {
-      expect(line).toMatch(
-        /^ {6,8}(?:- )?uses: (?:actions\/(?:checkout|setup-node|download-artifact|attest)|pnpm\/action-setup)@[0-9a-f]{40} # v\d+\.\d+\.\d+$/
-      );
+  it("attests the downloaded VSIX and its SBOM only in attest", () => {
+    const attest = jobBlock(workflow, "attest", label);
+    for (const name of jobNames.filter((name) => name !== "attest")) {
+      const job = jobBlock(workflow, name, label);
+      expect(job).not.toMatch(/actions\/attest@/);
+      for (const step of attestSteps) {
+        expect(stepLabels(job)).not.toContain(step);
+      }
     }
-    // Same flow-style guard as the gate suite: a `- { uses: … }` step would
-    // hide its `uses:` mid-line from the filter above.
-    for (const step of publishJob.split("\n").filter((line) => /^ {6}- /.test(line))) {
-      expect(step).toMatch(/^ {6}- (?:name|uses): [^\s{[&*!]/);
-    }
+    expect(stepBlock(attest, "Attest SBOM", label)).toMatch(/^ {10}sbom-path: sbom\.spdx\.json$/m);
   });
 
-  it("publishes to the Marketplace only from the publish job, using build's audited .vsix", () => {
-    expect(buildJob).not.toMatch(/vsce publish/);
-    expect(publishJob.match(/vsce publish/g)).toHaveLength(1);
-    expect(stepBlock(publishJob, "Publish to VS Code Marketplace", "publish.yml")).toMatch(
-      /^ {8}run: pnpm exec vsce publish --oidc --no-dependencies --packagePath extension\.vsix$/m
-    );
+  it.each(attestSteps)("keeps %s unconditional and fail-closed", (name) => {
+    const step = stepBlock(jobBlock(workflow, "attest", label), name, label);
+    expect(step).toMatch(/^ {8}uses: actions\/attest@/m);
+    expect(step).toMatch(/^ {10}subject-path: extension\.vsix$/m);
+    expect(step).not.toMatch(/^ {8}(?:"|')?(?:if|continue-on-error)(?:"|')?\s*:/m);
+  });
 
-    // build uploads the .vsix and its SBOM only after the audit; publish
-    // downloads that same artifact, attests it, then publishes it.
-    const buildSteps = stepNames(buildJob);
+  const registrySteps = [
+    { registry: "marketplace", job: "publish-marketplace", step: "Publish to VS Code Marketplace" },
+    { registry: "openvsx", job: "publish-openvsx", step: "Publish to Open VSX" },
+  ];
+
+  it.each(registrySteps)("publishes to $registry once from $job", ({ registry, job, step }) => {
+    const block = stepBlock(jobBlock(workflow, job, label), step, label);
+    const command = `run: scripts/publish-registry.sh ${registry} extension.vsix "$EXPECTED_SHA256"`;
+    const runLines = block.split("\n").filter((line) => /^ {8}run:/.test(line));
+    expect(runLines).toEqual([`        ${command}`]);
+    expect(
+      workflow.match(new RegExp(`scripts/publish-registry\\.sh ${registry}\\b`, "g"))
+    ).toHaveLength(1);
+    expect(block).not.toMatch(/continue-on-error/);
+    expect(workflow).not.toMatch(/\b(?:vsce|ovsx) publish\b/);
+  });
+
+  it("hands off the VSIX and SBOM after the audit", () => {
+    const buildSteps = stepLabels(buildJob);
     const audit = buildSteps.indexOf("Audit .vsix contents");
     expect(audit).not.toBe(-1);
     expect(audit).toBeLessThan(buildSteps.indexOf("Upload audited .vsix"));
-    const uploadStep = stepBlock(buildJob, "Upload audited .vsix", "publish.yml");
-    expect(uploadStep).toMatch(/^ {10}path: \|\n {12}extension\.vsix\n {12}sbom\.spdx\.json$/m);
-    expect(uploadStep).toMatch(/^ {10}name: extension-vsix$/m);
-
-    const publishSteps = stepNames(publishJob);
-    const order = [
-      "Download audited .vsix",
-      "Attest build provenance",
-      "Attest SBOM",
-      "Publish to VS Code Marketplace",
-      "Publish to Open VSX",
-    ].map((name) => [name, publishSteps.indexOf(name)] as const);
-    for (const [name, at] of order) {
-      expect(at, name).not.toBe(-1);
-    }
-    for (let i = 1; i < order.length; i++) {
-      expect(order[i][1], order[i][0]).toBeGreaterThan(order[i - 1][1]);
-    }
-    expect(stepBlock(publishJob, "Download audited .vsix", "publish.yml")).toMatch(
-      /^ {10}name: extension-vsix$/m
-    );
+    const upload = stepBlock(buildJob, "Upload audited .vsix", label);
+    expect(upload).toMatch(/^ {10}path: \|\n {12}extension\.vsix\n {12}sbom\.spdx\.json$/m);
+    expect(upload).toMatch(/^ {10}name: extension-vsix$/m);
   });
 
-  // Attestation needs `id-token`, so it must live where the grant lives — and
-  // it must sign the downloaded bytes the registries then receive.
-  it("attests the downloaded .vsix in publish, never in build", () => {
-    expect(buildJob).not.toMatch(/actions\/attest@/);
-    expect(stepBlock(publishJob, "Attest build provenance", "publish.yml")).toMatch(
-      /^ {10}subject-path: extension\.vsix$/m
+  it("records the audited VSIX digest and exposes it as a build output", () => {
+    expect(buildJob).toMatch(
+      /^ {4}outputs:\n {6}vsix-sha256: \$\{\{ steps\.digest\.outputs\.sha256 \}\}$/m
     );
-    const sbom = stepBlock(publishJob, "Attest SBOM", "publish.yml");
-    expect(sbom).toMatch(/^ {10}subject-path: extension\.vsix$/m);
-    expect(sbom).toMatch(/^ {10}sbom-path: sbom\.spdx\.json$/m);
+    const order = ["Audit .vsix contents", "Record .vsix digest", "Upload audited .vsix"];
+    expect(stepLabels(buildJob).filter((name) => order.includes(name))).toEqual(order);
+    const record = stepBlock(buildJob, "Record .vsix digest", label);
+    expect(record).toMatch(/^ {8}id: digest$/m);
+    expect(record).toMatch(
+      /^ {8}run: \|\n {10}checksum=\$\(sha256sum extension\.vsix\)\n {10}echo "sha256=\$\{checksum%% \*\}" >> "\$GITHUB_OUTPUT"$/m
+    );
+    expect(stepBlock(buildJob, "Upload audited .vsix", label)).toMatch(/^ {10}retention-days: 7$/m);
   });
 
-  // Attestation is a release gate: `continue-on-error` lets a failed attest
-  // pass, and a step-level `if:` can skip it or (via `always()`) run it past a
-  // red gate. Either silently drops the guarantee. Step-level keys sit at 8
-  // spaces, so `with:` values (10) cannot false-match.
   it.each([
-    "Attest build provenance",
-    "Attest SBOM",
-  ])("keeps `%s` unconditional and fail-closed", (name) => {
-    const step = stepBlock(publishJob, name, "publish.yml");
-    expect(step).toMatch(/^ {8}uses: actions\/attest@/m);
-    expect(step).not.toMatch(/^ {8}(?:"|')?continue-on-error(?:"|')?\s*:/m);
-    expect(step).not.toMatch(/^ {8}(?:"|')?if(?:"|')?\s*:/m);
+    { name: "attest", orderedSteps: ["Verify .vsix digest", ...attestSteps] },
+    ...registrySteps.map(({ job, step }) => ({ name: job, orderedSteps: [step] })),
+  ])("downloads the audited artifact and checks build's digest in $name", ({
+    name,
+    orderedSteps,
+  }) => {
+    const job = jobBlock(workflow, name, label);
+    const downloadName = "Download audited .vsix";
+    const order = [downloadName, ...orderedSteps];
+    expect(stepLabels(job).filter((step) => order.includes(step))).toEqual(order);
+    const download = stepBlock(job, downloadName, label);
+    expect(download).toMatch(/^ {8}uses: actions\/download-artifact@/m);
+    expect(download).toMatch(/^ {10}name: extension-vsix$/m);
+    // Attest checks inline. Both publishers check inside the helper before
+    // invoking the CLI, which the mock-publisher test exercises.
+    const check = stepBlock(job, orderedSteps[0], label);
+    expect(check).toMatch(
+      /^ {8}env:\n {10}EXPECTED_SHA256: \$\{\{ needs\.build\.outputs\.vsix-sha256 \}\}$/m
+    );
+    if (name === "attest") {
+      expect(check).toMatch(
+        /^ {8}run: echo "\$EXPECTED_SHA256 {2}extension\.vsix" \| sha256sum -c -$/m
+      );
+    }
+    if (name === "publish-openvsx") {
+      expect(check).toMatch(/^ {10}OVSX_PAT: \$\{\{ secrets\.OPENVSX_PAT \}\}$/m);
+    }
   });
 
-  // A failed Marketplace publish must stop Open VSX, and both registries must
-  // ship the audited extension.vsix.
-  it("publishes to Open VSX from the same .vsix, with neither registry step allowed to fail open", () => {
-    const marketplace = stepBlock(publishJob, "Publish to VS Code Marketplace", "publish.yml");
-    const ovsx = stepBlock(publishJob, "Publish to Open VSX", "publish.yml");
-    expect(marketplace).not.toMatch(/continue-on-error/);
-    expect(ovsx).not.toMatch(/continue-on-error/);
-    expect(ovsx).toMatch(/^ {8}run: pnpm exec ovsx publish extension\.vsix$/m);
+  // Read quoted keys and folded scalars so a spelling change cannot hide a
+  // conditional that bypasses a failed prerequisite or silently skips a gate.
+  const ifScalars = (job: string) => {
+    const lines = job.split("\n");
+    const scalars: string[] = [];
+    lines.forEach((line, i) => {
+      const match = line.match(/^(\s*)(?:"if"|'if'|if)\s*:(.*)$/);
+      if (!match) {
+        return;
+      }
+      const indent = match[1].length;
+      const continuation: string[] = [];
+      for (const next of lines.slice(i + 1)) {
+        if (next.trim() !== "" && next.length - next.trimStart().length <= indent) {
+          break;
+        }
+        continuation.push(next);
+      }
+      scalars.push([match[2], ...continuation].join("\n"));
+    });
+    return scalars;
+  };
+
+  it("collects a step-level if scalar from a fixture", () => {
+    expect(
+      ifScalars("    steps:\n      - name: Fixture\n        if: always()\n        run: exit 0")
+    ).toEqual([" always()"]);
+  });
+
+  it("keeps the implicit success condition throughout the release chain", () => {
+    const scalars = jobNames.flatMap((name) => ifScalars(jobBlock(workflow, name, label)));
+    expect(scalars).toEqual([]);
+    expect(jobNames).toEqual(expectedJobs);
+  });
+
+  it("lets any job or step failure block its dependents", () => {
+    expect(workflow).not.toMatch(
+      /^\s*(?:- )?(?:"continue-on-error"|'continue-on-error'|continue-on-error)\s*:/m
+    );
   });
 });

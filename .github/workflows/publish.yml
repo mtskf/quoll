@@ -5,46 +5,25 @@ on:
     tags:
       - 'v*'
 
-# NOTE: This workflow is ACTIVE. On a pushed `v*` tag it packages one .vsix and publishes
-# it to BOTH registries: the VS Code Marketplace (OIDC Trusted Publishing, no secret) and
-# Open VSX (OPENVSX_PAT). Both legs run today. The Open VSX step keeps an
-# `if: ${{ env.OVSX_PAT != '' }}` guard, which means that if that secret is ever removed
-# or emptied this workflow does NOT fail — it silently skips, and releases quietly stop
-# reaching Open VSX with the run still green. That failure mode is why
-# .github/workflows/token-liveness.yml treats OPENVSX_PAT as required and goes red on an
-# empty one. The publisher ID (`mtskf`) matches
-# `package.json.publisher`. Tag pushes trigger a LIVE publish (v0.1.0 shipped 2026-07-02),
-# so never push a `v*` tag until you intend to release that version to users.
-
-# Least-privilege GITHUB_TOKEN, granted per job. The workflow default is
-# read-only; each job widens only what it needs. Publishing never uses the
-# workflow token itself, so `contents` stays read-only everywhere.
+# A pushed `v*` tag triggers a live release to the VS Code Marketplace via OIDC
+# Trusted Publishing and to Open VSX via OPENVSX_PAT.
 #
-# Why two jobs: `id-token: write` IS the Marketplace publish credential
-# (Trusted Publishing exchanges this workflow's GitHub OIDC token for a
-# Marketplace token, and the caller picks the audience). GitHub exposes the
-# OIDC request endpoint to EVERY step of a job that holds the grant, so a
-# single job would hand publish rights to the third-party anchore/sbom-action,
-# the build toolchain and scripts/*. The old VSCE_PAT sat in one step's env;
-# the job boundary is the narrowest OIDC equivalent.
-#   - `build` (gates → build → SBOM → package → audit → upload) holds
-#     `contents: read` only — no `id-token`, so no step there can mint an
-#     OIDC token of any audience.
-#   - `publish` (download → attest → Marketplace → Open VSX) holds the only
-#     `id-token: write` (Sigstore signing for the attest steps AND the
-#     Marketplace exchange) plus `attestations: write`. It runs no
-#     third-party action besides pnpm/action-setup. It attests the bytes it
-#     downloaded, before either registry step, so the attested digest is the
-#     published one. It only starts after `build` succeeds (`needs:`), so
-#     every gate in `build` still blocks both registries.
-# Why the attest steps live in `publish` rather than `build`: the Trusted
-# Publishing policy matches on the workflow FILE (owner mtskf, repo quoll,
-# workflow publish.yml, no environment), not on the job — it has no job
-# field, and the v0.1.87 OIDC publish matched it. Under that policy a token
-# minted in `build` would be as good as one minted in `publish`, so any
-# `id-token` in `build` would hand publish rights to its third-party code.
-# (No `artifact-metadata: write` — that is only needed for registry storage
-# records, which this file-subject attestation does not create.)
+# Job chain: build → attest → publish-marketplace → publish-openvsx. The chain
+# keeps a failed Marketplace publish from reaching Open VSX. Use Re-run failed
+# jobs, never Re-run all jobs. A failed-job retry reuses successful job outputs
+# and the artifact from the earlier attempt, so an Open VSX failure can retry
+# just that registry with the audited .vsix. Re-running all jobs after
+# Marketplace succeeds rebuilds the .vsix, fails red at Marketplace on the
+# duplicate version and publishes nothing new. Recover with a version bump.
+#
+# The workflow token stays read-only. Only attest (Sigstore signing) and
+# publish-marketplace (Trusted Publishing exchange) hold id-token: write.
+# The Trusted Publishing policy matches this workflow file, so any step with
+# an OIDC grant can mint a Marketplace credential. Keeping the grant out of
+# build keeps it away from the build tools and anchore/sbom-action. Open VSX
+# authenticates with its own token and needs only contents: read.
+# File-subject attestations need attestations: write. Registry storage records
+# would also need artifact-metadata: write.
 permissions:
   contents: read
 
@@ -53,6 +32,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      vsix-sha256: ${{ steps.digest.outputs.sha256 }}
     steps:
       # All GitHub Actions are pinned to commit SHAs — supply-chain hardening.
       # The threat (tag remutation against a compromised maintainer / repo) applies
@@ -152,18 +133,11 @@ jobs:
       # future refinement. The verify step below pins the guarantees this SBOM
       # must hold.
       #
-      # Ordering: this is the only third-party action on the build→package→upload
-      # critical path (pnpm/action-setup is a third-party action too, but runs
-      # earlier during setup, before any artifact exists), and it still runs
-      # BEFORE Package .vsix, so audit-vsix (below) remains the last gate before
-      # upload — a compromised action here cannot mutate an already-audited
-      # .vsix (none exists yet). It scans the staging tree, not the workspace,
-      # so it does not need the packaged .vsix. This job holds no `id-token`,
-      # so nothing here can mint an OIDC token: attestation and publishing both
-      # live in the separate `publish` job (see the header). Release-asset
-      # upload is disabled — `contents` is read-only; sbom.spdx.json travels to
-      # `publish` in the handoff artifact (and stays as the sbom-action workflow
-      # artifact too).
+      # Ordering keeps SBOM generation before packaging. The action has no
+      # packaged bytes to modify, and audit-vsix gates the exact .vsix before
+      # build records its digest. Build has no id-token grant, so it cannot
+      # mint a Marketplace credential. The SBOM travels to attest in the
+      # handoff artifact and remains available as the sbom-action artifact.
       #
       # `config:` is REQUIRED, not cosmetic: syft's package.json cataloger is
       # image-scan-only, so a directory scan of the lockfile-less staging tree
@@ -204,8 +178,15 @@ jobs:
       - name: Audit .vsix contents
         run: node scripts/audit-vsix.mjs extension.vsix
 
-      # Hand the audited bytes and their SBOM to `publish`, which attests and
-      # publishes them. The artifact digest is validated again on download.
+      - name: Record .vsix digest
+        id: digest
+        run: |
+          checksum=$(sha256sum extension.vsix)
+          echo "sha256=${checksum%% *}" >> "$GITHUB_OUTPUT"
+
+      # Hand off the audited .vsix and SBOM for attestation and publishing.
+      # Each consumer compares the .vsix with build's recorded file digest.
+      # The SBOM relies on download-artifact's artifact-level digest check.
       - name: Upload audited .vsix
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -214,40 +195,28 @@ jobs:
             extension.vsix
             sbom.spdx.json
           if-no-files-found: error
-          retention-days: 1
+          # Keep the audited bytes available for retries. After expiry the
+          # download fails closed.
+          retention-days: 7
 
-  publish:
-    needs: build
+  attest:
+    needs: [build]
     runs-on: ubuntu-latest
-    # The only job that can mint OIDC tokens: Sigstore signing for the attest
-    # steps, and the Marketplace Trusted Publishing exchange.
     permissions:
       contents: read
       id-token: write
       attestations: write
     steps:
-      # First-party actions + pnpm/action-setup only — every step of this job
-      # can mint a Marketplace publish token. Same pins as `build`.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-        with:
-          version: 11.10.0
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: '22'
-          cache: 'pnpm'
-
-      # For the lockfile-pinned vsce + ovsx. pnpm-workspace.yaml denies every
-      # dependency build script, so no package code runs at install time.
-      - name: Install publish tooling
-        run: pnpm install --frozen-lockfile
-
       - name: Download audited .vsix
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: extension-vsix
+
+      # Require the file digest recorded after audit before signing either attestation.
+      - name: Verify .vsix digest
+        env:
+          EXPECTED_SHA256: ${{ needs.build.outputs.vsix-sha256 }}
+        run: echo "$EXPECTED_SHA256  extension.vsix" | sha256sum -c -
 
       # Signed build provenance for the exact bytes we are about to publish, via
       # the unified actions/attest (Provenance mode = no sbom-path). GitHub has
@@ -272,6 +241,35 @@ jobs:
           subject-path: extension.vsix
           sbom-path: sbom.spdx.json
 
+  publish-marketplace:
+    needs: [build, attest]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # Every step with this job's OIDC grant can mint a Marketplace credential.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 11.10.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      # For the lockfile-pinned vsce + ovsx. pnpm-workspace.yaml denies every
+      # dependency build script, so no package code runs at install time.
+      - name: Install publish tooling
+        run: pnpm install --frozen-lockfile
+
+      - name: Download audited .vsix
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: extension-vsix
+
       # OIDC Trusted Publishing: vsce exchanges this job's GitHub OIDC token
       # (audience marketplace.visualstudio.com, via this job's
       # `id-token: write`) for a short-lived Marketplace credential. The
@@ -282,14 +280,41 @@ jobs:
       # @vscode/vsce >= 4.1.0: 4.0.0's token exchange omits `api-version`, so
       # the Marketplace answers 400. Renaming this file breaks the policy match.
       - name: Publish to VS Code Marketplace
-        run: pnpm exec vsce publish --oidc --no-dependencies --packagePath extension.vsix
+        env:
+          EXPECTED_SHA256: ${{ needs.build.outputs.vsix-sha256 }}
+        run: scripts/publish-registry.sh marketplace extension.vsix "$EXPECTED_SHA256"
 
-      # Token is read implicitly from the OVSX_PAT env var — never passed as a
-      # CLI arg, so the secret cannot leak into process arguments. Kept in this
-      # job, after the Marketplace step, so a failed Marketplace publish still
-      # stops Open VSX (the pre-split order).
+  publish-openvsx:
+    needs: [build, attest, publish-marketplace]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 11.10.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      # For the lockfile-pinned vsce + ovsx. pnpm-workspace.yaml denies every
+      # dependency build script, so no package code runs at install time.
+      - name: Install publish tooling
+        run: pnpm install --frozen-lockfile
+
+      - name: Download audited .vsix
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: extension-vsix
+
+      # Pass the token through the environment to keep it out of process arguments.
+      # The script fails on an empty secret so this job can be retried after rotation.
       - name: Publish to Open VSX
         env:
+          EXPECTED_SHA256: ${{ needs.build.outputs.vsix-sha256 }}
           OVSX_PAT: ${{ secrets.OPENVSX_PAT }}
-        if: ${{ env.OVSX_PAT != '' }}
-        run: pnpm exec ovsx publish extension.vsix
+        run: scripts/publish-registry.sh openvsx extension.vsix "$EXPECTED_SHA256"
