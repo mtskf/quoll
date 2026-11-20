@@ -43,6 +43,7 @@
 
 import type { Uri } from "vscode";
 import { isAllowedUrl } from "../../markdown/url-allowlist.js";
+import type { RealContainment } from "./real-containment.js";
 import { isWithinDir } from "./within-dir.js";
 
 /** User-facing toast when a resolved, in-scope target still fails to open
@@ -78,8 +79,10 @@ export type HandleOpenLinkDeps = {
   documentUri: Uri;
   /** `Uri.joinPath` binding (or a test stub). Normalizes `.`/`..` segments. */
   joinPath: (base: Uri, ...segments: string[]) => Uri;
-  /** `workspace.getWorkspaceFolder(uri) !== undefined` (or a test stub). */
-  isInWorkspace: (uri: Uri) => boolean;
+  /** `workspace.getWorkspaceFolder(uri)?.uri` (or a test stub). */
+  workspaceFolderOf: (uri: Uri) => Uri | undefined;
+  realContainment: (targetPath: string, rootPath: string) => Promise<RealContainment>;
+  isDisposed: () => boolean;
   /** Production: `(uri) => openInQuollEditor(uri, QuollEditorPanel.viewType)`.
    *  The viewType is bound by the caller so this module never names it. */
   openWith: (uri: Uri) => Thenable<unknown>;
@@ -93,7 +96,7 @@ export type HandleOpenLinkDeps = {
 /** Gate-and-dispatch an "open-link" request. Caller is
  *  QuollEditorPanel.handleInbound; `href` is the already-decoded relative
  *  destination string the webview sent (post decodeMarkdownDestination). */
-export function handleOpenLink(href: string, deps: HandleOpenLinkDeps): void {
+export async function handleOpenLink(href: string, deps: HandleOpenLinkDeps): Promise<void> {
   // 1. Host re-validation (C0/DEL, protocol-relative, disallowed scheme).
   if (!isAllowedUrl(href)) {
     console.warn("[quoll] open-link rejected: URL not in allowlist", {
@@ -196,7 +199,8 @@ export function handleOpenLink(href: string, deps: HandleOpenLinkDeps): void {
   //
   // The message is generic on purpose — see OPEN_LINK_OUT_OF_SCOPE_MESSAGE for
   // why saying "out of scope" leaks nothing that the link text does not already.
-  if (!deps.isInWorkspace(target) && !isWithinDir(target, dir)) {
+  const isInWorkspace = deps.workspaceFolderOf(target) !== undefined;
+  if (!isInWorkspace && !isWithinDir(target, dir)) {
     console.warn("[quoll] open-link dropped: target outside workspace/document dir", {
       hrefPreview: sanitizeForLog(href),
     });
