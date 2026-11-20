@@ -82,6 +82,18 @@ process.exitCode = process.env["MOCK_FAIL_" + registry] === "1" ? 1 : 0;
     ).not.toContain(token);
   });
 
+  it("fails red on a Marketplace publish failure without reaching Open VSX", () => {
+    const result = publish("marketplace", digest, { MOCK_FAIL_MARKETPLACE: "1" });
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    expect(calls()).toEqual([
+      {
+        argv: ["exec", "vsce", "publish", "--oidc", "--no-dependencies", "--packagePath", vsix],
+        digest,
+      },
+    ]);
+  });
+
   it.each([
     ["a digest mismatch", "marketplace", "0".repeat(64), token],
     ["an empty digest", "marketplace", "", token],
