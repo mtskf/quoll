@@ -69,6 +69,7 @@ export function createDirtyDocConflictWatcher(
 ): DirtyDocConflictWatcher {
   const debounceMs = deps.debounceMs ?? CONFLICT_DEBOUNCE_MS;
 
+  let watcherDisposed = false;
   let conflictTimer: ReturnType<typeof setTimeout> | null = null;
   // Spans the WHOLE user action (prompt open → reload settled/failed) so a
   // watcher event mid-prompt or mid-reload cannot start a second prompt
@@ -173,7 +174,7 @@ export function createDirtyDocConflictWatcher(
   // Debounced, URI-filtered signal. Coalesces an external tool's multi-op write
   // burst (truncate+write, or temp+rename) into one check.
   const onSignal = (changedUriString: string): void => {
-    if (deps.isDisposed() || changedUriString !== deps.documentUriString) {
+    if (watcherDisposed || deps.isDisposed() || changedUriString !== deps.documentUriString) {
       return;
     }
     if (conflictTimer !== null) {
@@ -190,6 +191,7 @@ export function createDirtyDocConflictWatcher(
 
   return {
     dispose(): void {
+      watcherDisposed = true;
       // Cancel a pending debounce on dispose so a late timer cannot fire
       // checkConflict after teardown (checkConflict also re-checks isDisposed).
       if (conflictTimer !== null) {

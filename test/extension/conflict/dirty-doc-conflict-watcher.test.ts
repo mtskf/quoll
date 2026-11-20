@@ -376,6 +376,35 @@ describe("createDirtyDocConflictWatcher", () => {
       expect(w.spies.promptReload).not.toHaveBeenCalled();
     });
 
+    it("does not retry a disk read overtaken by a save after the watcher is disposed", async () => {
+      let buffer = "old\nedit\n";
+      let releaseRead: (v: string) => void = () => undefined;
+      const readDiskText = vi
+        .fn<() => Promise<string | null>>()
+        .mockImplementationOnce(
+          () =>
+            new Promise<string>((resolve) => {
+              releaseRead = resolve;
+            })
+        )
+        .mockResolvedValue("new\n");
+      const w = makeWatcher({ readDiskText, readBufferText: () => buffer });
+      w.emit();
+      await fireDebounce();
+
+      buffer = "new\n";
+      w.setDirty(false);
+      w.save();
+      buffer = "new\nappended\n";
+      w.setDirty(true);
+      w.watcher.dispose();
+
+      releaseRead("old\n");
+      await vi.runAllTimersAsync();
+      expect(readDiskText).toHaveBeenCalledTimes(1);
+      expect(w.spies.promptReload).not.toHaveBeenCalled();
+    });
+
     it("retries an external write whose debounce fired during a read overtaken by a save", async () => {
       let buffer = "old\nedit\n";
       let releaseRead: (v: string) => void = () => undefined;
