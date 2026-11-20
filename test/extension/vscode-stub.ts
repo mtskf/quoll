@@ -11,7 +11,7 @@
 // from "vscode" should either avoid the import (preferred) or add a single
 // surface here with a one-line rationale.
 
-export type StubUri = { path: string };
+export type StubUri = { path: string; scheme?: string; fsPath?: string };
 
 export const Uri = {
   // Real vscode.Uri.joinPath resolves `.` / `..` segments. Mirror that here
@@ -32,7 +32,8 @@ export const Uri = {
       }
       out.push(seg);
     }
-    return { path: (isAbsolute ? "/" : "") + out.join("/") };
+    const path = (isAbsolute ? "/" : "") + out.join("/");
+    return { ...(base.scheme === undefined ? {} : { scheme: base.scheme }), path, fsPath: path };
   },
 };
 
