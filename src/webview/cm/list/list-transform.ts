@@ -148,8 +148,9 @@ function firstNonWsColumn(state: EditorState, lineNumber: number): number | null
  *  marker line).
  *
  *  `ownLines` are the remaining (non-blank) lines of the subtree whose first
- *  non-whitespace column is >= the item's content column
- *  (`contentColumnOf(state, item)`). A line under that column is only part of
+ *  non-whitespace column is >= `contentCol`, which defaults to the tree-based
+ *  content column. Pass the shift boundary when moving lines so classification
+ *  uses the same column as the shift. A line under that column is only part of
  *  the item by CommonMark laziness (e.g. a flush-left paragraph continuing a
  *  loosely-indented nested item) and is excluded — moving the item must not
  *  drag lazy text that isn't structurally the item's.
@@ -160,9 +161,9 @@ function firstNonWsColumn(state: EditorState, lineNumber: number): number | null
  *  "col >= content" test would wrongly exclude it from the item's own lines. */
 export function classifyItemLines(
   state: EditorState,
-  item: SyntaxNode
+  item: SyntaxNode,
+  contentCol = contentColumnOf(state, item)
 ): { markerLine: number; ownLines: number[] } {
-  const contentCol = contentColumnOf(state, item);
   const first = state.doc.lineAt(item.from).number;
   const last = state.doc.lineAt(Math.max(item.from, item.to - 1)).number;
   const markerLine = first;
@@ -198,10 +199,11 @@ export function leadingCharsForColumns(text: string, cols: number, tabSize: numb
   return i;
 }
 
-/** Move the item's content boundary while preserving the bytes after it.
- *  Replace a tab crossing the boundary with spaces to retain its overhang. */
+/** Move the item's content boundary, using spaces where a tab would change
+ *  the relative indentation. Keep code payload bytes intact. */
 function shiftLine(
   state: EditorState,
+  item: SyntaxNode,
   lineNumber: number,
   boundary: number,
   delta: number
@@ -230,27 +232,63 @@ function shiftLine(
       keptCol = col;
     }
   }
-  const insert = " ".repeat(col + delta - keptCol);
-  return line.text.slice(keep, i) === insert
+  let end = i;
+  while (line.text[end] === " " || line.text[end] === "\t") {
+    end++;
+  }
+  for (
+    let node: SyntaxNode | null = item.resolveInner(line.from + end, 1);
+    node;
+    node = node.parent
+  ) {
+    if (node.name === "CodeText") {
+      end = Math.max(i, node.from - line.from);
+      break;
+    }
+  }
+
+  let insert = " ".repeat(col + delta - keptCol);
+  for (let j = i; j < end; j++) {
+    const ch = line.text[j];
+    if (ch === "\t") {
+      const width = state.tabSize - (col % state.tabSize);
+      const shiftedWidth = state.tabSize - ((col + delta) % state.tabSize);
+      insert += width === shiftedWidth ? ch : " ".repeat(width);
+      col += width;
+    } else {
+      insert += ch;
+      col++;
+    }
+  }
+  return line.text.slice(keep, end) === insert
     ? null
-    : { from: line.from + keep, to: line.from + i, insert };
+    : { from: line.from + keep, to: line.from + end, insert };
 }
 
-/** Move the item's own lines to the new content column so nested content
- *  follows its marker after a split or renumber. The caller edits the marker line. */
+/** Move the item's own lines using CommonMark marker padding on both sides
+ *  of a split or renumber so nested content keeps its relative indentation. */
 export function shiftOwnLines(
   state: EditorState,
   item: SyntaxNode,
   newContentCol: number
 ): ChangeSpec[] {
-  const boundary = contentColumnOf(state, item);
+  const mark = listMarkOf(item);
+  if (mark === null) {
+    return [];
+  }
+  const markerLine = state.doc.lineAt(mark.from);
+  const boundary = contentColumnFromMarkerLine(
+    markerLine.text,
+    mark.to - markerLine.from,
+    state.tabSize
+  );
   const delta = newContentCol - boundary;
   if (delta === 0) {
     return [];
   }
   const changes: ChangeSpec[] = [];
-  for (const lineNo of classifyItemLines(state, item).ownLines) {
-    const change = shiftLine(state, lineNo, boundary, delta);
+  for (const lineNo of classifyItemLines(state, item, boundary).ownLines) {
+    const change = shiftLine(state, item, lineNo, boundary, delta);
     if (change !== null) {
       changes.push(change);
     }

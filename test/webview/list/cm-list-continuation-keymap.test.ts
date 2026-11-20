@@ -390,6 +390,42 @@ describe("continueListOnEnter — split keeps the item's children nested", () =>
     }
   });
 
+  it("keeps both lines in the indented code block when renumbering a same-width marker", () => {
+    const doc = "1. abcd\n2.     first\n       second";
+    const view = mount(doc, at("1. ab".length), { withHistory: true });
+    try {
+      expect(continueListOnEnter(view)).toBe(true);
+      const { state } = view;
+      const output = state.doc.toString();
+      expect(output).toBe("1. ab\n2. cd\n3.     first\n       second");
+      const tree = ensureSyntaxTree(state, state.doc.length, 5000);
+      let block = tree?.resolveInner(output.indexOf("second"), 1);
+      while (block && block.name !== "CodeBlock") {
+        block = block.parent ?? undefined;
+      }
+      expect(block && state.doc.sliceString(block.from, block.to)).toBe("first\n       second");
+      expect(undo(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(doc);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("keeps a child nested when a tab just past the boundary would widen", () => {
+    const doc = "9. abcd\n\n   \t- child";
+    const view = mount(doc, at("9. ab".length), { withHistory: true });
+    try {
+      expect(parentMarkerOf(view, "child")).toBe("9.");
+      expect(continueListOnEnter(view)).toBe(true);
+      expect(parentMarkerOf(view, "child")).toBe("10.");
+      expect(view.state.doc.toString()).toBe("9. ab\n10. cd\n\n     - child");
+      expect(undo(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(doc);
+    } finally {
+      view.destroy();
+    }
+  });
+
   it("preserves the tab inside fenced code when the split marker widens", () => {
     const doc = "9. abcd\n   ```\n   \treturn\n   ```";
     const view = mount(doc, at("9. ab".length), { withHistory: true });
