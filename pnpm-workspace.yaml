@@ -32,6 +32,10 @@ overrides:
   qs: ^6.16.1
   '@azure/identity': ^4.14.1
   minimatch: ^11.0.1
+  # mocha@11 pins glob ^10, whose processor cannot drive minimatch 11's Matcher
+  # segments (wildcard specs match nothing). glob 14 declares minimatch ^11.
+  # Pinned by test/build/glob-minimatch-compat.test.ts.
+  'mocha>glob': ^14.0.3
 
 # Approved audit exceptions land here (GHSA ids, not CVE — pnpm 11 uses the
 # bulk advisory endpoint, which doesn't return CVE identifiers). Document each
