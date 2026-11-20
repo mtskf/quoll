@@ -151,7 +151,7 @@ describe("computeLinkWrap", () => {
   });
 
   it.each([
-    ["a]b", "[a\\]b]()"],
+    ["a]b", "[a&#93;b]()"],
     ["**bold**", "[**bold**]()"],
   ])("wraps %s with the caret in the empty URL slot", (label, source) => {
     const state = stateFor(`before ${label} after`, {

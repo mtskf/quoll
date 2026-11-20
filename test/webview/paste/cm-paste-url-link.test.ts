@@ -251,9 +251,9 @@ it("URL syntax guard uses supplied state and owned range", () => {
 });
 
 it.each([
-  ["a]b", "https://example.com", "[a\\]b](https://example.com)"],
-  ["foo\\", "https://example.com", "[foo\\\\](https://example.com)"],
-  ["phase [2", "https://example.com", "[phase \\[2](https://example.com)"],
+  ["a]b", "https://example.com", "[a&#93;b](https://example.com)"],
+  ["foo\\", "https://example.com", "[foo&#92;](https://example.com)"],
+  ["phase [2", "https://example.com", "[phase &#91;2](https://example.com)"],
   ["label", "https://example.com/AT&amp;T", "[label](https://example.com/AT&amp;amp;T)"],
 ])("URL decision wraps %s with %s", (label, url, expected) => {
   const state = EditorState.create({

@@ -8,31 +8,38 @@ import { commonMarkAltText } from "../../src/webview/cm/inline/inline-ir.js";
 const href = "https://x.test";
 
 it.each([
-  { label: "a]b", href, escapedLabel: "a\\]b", destination: href, text: "a]b" },
-  { label: "foo\\", href, escapedLabel: "foo\\\\", destination: href, text: "foo\\" },
-  { label: "phase [2", href, escapedLabel: "phase \\[2", destination: href, text: "phase [2" },
-  { label: "[x", href, escapedLabel: "\\[x", destination: href, text: "[x" },
-  { label: "a [b] c", href, escapedLabel: "a \\[b\\] c", destination: href, text: "a [b] c" },
-  { label: "[x](y)", href, escapedLabel: "\\[x\\](y)", destination: href, text: "[x](y)" },
-  { label: "**b]**", href, escapedLabel: "**b\\]**", destination: href, text: "b]" },
+  { label: "a]b", href, escapedLabel: "a&#93;b", destination: href, text: "a]b" },
+  { label: "foo\\", href, escapedLabel: "foo&#92;", destination: href, text: "foo\\" },
+  { label: "\\\\x", href, escapedLabel: "&#92;x", destination: href, text: "\\x" },
+  { label: "phase [2", href, escapedLabel: "phase &#91;2", destination: href, text: "phase [2" },
+  { label: "[x", href, escapedLabel: "&#91;x", destination: href, text: "[x" },
+  { label: "a [b] c", href, escapedLabel: "a &#91;b&#93; c", destination: href, text: "a [b] c" },
+  { label: "[x](y)", href, escapedLabel: "&#91;x&#93;(y)", destination: href, text: "[x](y)" },
+  { label: "**b]**", href, escapedLabel: "**b&#93;**", destination: href, text: "b]" },
   { label: "`a]b`", href, escapedLabel: "`a]b`", destination: href, text: "a]b" },
   { label: "\\*lit", href, escapedLabel: "\\*lit", destination: href, text: "*lit" },
-  { label: "[x][y]", href, escapedLabel: "\\[x\\]\\[y\\]", destination: href, text: "[x][y]" },
+  {
+    label: "[x][y]",
+    href,
+    escapedLabel: "&#91;x&#93;&#91;y&#93;",
+    destination: href,
+    text: "[x][y]",
+  },
   {
     label: "see [text][ref] now",
     href,
-    escapedLabel: "see \\[text\\]\\[ref\\] now",
+    escapedLabel: "see &#91;text&#93;&#91;ref&#93; now",
     destination: href,
     text: "see [text][ref] now",
   },
   {
     label: "![a]b](i.png)",
     href,
-    escapedLabel: "![a]b\\](i.png)",
+    escapedLabel: "![a]b&#93;(i.png)",
     destination: href,
     text: "![a]b](i.png)",
   },
-  { label: "<b>]</b>", href, escapedLabel: "<b>\\]</b>", destination: href, text: "<b>]</b>" },
+  { label: "<b>]</b>", href, escapedLabel: "<b>&#93;</b>", destination: href, text: "<b>]</b>" },
   {
     label: "<https://a.test/x>",
     href,
@@ -42,28 +49,32 @@ it.each([
   },
   { label: "&#93;", href, escapedLabel: "&#93;", destination: href, text: "]" },
   { label: "a\\\nb", href, escapedLabel: "a\\\nb", destination: href, text: "a\\\nb" },
-  { label: "    a]b", href, escapedLabel: "    a\\]b", destination: href, text: "    a]b" },
-  { label: "~~~ a]b", href, escapedLabel: "~~~ a\\]b", destination: href, text: "~~~ a]b" },
-  { label: "<div> a]b", href, escapedLabel: "<div> a\\]b", destination: href, text: "<div> a]b" },
+  { label: "    a]b", href, escapedLabel: "    a&#93;b", destination: href, text: "    a]b" },
+  { label: "~~~ a]b", href, escapedLabel: "~~~ a&#93;b", destination: href, text: "~~~ a]b" },
+  { label: "<div> a]b", href, escapedLabel: "<div> a&#93;b", destination: href, text: "<div> a]b" },
   { label: "    `a]b`", href, escapedLabel: "    `a]b`", destination: href, text: "    a]b" },
   { label: "<div> `a]b`", href, escapedLabel: "<div> `a]b`", destination: href, text: "<div> a]b" },
   {
-    label: "https://example.test/path]",
-    href,
-    escapedLabel: "https://example.test/path&#93;",
-    destination: href,
-    text: "https://example.test/path]",
-  },
-  {
     label: "![a [b] d](e)",
     href,
-    escapedLabel: "![a \\[b\\] d](e)",
+    escapedLabel: "![a &#91;b&#93; d](e)",
     destination: href,
-    text: "![a [b] d](e)",
+    text: "a [b] d",
   },
-  // commonMarkAltText does not flatten a link nested in image alt text, so these skip the text check.
-  { label: "![a [b](c) d](e)", href, escapedLabel: "![a \\[b\\](c) d](e)", destination: href },
-  { label: "![[x](y)](z)", href, escapedLabel: "![\\[x\\](y)](z)", destination: href },
+  {
+    label: "![a [b](c) d](e)",
+    href,
+    escapedLabel: "![a &#91;b&#93;(c) d](e)",
+    destination: href,
+    text: "a [b](c) d",
+  },
+  {
+    label: "![[x](y)](z)",
+    href,
+    escapedLabel: "![&#91;x&#93;(y)](z)",
+    destination: href,
+    text: "[x](y)",
+  },
   {
     label: "<!-- a]b -->",
     href,
@@ -72,6 +83,99 @@ it.each([
     text: "<!-- a]b -->",
   },
   { label: "<?x a]b?>", href, escapedLabel: "<?x a]b?>", destination: href, text: "<?x a]b?>" },
+  // A bare URL's autolink absorbs a backslash, so brackets after it must not be backslash-escaped.
+  {
+    label: "https://example.test/path]",
+    href,
+    escapedLabel: "https://example.test/path&#93;",
+    destination: href,
+    text: "https://example.test/path]",
+  },
+  {
+    label: "https://x.test/a[b",
+    href,
+    escapedLabel: "https://x.test/a&#91;b",
+    destination: href,
+    text: "https://x.test/a[b",
+  },
+  {
+    label: "https://x.test/a\\b",
+    href,
+    escapedLabel: "https://x.test/a&#92;b",
+    destination: href,
+    text: "https://x.test/a\\b",
+  },
+  {
+    label: "www.x.test/a]b",
+    href,
+    escapedLabel: "www.x.test/a&#93;b",
+    destination: href,
+    text: "www.x.test/a]b",
+  },
+  {
+    label: "[https://x.test/a]",
+    href,
+    escapedLabel: "&#91;https://x.test/a&#93;",
+    destination: href,
+    text: "[https://x.test/a]",
+  },
+  {
+    label: "see [https://x.test/a] here",
+    href,
+    escapedLabel: "see &#91;https://x.test/a&#93; here",
+    destination: href,
+    text: "see [https://x.test/a] here",
+  },
+  {
+    label: "[https://x.test/a[b]c]",
+    href,
+    escapedLabel: "&#91;https://x.test/a&#91;b&#93;c&#93;",
+    destination: href,
+    text: "[https://x.test/a[b]c]",
+  },
+  {
+    label: "[https://x.test/a](d)",
+    href,
+    escapedLabel: "&#91;https://x.test/a&#93;(d)",
+    destination: href,
+    text: "[https://x.test/a](d)",
+  },
+  {
+    label: "[www.x.test/a]",
+    href,
+    escapedLabel: "&#91;www.x.test/a&#93;",
+    destination: href,
+    text: "[www.x.test/a]",
+  },
+  {
+    label: "[t](https://x.test/a]b)",
+    href,
+    escapedLabel: "&#91;t&#93;(https://x.test/a&#93;b)",
+    destination: href,
+    text: "[t](https://x.test/a]b)",
+  },
+  {
+    label: "![[https://x.test/a]](e)",
+    href,
+    escapedLabel: "![&#91;https://x.test/a&#93;](e)",
+    destination: href,
+    text: "[https://x.test/a]",
+  },
+  // A kept `\]` after a bare URL would lose its backslash to the URL.
+  {
+    label: "[https://x.test/p]\\]",
+    href,
+    escapedLabel: "&#91;https://x.test/p&#93;&#93;",
+    destination: href,
+    text: "[https://x.test/p]]",
+  },
+  {
+    label: "[][https://x.test/p]",
+    href,
+    escapedLabel: "&#91;&#93;&#91;https://x.test/p&#93;",
+    destination: href,
+    text: "[][https://x.test/p]",
+  },
   {
     label: "label",
     href: "https://x.test/AT&amp;T",
@@ -116,9 +220,5 @@ it.each([
   const url = links[0]?.getChildren("URL").at(-1);
   expect(url).toBeDefined();
   expect(decodeMarkdownDestination(source.slice(url?.from, url?.to))).toBe(href);
-  if (text !== undefined) {
-    expect(commonMarkAltText(source.slice(1, links[0]?.getChildren("LinkMark")[1]?.from))).toBe(
-      text
-    );
-  }
+  expect(commonMarkAltText(source.slice(1, links[0]?.getChildren("LinkMark")[1]?.from))).toBe(text);
 });

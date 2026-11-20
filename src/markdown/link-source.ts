@@ -3,9 +3,10 @@
 import { gfmParser } from "./gfm-parser.js";
 import { encodeMarkdownDestination } from "./url-decode.js";
 
-// Label nodes whose bytes are kept as written: escaping `\`, `[` or `]` inside
-// them would change what they mean. Every other `\`, `[` and `]` is escaped, so
-// a nested link, a reference `[x][ref]` or a bare URL ending in `]` reads as text.
+// Label nodes whose bytes are kept as written: rewriting `\`, `[` or `]` inside
+// them would change what they mean. Every other `\`, `[` and `]` is written as a
+// numeric reference, so a nested link, a reference `[x][ref]` or a bare URL
+// ending in `]` reads as text.
 const labelSourceNodes = new Set([
   // Code spans, autolinks and raw HTML bind tighter than link brackets, and a
   // backslash inside them is literal.
@@ -14,9 +15,9 @@ const labelSourceNodes = new Set([
   "HTMLTag",
   "Comment",
   "ProcessingInstruction",
-  // Already an escape; escaping its backslash would expose the escaped mark.
+  // Already an escape; only an escaped `\`, `[` or `]` is rewritten (below).
   "Escape",
-  // A backslash hard break; doubling the backslash turns it into text.
+  // A backslash hard break; rewriting the backslash turns it into text.
   "HardBreak",
 ]);
 
@@ -24,15 +25,11 @@ const labelSourceNodes = new Set([
 // text is walked like any other label text so a `[x]` in it cannot close the link.
 const imageSyntaxNodes = new Set(["LinkMark", "URL", "LinkTitle", "LinkLabel"]);
 
-// A bare URL absorbs a backslash escape into itself, so `\]` would still end the
-// URL at the `]`. A numeric reference keeps the character literal and reads as
-// the same text.
-function entityEscapeUrl(url: string): string {
-  return url.replace(/[\\[\]]/g, (c) => `&#${c.charCodeAt(0)};`);
-}
-
-function escapePlainText(text: string): string {
-  return text.replace(/[\\[\]]/g, "\\$&");
+// A numeric reference, not a backslash escape: the GFM autolink of a bare URL
+// absorbs a backslash into itself, so `\]` after a URL still ends the URL at the
+// `]`. A reference reads as the same character in every context.
+function escapeBrackets(text: string): string {
+  return text.replace(/[\\[\]]/g, (c) => `&#${c.charCodeAt(0)};`);
 }
 
 // Parse the label after an escaped `[`, as the link will: a line start such as
@@ -52,19 +49,22 @@ function escapeLabel(label: string): string {
         return;
       }
       const parent = node.node.parent?.name;
-      const keep =
-        labelSourceNodes.has(node.name) || (parent === "Image" && imageSyntaxNodes.has(node.name));
-      const bareUrl = node.name === "URL" && parent !== "Image" && parent !== "Link";
-      if (keep || bareUrl) {
-        escaped += escapePlainText(input.slice(plainFrom, node.from));
+      if (
+        labelSourceNodes.has(node.name) ||
+        (parent === "Image" && imageSyntaxNodes.has(node.name))
+      ) {
+        escaped += escapeBrackets(input.slice(plainFrom, node.from));
         const bytes = input.slice(node.from, node.to);
-        escaped += keep ? bytes : entityEscapeUrl(bytes);
+        // An escaped `\`, `[` or `]` is rewritten too: a bare URL before it would
+        // absorb its backslash.
+        escaped +=
+          node.name === "Escape" && /[\\[\]]$/.test(bytes) ? escapeBrackets(bytes.slice(1)) : bytes;
         plainFrom = node.to;
         return false;
       }
     },
   });
-  return escaped + escapePlainText(input.slice(plainFrom));
+  return escaped + escapeBrackets(input.slice(plainFrom));
 }
 
 export function markdownLinkSource(label: string, href: string): string {
