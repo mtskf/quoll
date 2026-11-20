@@ -37,6 +37,7 @@
 import { ensureSyntaxTree } from "@codemirror/language";
 import {
   type ChangeSpec,
+  countColumn,
   EditorSelection,
   type EditorState,
   type SelectionRange,
@@ -106,6 +107,25 @@ export function contentColumnOf(state: EditorState, item: SyntaxNode): number {
     return markCol + (mark.to - mark.from) + 1;
   }
   return columnAt(state, content.from);
+}
+
+/** CommonMark content column for a marker line. Empty items and items starting
+ *  with indented code use one column of marker padding. */
+export function contentColumnFromMarkerLine(
+  text: string,
+  markerEnd: number,
+  tabSize: number
+): number {
+  const markerEndCol = countColumn(text, tabSize, markerEnd);
+  let i = markerEnd;
+  while (text[i] === " " || text[i] === "\t") {
+    i++;
+  }
+  if (i === text.length) {
+    return markerEndCol + 1;
+  }
+  const col = countColumn(text, tabSize, i);
+  return col - markerEndCol > 4 ? markerEndCol + 1 : col;
 }
 
 /** First non-whitespace column of `line`, or `null` when the line is blank /
@@ -178,37 +198,59 @@ export function leadingCharsForColumns(text: string, cols: number, tabSize: numb
   return i;
 }
 
-/** The whitespace `ChangeSpec` that moves line `lineNumber`'s first
- *  non-whitespace char by `delta` columns, or null for a zero delta / a blank
- *  line (no trailing-space noise). Spaces are inserted AFTER the existing
- *  leading whitespace, not at `line.from`: a space prepended before a tab is
- *  absorbed by the tab's next stop and moves nothing. A negative delta removes
- *  leading whitespace per `leadingCharsForColumns`. */
-function shiftLine(state: EditorState, lineNumber: number, delta: number): ChangeSpec | null {
-  const line = state.doc.line(lineNumber);
-  if (delta === 0 || line.text.trim() === "") {
+/** Move the item's content boundary while preserving the bytes after it.
+ *  Replace a tab crossing the boundary with spaces to retain its overhang. */
+function shiftLine(
+  state: EditorState,
+  lineNumber: number,
+  boundary: number,
+  delta: number
+): ChangeSpec | null {
+  if (delta === 0) {
     return null;
   }
-  if (delta > 0) {
-    const wsLen = line.text.length - line.text.trimStart().length;
-    return { from: line.from + wsLen, insert: " ".repeat(delta) };
+  const line = state.doc.line(lineNumber);
+  const keepThrough = Math.min(boundary, boundary + delta);
+  let i = 0;
+  let col = 0;
+  let keep = 0;
+  let keptCol = 0;
+  while (col < boundary) {
+    const ch = line.text[i];
+    if (ch === " ") {
+      col++;
+    } else if (ch === "\t") {
+      col += state.tabSize - (col % state.tabSize);
+    } else {
+      return null;
+    }
+    i++;
+    if (col <= keepThrough) {
+      keep = i;
+      keptCol = col;
+    }
   }
-  const remove = leadingCharsForColumns(line.text, -delta, state.tabSize);
-  return remove > 0 ? { from: line.from, to: line.from + remove } : null;
+  const insert = " ".repeat(col + delta - keptCol);
+  return line.text.slice(keep, i) === insert
+    ? null
+    : { from: line.from + keep, to: line.from + i, insert };
 }
 
-/** Shift every one of `item`'s own body/descendant lines
- *  (`classifyItemLines(...).ownLines` — lazy lines excluded) by `delta`
- *  columns: the correction that keeps nested content inside an item whose
- *  content column moved (a renumber widening `9.` → `10.`, or Enter moving the
- *  item's tail under a new marker). The marker line is the caller's. */
-export function shiftOwnLines(state: EditorState, item: SyntaxNode, delta: number): ChangeSpec[] {
+/** Move the item's own lines to the new content column so nested content
+ *  follows its marker after a split or renumber. The caller edits the marker line. */
+export function shiftOwnLines(
+  state: EditorState,
+  item: SyntaxNode,
+  newContentCol: number
+): ChangeSpec[] {
+  const boundary = contentColumnOf(state, item);
+  const delta = newContentCol - boundary;
   if (delta === 0) {
     return [];
   }
   const changes: ChangeSpec[] = [];
   for (const lineNo of classifyItemLines(state, item).ownLines) {
-    const change = shiftLine(state, lineNo, delta);
+    const change = shiftLine(state, lineNo, boundary, delta);
     if (change !== null) {
       changes.push(change);
     }
@@ -291,14 +333,9 @@ export function continuationMarkerFor(state: EditorState, item: SyntaxNode): str
  *  sibling item, not between siblings), blockquote-prefixed lists (positions
  *  are absolute), and tab-mixed indent.
  *
- *  Width-aware (the latent bug this consolidation fixes): when a rewrite
- *  changes the marker's BYTE WIDTH (e.g. `9.` → `10.`, 1 digit → 2), the
- *  sibling's content column shifts, so its own body/descendant lines
- *  (`classifyItemLines(state, sib).ownLines`) must shift with it — otherwise a
- *  nested child that was exactly at the OLD content column falls out of the
- *  widened item (a genuinely nested child reads as a lazy/sibling line
- *  instead). Shifts each own line by the byte-width delta via `shiftOwnLines`
- *  (the same correction Enter applies to a split item's tail).
+ *  Recompute each rewritten sibling's content column because a tab after the
+ *  marker can absorb a width change. Shift its own lines to that column to
+ *  keep nested content under the rewritten marker.
  *
  *  Fail-closed: a null `ensureSyntaxTree` (parse did not reach EOF within
  *  budget — the list tail may be unparsed) or any resulting marker out of the
@@ -347,11 +384,18 @@ export function renumberRun(
       return []; // out of the 0..9-digit ListMark range (over cap OR driven
       // negative by the delta) — fail closed rather than emit a corrupt marker
     }
-    const oldWidth = sibMark.to - sibMark.from;
     const newMarker = formatMarker(next);
     changes.push({ from: sibMark.from, to: sibMark.to, insert: newMarker });
-    const deltaWidth = newMarker.length - oldWidth;
-    changes.push(...shiftOwnLines(state, sib, deltaWidth));
+    const { from, text } = state.doc.lineAt(sibMark.from);
+    const markFromRel = sibMark.from - from;
+    const markToRel = sibMark.to - from;
+    const newText = text.slice(0, markFromRel) + newMarker + text.slice(markToRel);
+    const newContentCol = contentColumnFromMarkerLine(
+      newText,
+      markFromRel + newMarker.length,
+      state.tabSize
+    );
+    changes.push(...shiftOwnLines(state, sib, newContentCol));
   }
   return changes;
 }
@@ -427,9 +471,20 @@ function addLineDelta(map: Map<number, number>, lineFrom: number, delta: number)
 function materialiseLineDeltas(state: EditorState, map: Map<number, number>): ChangeSpec[] {
   const changes: ChangeSpec[] = [];
   for (const [lineFrom, delta] of map) {
-    const change = shiftLine(state, state.doc.lineAt(lineFrom).number, delta);
-    if (change !== null) {
-      changes.push(change);
+    if (delta === 0) {
+      continue;
+    }
+    const line = state.doc.lineAt(lineFrom);
+    if (line.text.trim() === "") {
+      continue;
+    }
+    if (delta > 0) {
+      changes.push({ from: line.from, insert: " ".repeat(delta) });
+    } else {
+      const remove = leadingCharsForColumns(line.text, -delta, state.tabSize);
+      if (remove > 0) {
+        changes.push({ from: line.from, to: line.from + remove });
+      }
     }
   }
   return changes;

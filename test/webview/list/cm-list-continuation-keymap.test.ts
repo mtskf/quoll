@@ -284,6 +284,20 @@ describe("continueListOnEnter — split keeps the item's children nested", () =>
       parent: "10.",
     },
     {
+      name: "tab after a bullet marker",
+      doc: "-\tabcd\n\t- child",
+      caretAfter: "-\tab",
+      out: "-\tab\n- cd\n  - child",
+      parent: "-",
+    },
+    {
+      name: "tab after a single-digit ordered marker",
+      doc: "1.\tabcd\n\t- child",
+      caretAfter: "1.\tab",
+      out: "1.\tab\n2. cd\n   - child",
+      parent: "2.",
+    },
+    {
       name: "extra spaces after the marker (new item uses one space)",
       doc: "9.   abcd\n     - child",
       caretAfter: "9.   ab",
@@ -291,10 +305,24 @@ describe("continueListOnEnter — split keeps the item's children nested", () =>
       parent: "10.",
     },
     {
+      name: "tab and space before a child under an aligned ordered marker",
+      doc: "9.   abcd\n\t - child",
+      caretAfter: "9.   ab",
+      out: "9.   ab\n10. cd\n\t- child",
+      parent: "10.",
+    },
+    {
       name: "bullet with extra spaces after the marker",
       doc: "-   abcd\n    - child",
       caretAfter: "-   ab",
       out: "-   ab\n- cd\n  - child",
+      parent: "-",
+    },
+    {
+      name: "space in the split tail adds marker padding",
+      doc: "-   ab cd\n    - child",
+      caretAfter: "-   ab",
+      out: "-   ab\n-  cd\n   - child",
       parent: "-",
     },
     {
@@ -342,6 +370,34 @@ describe("continueListOnEnter — split keeps the item's children nested", () =>
       expect(view.state.doc.toString()).toBe("8. ab\n9. cd\n   - x\n10. e\n    - y");
       expect(parentMarkerOf(view, "x")).toBe("9.");
       expect(parentMarkerOf(view, "y")).toBe("10.");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("keeps the child nested when a tab absorbs the sibling's marker widening", () => {
+    const doc = "1. abcd\n9.\txyz\n\n\t   - child";
+    const view = mount(doc, at("1. ab".length), { withHistory: true });
+    try {
+      expect(parentMarkerOf(view, "child")).toBe("9.");
+      expect(continueListOnEnter(view)).toBe(true);
+      expect(parentMarkerOf(view, "child")).toBe("10.");
+      expect(view.state.doc.toString()).toBe("1. ab\n2. cd\n10.\txyz\n\n\t   - child");
+      expect(undo(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(doc);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("preserves the tab inside fenced code when the split marker widens", () => {
+    const doc = "9. abcd\n   ```\n   \treturn\n   ```";
+    const view = mount(doc, at("9. ab".length), { withHistory: true });
+    try {
+      expect(continueListOnEnter(view)).toBe(true);
+      expect(view.state.doc.line(4).text).toBe("    \treturn");
+      expect(undo(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(doc);
     } finally {
       view.destroy();
     }

@@ -34,9 +34,9 @@ import { type ChangeSpec, EditorSelection, type EditorState, Prec } from "@codem
 import { type Command, keymap } from "@codemirror/view";
 
 import { leadingFrontmatterEnd } from "../frontmatter/detect.js";
-import { columnAt, findTaskMarker } from "./list-geometry.js";
+import { findTaskMarker } from "./list-geometry.js";
 import {
-  contentColumnOf,
+  contentColumnFromMarkerLine,
   continuationMarkerFor,
   isEmptyItem,
   parseListMark,
@@ -163,12 +163,15 @@ export const continueListOnEnter: Command = (view) => {
   // below sit past `head`, so the caret is unaffected.
   const eofItem = resolveAtEof(state, mark.from);
   if (eofItem !== null) {
-    // The item's own lines below the caret now belong to the NEW item, whose
-    // content column is `markCol + <new list marker> + 1 space` (markerStr is
-    // `<marker> ` or `<marker> [ ] `, so its first space ends the marker). Shift
-    // them by the column change so a nested child stays nested (`9.` → `10.`).
-    const newContentCol = columnAt(state, mark.from) + markerStr.indexOf(" ") + 1;
-    changes.push(...shiftOwnLines(state, eofItem, newContentCol - contentColumnOf(state, eofItem)));
+    // The tail can add marker padding. Use the complete new line so the
+    // item's own lines move to the column where the split content begins.
+    const tail = state.doc.sliceString(head, caretLine.to);
+    const newContentCol = contentColumnFromMarkerLine(
+      indent + markerStr + tail,
+      indent.length + markerStr.indexOf(" "),
+      state.tabSize
+    );
+    changes.push(...shiftOwnLines(state, eofItem, newContentCol));
   }
   if (ordered) {
     // Keep the contiguous ordered run sequential.
