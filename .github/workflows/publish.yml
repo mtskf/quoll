@@ -15,6 +15,8 @@ on:
 # just that registry with the audited .vsix. Re-running all jobs after
 # Marketplace succeeds rebuilds the .vsix, fails red at Marketplace on the
 # duplicate version and publishes nothing new. Recover with a version bump.
+# A registry that stored the upload but reported failure also retries red
+# on the duplicate version. Check the registry page, then bump the version.
 #
 # The workflow token stays read-only. Only attest (Sigstore signing) and
 # publish-marketplace (Trusted Publishing exchange) hold id-token: write.
@@ -122,7 +124,7 @@ jobs:
       # drift from that baked default) catalogs the staging prod tree into an
       # SPDX SBOM: the shipped runtime dependency closure at exact resolved
       # versions, with devDependencies (vitest/biome/@types/*, etc.) excluded.
-      # That SBOM is bound to the .vsix digest by `publish`'s Attest SBOM step, so
+      # That SBOM is bound to the .vsix digest by `attest`'s Attest SBOM step, so
       # a consumer verifying the attestation sees only the shipped surface — no
       # false-positive advisory matches against build-only tooling.
       #
