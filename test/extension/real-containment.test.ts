@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isRealPathWithinRoot } from "../../src/extension/surface/reveal-code-reference.js";
+import { isRealPathWithinRoot } from "../../src/extension/links/real-containment.js";
 
 describe("isRealPathWithinRoot", () => {
   it("accepts a file inside the root", () => {

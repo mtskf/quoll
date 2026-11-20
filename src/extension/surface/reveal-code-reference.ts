@@ -3,16 +3,8 @@
 // Named to avoid colliding with reopen-text-editor.ts's openInTextEditor.
 
 import { realpath } from "node:fs/promises";
-import { isAbsolute, relative } from "node:path";
 import { FileType, Position, Selection, type Uri, window, workspace } from "vscode";
-
-/** Pure containment predicate: true when `realTarget` is `realRoot` itself or a
- *  descendant of it. node:path only (no I/O) so it unit-tests without a live
- *  host — the realpath resolution happens in the async wrapper below. */
-export function isRealPathWithinRoot(realTarget: string, realRoot: string): boolean {
-  const rel = relative(realRoot, realTarget);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
-}
+import { isRealPathWithinRoot } from "../links/real-containment.js";
 
 /** True only when `target` exists, is a regular file, AND its REAL (symlink-
  *  canonicalised) path stays within `root`'s real path. realpath'ing BOTH sides
