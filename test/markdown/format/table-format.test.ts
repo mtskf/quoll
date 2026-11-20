@@ -1,13 +1,61 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { applyEdits } from "../../../src/markdown/format/edit.js";
 import { classifyDocument } from "../../../src/markdown/format/segment.js";
-import { tableEdits } from "../../../src/markdown/format/table-format.js";
+import { FormatTooLargeError, tableEdits } from "../../../src/markdown/format/table-format.js";
 import { parseTable } from "../../../src/markdown/table/index.js";
 
 // Realistic path: tables come from the Lezer classifier's tableRanges.
 const fmt = (s: string) => applyEdits(s, tableEdits(s, classifyDocument(s).tableRanges));
 
 describe("tableEdits", () => {
+  it.each([
+    ["alignments", "|h|h|h|h|\n|-|:-|:-:|-:|\n|a|longer|c|d|"],
+    ["indents and mixed endings", "  |a|b|\r\n |:-|--:|\n   |longer|b|"],
+    ["no body rows", "|a|b|\r\n|-|-|"],
+  ])("matches rendered growth for %s", (_name, src) => {
+    const ranges = [{ from: 0, to: src.length }];
+    const edits = tableEdits(src, ranges);
+    const growth = applyEdits(src, edits).length - src.length;
+    expect(edits).toHaveLength(1);
+    expect(tableEdits(src, ranges, growth)).toEqual(edits);
+    expect(() => tableEdits(src, ranges, growth - 1)).toThrow(FormatTooLargeError);
+  });
+
+  it("accumulates growth across tables", () => {
+    const src = "|a|b|\n|-|-|\n|c|d|\n\n|e|f|\n|-|-|\n|g|h|";
+    const ranges = classifyDocument(src).tableRanges;
+    const edits = tableEdits(src, ranges);
+    const growth = applyEdits(src, edits).length - src.length;
+    expect(edits).toHaveLength(2);
+    expect(tableEdits(src, ranges, growth)).toEqual(edits);
+    for (const range of ranges) {
+      expect(tableEdits(src, [range], growth - 1)).toHaveLength(1);
+    }
+    expect(() => tableEdits(src, ranges, growth - 1)).toThrow(FormatTooLargeError);
+  });
+
+  it("credits a shrinking table against later growth", () => {
+    const src = "|        a        |        b        |\n|------|------|\n\n|c|d|\n|-|-|";
+    const ranges = classifyDocument(src).tableRanges;
+    const edits = tableEdits(src, ranges);
+    const growth = applyEdits(src, edits).length - src.length;
+    expect(edits).toHaveLength(2);
+    expect(() => tableEdits(src, ranges.slice(1), growth)).toThrow(FormatTooLargeError);
+    expect(tableEdits(src, ranges, growth)).toEqual(edits);
+  });
+
+  it("rejects a wide table before generating its padding", () => {
+    const src = `|a|b|\n|-|-|\n${"|c|d|\n".repeat(700)}|${"x".repeat(6000)}|e|`;
+    const ranges = classifyDocument(src).tableRanges;
+    const repeat = vi.spyOn(String.prototype, "repeat");
+    try {
+      expect(() => tableEdits(src, ranges, 10)).toThrow(FormatTooLargeError);
+      expect(repeat).not.toHaveBeenCalledWith(5999);
+    } finally {
+      repeat.mockRestore();
+    }
+  });
+
   it("pads columns to equal width", () => {
     expect(fmt("| a | bbbb |\n| - | - |\n| 1 | 2 |\n")).toBe(
       "| a   | bbbb |\n| --- | ---- |\n| 1   | 2    |\n"

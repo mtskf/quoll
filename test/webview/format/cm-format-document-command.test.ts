@@ -20,6 +20,14 @@ function makeView(doc: string, readOnly = false): EditorView {
     state: EditorState.create({ doc, extensions: readOnly ? [EditorState.readOnly.of(true)] : [] }),
   });
 }
+// A fenced code block of exactly `length` chars. Short wrapped lines keep Lezer/CM cheap
+// (one 4MB line is slow under full-suite load) and fenced lines are exempt from trailing-space trims.
+function fencedFiller(length: number): string {
+  const body = length - "```\n\n```".length;
+  const line = 4094;
+  const rest = body % (line + 1);
+  return `\`\`\`\n${`${"x".repeat(line)}\n`.repeat((body - rest) / (line + 1))}${"x".repeat(rest)}\n\`\`\``;
+}
 function countDispatch(view: EditorView): () => number {
   let n = 0;
   const orig = view.dispatch.bind(view);
@@ -83,6 +91,45 @@ describe("runFormatDocument", () => {
     expect(runFormatDocument(view)).toBe("too-large");
     expect(view.state.doc.toString()).toBe("a");
     spy.mockRestore();
+    view.destroy();
+  });
+  it("refuses an oversized table expansion without dispatching", () => {
+    const doc = `|a|b|\n|-|-|\n${"|c|d|\n".repeat(700)}|${"x".repeat(6000)}|e|`;
+    expect(doc.length).toBeLessThan(MAX_CONTENT_LENGTH);
+    const view = makeView(doc);
+    const dispatched = countDispatch(view);
+    const repeat = vi.spyOn(String.prototype, "repeat");
+    try {
+      expect(runFormatDocument(view)).toBe("too-large");
+      // Refused by the budget, not by the post-render backstop: no padding was built.
+      expect(repeat.mock.calls.filter(([n]) => n >= 1000)).toEqual([]);
+    } finally {
+      repeat.mockRestore();
+    }
+    expect(dispatched()).toBe(0);
+    expect(view.state.doc.toString()).toBe(doc);
+    view.destroy();
+  });
+  it("formats a document that stays within the cap because other rules shrink it", () => {
+    // Growth from the table alone would cross the cap; the trailing-space trim
+    // pays for it, so the formatted document fits and must be formatted.
+    const table = "| a | bbbb |\n| - | - |\n| 1 | 2 |";
+    const growth = fmtIndex.formatDocument(table).length - table.length;
+    const head = `${"x \n".repeat(growth)}`;
+    const tail = `\n\n${table}`;
+    const doc = `${head}${fencedFiller(MAX_CONTENT_LENGTH - head.length - tail.length)}${tail}`;
+    expect(doc.length).toBe(MAX_CONTENT_LENGTH);
+    const view = makeView(doc);
+    expect(runFormatDocument(view)).toBe("formatted");
+    expect(view.state.doc.length).toBeLessThanOrEqual(MAX_CONTENT_LENGTH);
+    expect(view.state.doc.toString()).toContain("| a   | bbbb |");
+    view.destroy();
+  });
+  it("reports unchanged, not too-large, for an over-cap document whose tables are already formatted", () => {
+    const table = "| a   | bbbb |\n| --- | ---- |\n| 1   | 2    |";
+    const doc = `${table}\n\n${fencedFiller(MAX_CONTENT_LENGTH)}`;
+    const view = makeView(doc);
+    expect(runFormatDocument(view)).toBe("unchanged");
     view.destroy();
   });
   it("outboundContentLength counts CRLF-serialized length (edit-sync posts CRLF)", () => {
@@ -165,6 +212,36 @@ describe("runFormatDocument", () => {
 });
 
 describe("runFormatDocument — the outbound size cap is measured in the document's EOL", () => {
+  it("refuses real table growth that fits as LF but exceeds the CRLF cap", () => {
+    const table = "| a | bbbb |\n| - | - |\n| 1 | 2 |";
+    const formattedTable = fmtIndex.formatDocument(table);
+    const prefix = `\`\`\`\n${`${"x".repeat(4094)}\n`.repeat(MAX_CONTENT_LENGTH / 4096 - 1)}`;
+    const suffix = "\n```\n\n";
+    const padding = "x".repeat(
+      MAX_CONTENT_LENGTH - outboundContentLength(prefix + suffix + table, "\r\n")
+    );
+    const doc = `${prefix}${padding}${suffix}${table}`.replaceAll("\n", "\r\n");
+    const formatted = `${prefix}${padding}${suffix}${formattedTable}`;
+    expect(doc.length).toBe(MAX_CONTENT_LENGTH);
+    expect(outboundContentLength(formatted, "\n")).toBeLessThan(MAX_CONTENT_LENGTH);
+    expect(outboundContentLength(formatted, "\r\n")).toBeGreaterThan(MAX_CONTENT_LENGTH);
+    const view = new EditorView({
+      state: EditorState.create({ doc, extensions: [quollDocumentEol.of("\r\n")] }),
+    });
+    const dispatched = countDispatch(view);
+    const repeat = vi.spyOn(String.prototype, "repeat");
+    try {
+      expect(runFormatDocument(view)).toBe("too-large");
+      // The budget (measured in CRLF), not the backstop, refused it: nothing was rendered.
+      expect(repeat).not.toHaveBeenCalled();
+    } finally {
+      repeat.mockRestore();
+    }
+    expect(dispatched()).toBe(0);
+    expect(serializeDocument(view.state.doc, "\r\n")).toBe(doc);
+    view.destroy();
+  });
+
   it("bails when the result fits the cap as LF but exceeds it as CRLF", () => {
     // The guard this pins: format-document-command.ts's size check (the
     // `outboundContentLength(...) > MAX_CONTENT_LENGTH` bail) must read Quoll's

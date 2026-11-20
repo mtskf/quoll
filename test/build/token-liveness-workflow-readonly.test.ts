@@ -77,8 +77,8 @@ describe("token liveness workflow is read-only", () => {
   it("only ever invokes a registry CLI with verify-pat", () => {
     // An ALLOWLIST of the whole invocation, not a denylist of known-bad
     // subcommands. A denylist ("must not contain `publish`") is both over- and
-    // under-broad here: the step's own error text legitimately says "publish.yml
-    // SKIPS its Open VSX step", while a future `ovsx create-namespace` — a
+    // under-broad here: the step's error names the "Open VSX publish job",
+    // while a future `ovsx create-namespace` — a
     // write — would sail past it. Matching on the CLI name (`vsce` included, so
     // a reintroduced Marketplace call cannot slip in unpinned) also catches an
     // invocation that bypasses `pnpm exec` (a bare binary, npx). Case-sensitive
