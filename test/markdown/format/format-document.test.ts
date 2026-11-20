@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { formatDocument, formatDocumentEdits } from "../../../src/markdown/format/index.js";
+import { applyEdits } from "../../../src/markdown/format/edit.js";
+import {
+  FormatTooLargeError,
+  formatDocument,
+  formatDocumentEdits,
+} from "../../../src/markdown/format/index.js";
 
 describe("formatDocument", () => {
   it("applies table, renumber, blank, and trim rules together", () => {
@@ -73,5 +78,37 @@ describe("formatDocument", () => {
   });
   it("leaves the content of a multi-line inline code span byte-identical", () => {
     expect(formatDocument("a `x    \ny \t\nz` b   \n")).toBe("a `x    \ny \t\nz` b  \n");
+  });
+
+  describe("maxLength budget", () => {
+    it("credits a shrinking table that follows a growing one", () => {
+      const src = "|a|b|\n|-|-|\n\n|        a        |        b        |\n|------|------|";
+      const formatted = formatDocument(src);
+      expect(formatted.length).toBeLessThan(src.length);
+      expect(formatDocumentEdits(src, src.length)).toEqual(formatDocumentEdits(src));
+    });
+    it("throws only when the net growth of all rules exceeds the cap", () => {
+      const src = "|a|b|\n|-|-|\n";
+      const grown = formatDocument(src).length;
+      expect(() => formatDocumentEdits(src, grown)).not.toThrow();
+      expect(() => formatDocumentEdits(src, grown - 1)).toThrow(FormatTooLargeError);
+    });
+    it("counts growth from non-table rules against the budget", () => {
+      // No built-in rule grows UTF-16 length, so weight "2" as two units (additive,
+      // like the real outbound measure): renumbering `1.` -> `2.` then grows the list.
+      const measure = (text: string) => text.length + (text.match(/2/g)?.length ?? 0);
+      const list = "1. a\n1. b\n";
+      const src = `${list}\n|a|b|\n|-|-|\n`;
+      const listEdits = formatDocumentEdits(list);
+      const listGrowth = measure(applyEdits(list, listEdits)) - measure(list);
+      expect(listGrowth).toBeGreaterThan(0);
+      const grown = measure(applyEdits(src, formatDocumentEdits(src)));
+      expect(() => formatDocumentEdits(src, grown, measure)).not.toThrow();
+      expect(() => formatDocumentEdits(src, grown - 1, measure)).toThrow(FormatTooLargeError);
+    });
+    it("does not refuse a document that already exceeds the cap but does not grow", () => {
+      const src = "| a   | bbbb |\n| --- | ---- |\n| 1   | 2    |\n";
+      expect(formatDocumentEdits(src, 1)).toEqual([]);
+    });
   });
 });
