@@ -554,6 +554,20 @@ describe("release OIDC publish scope", () => {
     expect(sbom).toMatch(/^ {10}sbom-path: sbom\.spdx\.json$/m);
   });
 
+  // Attestation is a release gate: `continue-on-error` lets a failed attest
+  // pass, and a step-level `if:` can skip it or (via `always()`) run it past a
+  // red gate. Either silently drops the guarantee. Step-level keys sit at 8
+  // spaces, so `with:` values (10) cannot false-match.
+  it.each([
+    "Attest build provenance",
+    "Attest SBOM",
+  ])("keeps `%s` unconditional and fail-closed", (name) => {
+    const step = stepBlock(publishJob, name, "publish.yml");
+    expect(step).toMatch(/^ {8}uses: actions\/attest@/m);
+    expect(step).not.toMatch(/^ {8}(?:"|')?continue-on-error(?:"|')?\s*:/m);
+    expect(step).not.toMatch(/^ {8}(?:"|')?if(?:"|')?\s*:/m);
+  });
+
   // A failed Marketplace publish must stop Open VSX, and both registries must
   // ship the audited extension.vsix.
   it("publishes to Open VSX from the same .vsix, with neither registry step allowed to fail open", () => {
