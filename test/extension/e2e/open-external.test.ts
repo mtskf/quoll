@@ -103,11 +103,12 @@ describeExternalOpen("open-external", function () {
 
   it("still hands off the next URL after an empty authority", async () => {
     const mark = markExternalOpenLog();
+    const harness = await getHarness();
     const panel = await openSamplePanel();
     const sentinel = "http://127.0.0.1:9/sentinel";
 
-    // The rejected https:// open raises an expected error toast.
     panel.simulateInbound({ protocol: PROTOCOL_VERSION, type: "open-external", href: "https://" });
+    await harness.waitForError((msg) => msg.startsWith("Quoll: couldn't open the link."));
     panel.simulateInbound({ protocol: PROTOCOL_VERSION, type: "open-external", href: sentinel });
 
     await waitForExternalOpen(mark, sentinel);
