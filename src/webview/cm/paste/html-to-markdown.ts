@@ -51,7 +51,7 @@ import {
   type PreparedInline,
   serializeBlockNodes,
 } from "./block-ir.js";
-import { SKIP_TAGS, tableElementToGfm } from "./html-table-to-gfm.js";
+import { collapseWs, SKIP_TAGS, tableElementToGfm, trimFoldedSpace } from "./html-table-to-gfm.js";
 import {
   BOLD,
   CapExceeded,
@@ -145,37 +145,6 @@ function escapeMarkers(text: string): string {
   return text
     .replace(/^(\s*)([#>+-])/gm, "$1\\$2")
     .replace(/^(\s*)(\d{1,9})([.)])(\s|$)/gm, "$1$2\\$3$4");
-}
-
-/** Normalise a run of SOURCE text to what a reader actually sees: drop the
- *  zero-width characters, then collapse all whitespace runs (incl. newlines) to a
- *  single space — HTML's own inline whitespace behaviour. Applied to text nodes
- *  and to the emptiness predicate, never to a `<pre>` BODY, which the block path
- *  reads verbatim, so an interior newline cannot form indented code or smuggle an
- *  unescaped line start; real breaks come only from `<br>` and block structure.
- *
- *  Deletes ONLY the pure width-less SPACING class — U+200B ZERO WIDTH SPACE and U+FEFF
- *  (BOM / zero-width no-break space) — because these occupy no width AND carry no glue
- *  semantics, so folding one into a space would insert a gap between two letters that
- *  touch. U+200C ZERO WIDTH NON-JOINER, U+200D ZERO WIDTH JOINER, and U+2060 WORD JOINER
- *  are DELIBERATELY PRESERVED here: they are also width-less but they carry meaning —
- *  U+200D glues emoji ZWJ sequences (a family / profession / flag emoji), U+200C is
- *  required orthography in Persian and Indic scripts, and U+2060 is a no-break joiner
- *  that keeps two glyphs from separating — so deleting them on the emit path corrupts
- *  real text on disk (a family emoji splits into three people; a Persian word loses a
- *  letter; a no-break pair comes apart). This runs on EVERY emitted text node, so it is
- *  fidelity-first. U+00A0 needs no clause — it IS `\s`.
- *
- *  EMPTINESS is a SEPARATE question, answered by `blankAfterInvisible`, which strips
- *  the `\p{Default_Ignorable_Code_Point} ∪ \p{Cf}` union (the joiners included, plus bidi
- *  marks, variation selectors and the interlinear controls) because a lone one is visually
- *  empty even though a joiner WITHIN text is load-bearing. Splitting the two is what lets
- *  output keep joiners while
- *  `hasVisibleContent` still rejects a contenteditable's emptied block — the leftover
- *  container (`<h1>&#8203;</h1>`, `<h1>&#8205;</h1>`) the emptiness guard exists to
- *  reject, which `String.prototype.trim()` does not strip. */
-function collapseWs(text: string): string {
-  return text.replace(/[\u200B\uFEFF]/g, "").replace(/\s+/g, " ");
 }
 
 /** Concatenate every descendant text node of `el` VERBATIM, skipping `SKIP_TAGS`
@@ -420,7 +389,7 @@ export function collectInline(
 
 /** Serialise one inline run (a segment's nodes) to Markdown through the atom IR:
  *  collect styled atoms, then let `serializeInlineRuns` place the markers, repair
- *  flanking and trim the run's edge spaces / breaks. A heading cannot hold a hard
+ *  flanking and trim folded spaces / breaks at the run's edges. A heading cannot hold a hard
  *  break, so `"heading"` turns each break into a single space first. Richness
  *  combines accepted code/link atoms with the emitted emphasis markers. */
 function inlineMarkdown(
@@ -729,7 +698,7 @@ function collectParagraphs(nodes: Node[], depth: number, ctx: Ctx): BlockNode[] 
   const blocks: BlockNode[] = [];
   for (const segment of splitInlineSegments(nodes.filter((node) => !contributesNothing(node)))) {
     const inline = inlineMarkdown(segment, depth, ctx, "paragraph");
-    const markdown = escapeMarkers(inline.markdown).trim();
+    const markdown = escapeMarkers(inline.markdown);
     if (markdown !== "") {
       blocks.push({ kind: "paragraph", inline: { markdown, rich: inline.rich } });
     }
@@ -768,7 +737,7 @@ function collectBlocks(parent: Element, depth: number, ctx: Ctx): readonly Block
       flushInline();
       if (hasVisibleContent(el)) {
         const inline = inlineMarkdown(Array.from(el.childNodes), depth, ctx, "heading");
-        const markdown = collapseWs(inline.markdown).trim();
+        const markdown = trimFoldedSpace(collapseWs(inline.markdown));
         if (!blankAfterInvisible(markdown)) {
           blocks.push({
             kind: "heading",
@@ -887,7 +856,7 @@ export function htmlToMarkdown(html: string): HtmlToMarkdownResult | null {
       repair: { remaining: MAX_REPAIR_WORK },
     };
     const result = serializeBlockNodes(collectBlocks(body, 0, ctx));
-    const out = result.markdown.trim();
+    const out = result.markdown;
     // The incremental `count` cap already aborts amplification mid-build; this
     // final check is a cheap backstop against uncounted wrapper growth (list /
     // blockquote indentation).

@@ -142,6 +142,8 @@ it.each([
   "\u00a0",
   "\u2028",
   "\u2029",
+  "\u202f",
+  "\u3000",
   "\ufeff",
 ])("Unicode whitespace agrees in both readers: %s", (space) => {
   const source = `a${space}**b**`;

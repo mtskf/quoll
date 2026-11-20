@@ -59,6 +59,47 @@ export const SKIP_TAGS = new Set([
   "OPTGROUP",
 ]);
 
+// ASCII whitespace plus U+00A0, which clipboard serialisers use as '&nbsp;'
+// to protect a space. U+3000, U+202F and the other Unicode spaces carry width
+// as written, even though Markdown's delimiter rules still treat them as whitespace.
+const HTML_WHITESPACE_RUN = /[ \t\n\f\r\u00A0]+/g;
+
+/** Normalise a run of SOURCE text to what a reader actually sees: drop the
+ *  zero-width characters, then collapse each `HTML_WHITESPACE_RUN` (incl. newlines) to
+ *  a single space — HTML's own inline whitespace behaviour, so U+3000 / U+202F stay
+ *  text. Shared by prose text nodes and joined cell / caption text. The `<pre>`
+ *  body stays verbatim. In folded text, a source newline cannot form indented
+ *  code or smuggle an unescaped line start; real breaks come only from
+ *  `<br>` and block structure.
+ *
+ *  Deletes ONLY the pure width-less SPACING class — U+200B ZERO WIDTH SPACE and U+FEFF
+ *  (BOM / zero-width no-break space) — because these occupy no width AND carry no glue
+ *  semantics, so folding one into a space would insert a gap between two letters that
+ *  touch. U+200C ZERO WIDTH NON-JOINER, U+200D ZERO WIDTH JOINER, and U+2060 WORD JOINER
+ *  are DELIBERATELY PRESERVED here: they are also width-less but they carry meaning —
+ *  U+200D glues emoji ZWJ sequences (a family / profession / flag emoji), U+200C is
+ *  required orthography in Persian and Indic scripts, and U+2060 is a no-break joiner
+ *  that keeps two glyphs from separating — so deleting them on the emit path corrupts
+ *  real text on disk (a family emoji splits into three people; a Persian word loses a
+ *  letter; a no-break pair comes apart).
+ *
+ *  EMPTINESS is a SEPARATE question, answered by `blankAfterInvisible`, which strips
+ *  the `\p{Default_Ignorable_Code_Point} ∪ \p{Cf}` union (the joiners included, plus bidi
+ *  marks, variation selectors and the interlinear controls) because a lone one is visually
+ *  empty even though a joiner WITHIN text is load-bearing. Splitting the two is what lets
+ *  output keep joiners while `hasVisibleContent` still rejects a contenteditable's
+ *  emptied block (`<h1>&#8203;</h1>`, `<h1>&#8205;</h1>`), whose leftover text survives
+ *  `String.prototype.trim()`. */
+export function collapseWs(text: string): string {
+  return text.replace(/[\u200B\uFEFF]/g, "").replace(HTML_WHITESPACE_RUN, " ");
+}
+
+/** After `collapseWs`, at most one folded space sits at each edge. Unicode
+ *  spaces such as U+3000 and U+202F keep their width there. */
+export function trimFoldedSpace(text: string): string {
+  return text.replace(/^ | $/g, "");
+}
+
 // Block-level elements: their children are bracketed with spaces so text across a
 // boundary does not glue (`<div>a</div><div>b</div>` → `a b`, not `ab`). Unknown
 // elements recurse as inline — an acceptable degrade (surplus whitespace collapses).
@@ -268,7 +309,7 @@ function collectCellText(cell: Element): string {
       stack.push(" ");
     }
   }
-  return parts.join("").replace(/\s+/g, " ").trim();
+  return trimFoldedSpace(collapseWs(parts.join("")));
 }
 
 /** Backslash-escape the Markdown-inline-active characters that can form an
@@ -408,7 +449,7 @@ export function tableElementToGfm(table: Element): string | null {
         .replace(/^(\d{1,9})([.)])(?=\s|$)/, "$1\\$2")
         .replace(/^([#>+-])/, "\\$1")
     : "";
-  return caption ? `${caption}\n\n${gfm}` : gfm;
+  return caption.trim() ? `${caption}\n\n${gfm}` : gfm;
 }
 
 /** Convert a table-ONLY HTML fragment to a GFM table string, or `null` when the

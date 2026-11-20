@@ -19,6 +19,8 @@ const WJ = String.fromCharCode(0x2060); // U+2060 WORD JOINER (load-bearing: no-
 const SHY = String.fromCharCode(0x00ad); // U+00AD SOFT HYPHEN (invisible unless line-wrapped)
 const VS16 = String.fromCharCode(0xfe0f); // U+FE0F VARIATION SELECTOR-16 (emoji presentation)
 const HEART = String.fromCharCode(0x2764); // U+2764 HEAVY BLACK HEART (base for ❤️)
+const IDSP = String.fromCharCode(0x3000); // U+3000 IDEOGRAPHIC SPACE (full-width CJK space)
+const NNBSP = String.fromCharCode(0x202f); // U+202F NARROW NO-BREAK SPACE (French / Mongolian)
 
 /** True when `md` parses (under Quoll's shipped GFM parser) to a tree containing a
  *  node named `name` — used to prove a converted construct actually renders as the
@@ -235,6 +237,40 @@ describe("htmlToMarkdown — inline constructs", () => {
     // ("I go") becomes میروم without it.
     const word = `می${ZWNJ}روم`;
     expect(convert(`<h2>${word}</h2>`)).toBe(`## ${word}`);
+  });
+  it("keeps U+3000 and U+202F as text — HTML folds only its own whitespace", () => {
+    // HTML collapses ASCII whitespace; U+3000 / U+202F are visible-width characters the
+    // browser renders as written, so folding them into one ASCII space rewrites the text.
+    const md = convert(`<p><strong>東京${IDSP}${IDSP}大阪</strong> 10${NNBSP}%  \t\n a</p>`);
+    expect(md).toBe(`**東京${IDSP}${IDSP}大阪** 10${NNBSP}% a`);
+    expect(parsesToNode(md as string, "StrongEmphasis")).toBe(true);
+    // U+00A0 keeps folding: clipboard serialisers write `&nbsp;` to protect spaces.
+    expect(convert(`<p>a${NBSP} b</p>`)).toBe("a b");
+  });
+  it("keeps paragraph-edge U+3000 and U+202F outside strong emphasis", () => {
+    const md = convert(`<p><br> \t${IDSP}<b>本文</b>${NNBSP} <br></p>`);
+    expect(md).toBe(`${IDSP}**本文**${NNBSP}`);
+    expect(parsesToNode(md as string, "StrongEmphasis")).toBe(true);
+    expect(convert(`<p><b> ${NNBSP}本文${IDSP} </b></p>`)).toBe(`${NNBSP}**本文**${IDSP}`);
+  });
+  it("keeps U+3000 and U+202F at heading edges", () => {
+    expect(convert(`<h2><br> ${IDSP}見出し${NNBSP} <br></h2>`)).toBe(`## ${IDSP}見出し${NNBSP}`);
+  });
+  it("drops whitespace-only paragraphs and headings", () => {
+    expect(convert(`<p>${IDSP}</p>`)).toBeNull();
+    expect(convert(`<p>${IDSP}<br>${NNBSP}</p>`)).toBeNull();
+    expect(convert(`<h2>${IDSP}</h2>`)).toBeNull();
+  });
+  it("keeps a leading U+3000 on a table caption in rich HTML", () => {
+    const html = `<table><caption> ${IDSP}# caption${NNBSP} </caption><tr><td>A</td></tr></table>`;
+    expect(convert(html)).toBe(`${IDSP}# caption${NNBSP}\n\n| A |\n| --- |`);
+  });
+  it("still drops emphasis that would close against a U+3000 edge (flanking)", () => {
+    // Markdown's flanking rules still read U+3000 as whitespace: a styled run that ends
+    // on one must not put its closer after it.
+    const md = convert(`<p><em>東京${IDSP}</em>大阪</p>`);
+    expect(md).toBe(`*東京*${IDSP}大阪`);
+    expect(parsesToNode(md as string, "Emphasis")).toBe(true);
   });
   it("collapses a text-node newline to a space (no indented code, no smuggled marker)", () => {
     expect(convert("<p>a\n    - b</p>")).toBe("a - b");
