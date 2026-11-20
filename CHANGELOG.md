@@ -8,6 +8,7 @@ All notable changes to Quoll are documented here.
 
 - Pressing Enter inside a numbered item whose number gains a digit (9 → 10, 99 → 100) now keeps the item's nested list under the new item instead of pushing it out of the list.
 - Pasting formatted text or a table no longer turns full-width (ideographic) spaces or narrow no-break spaces into ordinary spaces.
+- Typing straight after saving no longer raises a false "This file changed on disk" warning. A different change made on disk right after a save still warns.
 
 ### Changed
 

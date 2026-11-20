@@ -60,14 +60,20 @@ export function decodeComparableUtf8(bytes: Uint8Array): string | null {
   return text;
 }
 
+// True when two texts hold the same document content once the BOM/EOL
+// differences VS Code erases on load are normalized away. A DECODED-content
+// compare, not a raw byte compare.
+export function sameDocumentText(a: string, b: string): boolean {
+  return normalizeText(a) === normalizeText(b);
+}
+
 // Prompt ONLY when the buffer is dirty AND the on-disk content genuinely
-// diverges from the in-memory buffer. This is a DECODED-content diff (not a raw
-// byte compare): BOM-only and EOL-only differences never prompt, matching how
-// VS Code normalizes both on load.
+// diverges from the in-memory buffer: BOM-only and EOL-only differences never
+// prompt, matching how VS Code normalizes both on load.
 export function shouldPromptDiskConflict(
   isDirty: boolean,
   diskText: string,
   bufferText: string
 ): boolean {
-  return isDirty && normalizeText(diskText) !== normalizeText(bufferText);
+  return isDirty && !sameDocumentText(diskText, bufferText);
 }
