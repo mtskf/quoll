@@ -1,7 +1,6 @@
-// Dispatch wrapper for the whole-document Format command. Computes the format
-// edits with the pure formatDocumentEdits(), VALIDATES them via applyEdits (the
-// one place that throws on overlapping edits — CM6 would instead silently
-// mis-compose overlaps into corruption), size-checks the result against the
+// Dispatch wrapper for the whole-document Format command. Budgets table growth
+// before rendering, validates edits via applyEdits (which throws on overlaps
+// that CM6 would silently mis-compose), size-checks the result against the
 // edit-sync content cap, and only then applies them as ONE `{ changes }`
 // transaction — a single undo step riding the normal dispatch -> edit-sync ->
 // host write-lock pipeline (no raw write path). Selection auto-maps through the
@@ -12,9 +11,11 @@
 // so the shell can tell the user why a format appeared to do nothing.
 import type { EditorView } from "@codemirror/view";
 import { applyEdits } from "../../../markdown/format/edit.js";
-import { formatDocumentEdits } from "../../../markdown/format/index.js";
+import { FormatTooLargeError, formatDocumentEdits } from "../../../markdown/format/index.js";
 import { MAX_CONTENT_LENGTH } from "../../../shared/protocol.js";
 import { type DocumentEol, quollDocumentEol } from "../seed.js";
+
+const TOO_LARGE_MESSAGE = "[quoll] Format Document aborted: result exceeds the content size limit.";
 
 /** Length of `text` once its `\n` newlines are serialized with the DOCUMENT's
  *  own EOL (edit-sync posts the CRLF-joined content; the LF-internal length
@@ -48,14 +49,24 @@ export function runFormatDocument(view: EditorView): FormatDocumentResult {
     return "readonly";
   }
   const source = view.state.doc.toString();
+  // The size budget must read the DOCUMENT's EOL (state.facet(quollDocumentEol)):
+  // the type rejects a plain `string`, but it cannot say WHICH of the two
+  // DocumentEol values this call must read. See outboundContentLength's JSDoc.
+  const eol = view.state.facet(quollDocumentEol);
+  // Table formatting preserves line endings, so the growth is the same after serialization.
+  const maxGrowth = MAX_CONTENT_LENGTH - outboundContentLength(source, eol);
   let edits: ReturnType<typeof formatDocumentEdits>;
   let formatted: string;
   try {
-    edits = formatDocumentEdits(source);
+    edits = formatDocumentEdits(source, maxGrowth);
     // Connect the overlap guard to the runtime path: applyEdits THROWS on
     // overlapping edits, so a rule bug becomes a caught bail, not corruption.
     formatted = applyEdits(source, edits);
   } catch (err) {
+    if (err instanceof FormatTooLargeError) {
+      console.error(TOO_LARGE_MESSAGE);
+      return "too-large";
+    }
     console.error(
       "[quoll] Format Document aborted (formatter/edit error); no changes applied.",
       err
@@ -65,14 +76,11 @@ export function runFormatDocument(view: EditorView): FormatDocumentResult {
   if (edits.length === 0 || formatted === source) {
     return "unchanged";
   }
-  // The size check must read the DOCUMENT's EOL (state.facet(quollDocumentEol)):
-  // the type rejects a plain `string`, but it cannot say WHICH of the two
-  // DocumentEol values this call must read. See outboundContentLength's JSDoc.
-  if (outboundContentLength(formatted, view.state.facet(quollDocumentEol)) > MAX_CONTENT_LENGTH) {
+  if (outboundContentLength(formatted, eol) > MAX_CONTENT_LENGTH) {
     // postEditMessage would refuse to post the oversized (CRLF-serialized) content
     // and show the webview send-failure banner, leaving the doc formatted but
     // unsaved. Bail before mutating instead.
-    console.error("[quoll] Format Document aborted: result exceeds the content size limit.");
+    console.error(TOO_LARGE_MESSAGE);
     return "too-large";
   }
   // The formatter works in CM's LF-internal space and CM splits string inserts

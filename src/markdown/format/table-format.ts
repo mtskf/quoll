@@ -11,6 +11,13 @@ import type { Range } from "./segment.js";
 
 const MIN_WIDTH = 3;
 
+export class FormatTooLargeError extends Error {
+  constructor() {
+    super("Formatted table growth exceeds the size budget.");
+    this.name = "FormatTooLargeError";
+  }
+}
+
 function pad(text: string, width: number, align: Align | undefined): string {
   const gap = Math.max(0, width - text.length);
   if (align === "right") {
@@ -36,9 +43,8 @@ function delimiterCell(width: number, align: Align | undefined): string {
   return "-".repeat(width);
 }
 
-export function formatTableBlock(table: Table): string {
+function columnWidths(table: Table): number[] {
   const cols = table.delimiter.cells.length;
-  const aligns = tableAlign(table);
   const widths: number[] = [];
   for (let c = 0; c < cols; c++) {
     let w = Math.max(MIN_WIDTH, (table.header.cells[c]?.raw ?? "").length);
@@ -47,6 +53,29 @@ export function formatTableBlock(table: Table): string {
     }
     widths[c] = w;
   }
+  return widths;
+}
+
+function formattedLength(table: Table, widths: readonly number[]): number {
+  // Every cell fills its width. Outer pipes and separators add 3 * columns + 1.
+  const rowContentLength = widths.reduce((sum, width) => sum + width, 0) + 3 * widths.length + 1;
+  const rowLength = ({
+    leadingIndent,
+    lineEnding,
+  }: Pick<Table["header"], "leadingIndent" | "lineEnding">) =>
+    rowContentLength + leadingIndent.length + lineEnding.length;
+  let length = rowLength(table.header) + rowLength(table.delimiter);
+  for (const row of table.rows) {
+    length += rowLength(row);
+  }
+  return length;
+}
+
+export function formatTableBlock(
+  table: Table,
+  widths: readonly number[] = columnWidths(table)
+): string {
+  const aligns = tableAlign(table);
   const renderRow = (cells: readonly { raw: string }[], indent: string, ending: string): string =>
     `${indent}| ${widths.map((w, c) => pad(cells[c]?.raw ?? "", w, aligns[c])).join(" | ")} |${ending}`;
 
@@ -58,8 +87,13 @@ export function formatTableBlock(table: Table): string {
   return out;
 }
 
-export function tableEdits(source: string, tableRanges: readonly Range[]): Edit[] {
+export function tableEdits(
+  source: string,
+  tableRanges: readonly Range[],
+  maxGrowth = Number.POSITIVE_INFINITY
+): Edit[] {
   const edits: Edit[] = [];
+  let growth = 0;
   for (const { from, to } of tableRanges) {
     const table = parseTable(source, from, to);
     if (!table) {
@@ -99,9 +133,13 @@ export function tableEdits(source: string, tableRanges: readonly Range[]): Edit[
     if (table.rows.some((r) => r.cells.length !== cols)) {
       continue; // ragged -> byte-untouched
     }
-    const slice = source.slice(from, to);
-    const formatted = formatTableBlock(table);
-    if (formatted === slice) {
+    const widths = columnWidths(table);
+    growth += formattedLength(table, widths) - (to - from);
+    if (growth > maxGrowth) {
+      throw new FormatTooLargeError();
+    }
+    const formatted = formatTableBlock(table, widths);
+    if (formatted === source.slice(from, to)) {
       continue; // already normal form
     }
     edits.push({ from, to, insert: formatted });

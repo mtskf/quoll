@@ -11,7 +11,9 @@ import { listRenumberEdits } from "./list-rules.js";
 import { classifyDocument } from "./segment.js";
 import { tableEdits } from "./table-format.js";
 
-export function formatDocumentEdits(source: string): Edit[] {
+/** `maxGrowth` covers tables, the only amplifying rule. Other rules are bounded
+ *  by input size, and the caller's final size check remains the backstop. */
+export function formatDocumentEdits(source: string, maxGrowth = Number.POSITIVE_INFINITY): Edit[] {
   if (source.length === 0) {
     return [];
   }
@@ -23,7 +25,7 @@ export function formatDocumentEdits(source: string): Edit[] {
   // (used to validate + string-apply) also sorts, so both consume identical
   // document-ordered, non-overlapping edits.
   return [
-    ...tableEdits(source, tableRanges),
+    ...tableEdits(source, tableRanges, maxGrowth),
     ...listRenumberEdits(orderedLists),
     ...bulletUnifyEdits(source, bulletLists),
     ...lineEdits(source, keepOut, literalSpans),

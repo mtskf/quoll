@@ -10,6 +10,7 @@ All notable changes to Quoll are documented here.
 - Pasting formatted text or a table no longer turns full-width (ideographic) spaces or narrow no-break spaces into ordinary spaces.
 - Typing straight after saving no longer raises a false "This file changed on disk" warning. A different change made on disk right after a save still warns.
 - A change made on disk while Quoll is still reading an earlier one is no longer missed; Quoll checks again once the first read finishes and still warns about unsaved edits.
+- Format Document no longer stalls on a table whose padding would blow the document past the size limit; it now refuses straight away and leaves the document unchanged.
 
 ### Changed
 
