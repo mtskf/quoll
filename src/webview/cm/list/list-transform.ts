@@ -200,8 +200,8 @@ export function leadingCharsForColumns(text: string, cols: number, tabSize: numb
 }
 
 /** Expand tabs whose width changes across nested list and quote prefixes to preserve indentation.
- *  HTML continuation payload starts at its owning item's content column. Leave CodeText and
- *  its preceding tab intact because expanding that padding can add spaces to the code. */
+ *  HTML continuation payload starts at its owning item's content column. Preserve CodeText
+ *  and any quote-padding tab immediately before it. */
 function shiftLine(
   state: EditorState,
   item: SyntaxNode,
@@ -259,7 +259,9 @@ function shiftLine(
     const node = item.resolve(pos, 1);
     if (
       node.name === "CodeText" ||
-      (line.text[i] === "\t" && item.resolve(pos + 1, 1).name === "CodeText")
+      (line.text[i] === "\t" &&
+        item.resolve(pos, -1).name === "QuoteMark" &&
+        item.resolve(pos + 1, 1).name === "CodeText")
     ) {
       break;
     }

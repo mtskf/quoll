@@ -500,6 +500,34 @@ describe("continueListOnEnter — split keeps the item's children nested", () =>
     }
   });
 
+  it("keeps fenced code inside the nested bullet after a structural indent tab", () => {
+    const doc = "9. abcd\n      - ```\n    \tvalue\n        ```";
+    const view = mount(doc, at("9. ab".length), { withHistory: true });
+    function codeText() {
+      const { state } = view;
+      const tree = ensureSyntaxTree(state, state.doc.length, 5000);
+      expect(tree?.toString()).not.toContain("CodeBlock");
+      const code = tree?.resolve(state.doc.toString().indexOf("value"), 1);
+      expect(code?.name).toBe("CodeText");
+      const fence = code?.parent;
+      expect(fence?.name).toBe("FencedCode");
+      expect(fence?.parent?.name).toBe("ListItem");
+      expect(fence?.parent?.parent?.name).toBe("BulletList");
+      expect(fence?.to).toBe(state.doc.length);
+      return code && state.doc.sliceString(code.from, code.to);
+    }
+    try {
+      const before = codeText();
+      expect(before).toBe("value");
+      expect(continueListOnEnter(view)).toBe(true);
+      expect(codeText()).toBe(before);
+      expect(undo(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(doc);
+    } finally {
+      view.destroy();
+    }
+  });
+
   it("preserves CodeText after a quote padding tab", () => {
     const doc = "9. abcd\n   > ```python\n   >\t\treturn\n   > ```";
     const view = mount(doc, at("9. ab".length), { withHistory: true });
