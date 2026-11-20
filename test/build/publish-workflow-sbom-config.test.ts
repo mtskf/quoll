@@ -100,8 +100,9 @@ function expectBlockSteps(job: string) {
   }
 }
 
-// Unnamed setup steps also occupy a slot, so an insertion between two
-// named steps is visible to the ordering checks.
+// Unnamed setup steps also occupy a slot. Only the "consecutively" check
+// compares adjacent slots, so only it catches an insertion between two named
+// steps; callers that filter the list pin relative order alone.
 const stepLabels = (job: string) =>
   job
     .split("\n")
