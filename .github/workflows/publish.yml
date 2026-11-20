@@ -6,8 +6,8 @@ on:
       - 'v*'
 
 # NOTE: This workflow is ACTIVE. On a pushed `v*` tag it packages one .vsix and publishes
-# it to BOTH registries: the VS Code Marketplace (VSCODE_PAT) and Open VSX (OPENVSX_PAT).
-# Both secrets are configured and both legs run today. The Open VSX step keeps an
+# it to BOTH registries: the VS Code Marketplace (OIDC Trusted Publishing, no secret) and
+# Open VSX (OPENVSX_PAT). Both legs run today. The Open VSX step keeps an
 # `if: ${{ env.OVSX_PAT != '' }}` guard, which means that if that secret is ever removed
 # or emptied this workflow does NOT fail — it silently skips, and releases quietly stop
 # reaching Open VSX with the run still green. That failure mode is why
@@ -16,11 +16,12 @@ on:
 # `package.json.publisher`. Tag pushes trigger a LIVE publish (v0.1.0 shipped 2026-07-02),
 # so never push a `v*` tag until you intend to release that version to users.
 
-# Least-privilege GITHUB_TOKEN. Marketplace / Open VSX publishing uses the
-# VSCODE_PAT / OPENVSX_PAT secrets, not the workflow token, so those stay
-# read-only. The two write scopes below are required ONLY by the attestation
-# steps: `id-token: write` mints the Sigstore OIDC token, `attestations: write`
-# records the provenance + SBOM attestations in the repo's attestation store.
+# Least-privilege GITHUB_TOKEN. Publishing never uses the workflow token
+# itself, so `contents` stays read-only. `id-token: write` mints the GitHub
+# OIDC tokens for two consumers: the Sigstore signing in the attestation steps,
+# and the Marketplace Trusted Publishing exchange in `vsce publish --oidc`.
+# `attestations: write` records the provenance + SBOM attestations in the
+# repo's attestation store. Open VSX still authenticates with OPENVSX_PAT.
 # (No `artifact-metadata: write` — that is only needed for registry storage
 # records, which this file-subject attestation does not create.)
 permissions:
@@ -202,14 +203,21 @@ jobs:
           subject-path: extension.vsix
           sbom-path: sbom.spdx.json
 
-      # Token is read implicitly from the VSCE_PAT env var — never passed as a
-      # `-p <token>` CLI arg, so the secret cannot leak into process arguments.
+      # OIDC Trusted Publishing: vsce exchanges this job's GitHub OIDC token
+      # (audience marketplace.visualstudio.com, via the workflow-level
+      # `id-token: write`) for a short-lived Marketplace credential. The
+      # publisher's Trusted Publishing policy (owner mtskf, repo quoll, workflow
+      # publish.yml, no environment) decides who may publish, so this step
+      # needs no long-lived PAT. Why now: Azure DevOps retires Global PATs on
+      # 2027-01-27, which would have broken the VSCODE_PAT path. `--oidc` is
+      # hidden from `vsce publish --help` in @vscode/vsce 4.0.0 but implemented
+      # (out/oidc.js). The PAT is no longer used, so the VSCE_PAT env is gone.
+      # Renaming this file breaks the policy match.
       - name: Publish to VS Code Marketplace
-        env:
-          VSCE_PAT: ${{ secrets.VSCODE_PAT }}
-        run: pnpm exec vsce publish --no-dependencies --packagePath extension.vsix
+        run: pnpm exec vsce publish --oidc --no-dependencies --packagePath extension.vsix
 
-      # Token is read implicitly from the OVSX_PAT env var (same rationale as above).
+      # Token is read implicitly from the OVSX_PAT env var — never passed as a
+      # CLI arg, so the secret cannot leak into process arguments.
       - name: Publish to Open VSX
         env:
           OVSX_PAT: ${{ secrets.OPENVSX_PAT }}
