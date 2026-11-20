@@ -10,8 +10,12 @@ const BACKTICK_RUN = /`+/g;
 
 /** Length of the longest consecutive backtick run in `text` (0 when none). */
 function longestBacktickRun(text: string): number {
-  const runs = text.match(BACKTICK_RUN);
-  return runs ? Math.max(...runs.map((r) => r.length)) : 0;
+  // A loop, not Math.max(...runs): a spread of every run overflows the call stack.
+  let longest = 0;
+  for (const [run] of text.matchAll(BACKTICK_RUN)) {
+    longest = Math.max(longest, run.length);
+  }
+  return longest;
 }
 
 /** True iff `text` contains a backtick run of exactly `length` — one that would
