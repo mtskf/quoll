@@ -150,9 +150,10 @@ function escapeMarkers(text: string): string {
 /** Normalise a run of SOURCE text to what a reader actually sees: drop the
  *  zero-width characters, then collapse each `HTML_WHITESPACE_RUN` (incl. newlines) to
  *  a single space — HTML's own inline whitespace behaviour, so U+3000 / U+202F stay
- *  text. Applied to text nodes and to the emptiness predicate, never to a `<pre>` BODY, which the block path
- *  reads verbatim, so an interior newline cannot form indented code or smuggle an
- *  unescaped line start; real breaks come only from `<br>` and block structure.
+ *  text. Applied to text nodes and to the emptiness predicate, never to a `<pre>`
+ *  BODY, which the block path reads verbatim, so an interior newline cannot form
+ *  indented code or smuggle an unescaped line start; real breaks come only from
+ *  `<br>` and block structure.
  *
  *  Deletes ONLY the pure width-less SPACING class — U+200B ZERO WIDTH SPACE and U+FEFF
  *  (BOM / zero-width no-break space) — because these occupy no width AND carry no glue
