@@ -20,6 +20,14 @@ function makeView(doc: string, readOnly = false): EditorView {
     state: EditorState.create({ doc, extensions: readOnly ? [EditorState.readOnly.of(true)] : [] }),
   });
 }
+// A fenced code block of exactly `length` chars. Short wrapped lines keep Lezer/CM cheap
+// (one 4MB line is slow under full-suite load) and fenced lines are exempt from trailing-space trims.
+function fencedFiller(length: number): string {
+  const body = length - "```\n\n```".length;
+  const line = 4094;
+  const rest = body % (line + 1);
+  return `\`\`\`\n${`${"x".repeat(line)}\n`.repeat((body - rest) / (line + 1))}${"x".repeat(rest)}\n\`\`\``;
+}
 function countDispatch(view: EditorView): () => number {
   let n = 0;
   const orig = view.dispatch.bind(view);
@@ -109,7 +117,7 @@ describe("runFormatDocument", () => {
     const growth = fmtIndex.formatDocument(table).length - table.length;
     const head = `${"x \n".repeat(growth)}`;
     const tail = `\n\n${table}`;
-    const doc = `${head}${"y".repeat(MAX_CONTENT_LENGTH - head.length - tail.length)}${tail}`;
+    const doc = `${head}${fencedFiller(MAX_CONTENT_LENGTH - head.length - tail.length)}${tail}`;
     expect(doc.length).toBe(MAX_CONTENT_LENGTH);
     const view = makeView(doc);
     expect(runFormatDocument(view)).toBe("formatted");
@@ -119,7 +127,7 @@ describe("runFormatDocument", () => {
   });
   it("reports unchanged, not too-large, for an over-cap document whose tables are already formatted", () => {
     const table = "| a   | bbbb |\n| --- | ---- |\n| 1   | 2    |";
-    const doc = `${table}\n\n${"y".repeat(MAX_CONTENT_LENGTH)}`;
+    const doc = `${table}\n\n${fencedFiller(MAX_CONTENT_LENGTH)}`;
     const view = makeView(doc);
     expect(runFormatDocument(view)).toBe("unchanged");
     view.destroy();
