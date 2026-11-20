@@ -59,14 +59,9 @@ function columnWidths(table: Table): number[] {
 function formattedLength(table: Table, widths: readonly number[]): number {
   // Every cell fills its width. Outer pipes and separators add 3 * columns + 1.
   const rowContentLength = widths.reduce((sum, width) => sum + width, 0) + 3 * widths.length + 1;
-  const rowLength = ({
-    leadingIndent,
-    lineEnding,
-  }: Pick<Table["header"], "leadingIndent" | "lineEnding">) =>
-    rowContentLength + leadingIndent.length + lineEnding.length;
-  let length = rowLength(table.header) + rowLength(table.delimiter);
-  for (const row of table.rows) {
-    length += rowLength(row);
+  let length = 0;
+  for (const row of [table.header, table.delimiter, ...table.rows]) {
+    length += row.leadingIndent.length + rowContentLength + row.lineEnding.length;
   }
   return length;
 }
