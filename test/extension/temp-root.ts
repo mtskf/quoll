@@ -1,3 +1,6 @@
+// The only sanctioned temp-dir allocation in the test/extension tree
+// (E2E: makeTempDir; unit: makeUnitTempDir), enforced by temp-dir-choke-point.test.ts.
+//
 // One temp root per E2E run. The process that CREATES the disposable state
 // owns removing it: launch.ts mkdtemps this root, hands the path to the
 // Electron host through extensionTestsEnv, and removes exactly this path in
@@ -94,9 +97,7 @@ function assertSlug(slug: string): string {
   return slug;
 }
 
-/** Allocate a per-test workspace dir under the run root. This is the ONLY
- *  sanctioned temp-dir allocation in the E2E tree — enforced by
- *  test/extension/temp-dir-choke-point.test.ts.
+/** Allocate a per-test workspace dir under the run root.
  *  `async` is load-bearing: `resolveRunTempWorkDir` / `assertSlug` throw
  *  synchronously, and a declared `Promise` must deliver that as a rejection. */
 export async function makeTempDir(slug: string): Promise<string> {
@@ -105,4 +106,15 @@ export async function makeTempDir(slug: string): Promise<string> {
 
 export function makeTempDirSync(slug: string): string {
   return fs.mkdtempSync(path.join(resolveRunTempWorkDir(), `${assertSlug(slug)}-`));
+}
+
+/** Allocate a realpath'd unit-test dir. Use sync fs so suites can mock node:fs/promises. */
+export function makeUnitTempDir(slug: string): { dir: string; dispose(): void } {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `quoll-unit-${assertSlug(slug)}-`)));
+  return {
+    dir,
+    dispose(): void {
+      fs.rmSync(dir, { recursive: true, force: true });
+    },
+  };
 }
