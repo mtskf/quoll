@@ -83,6 +83,25 @@ describe("lint rule: no-multiple-blanks", () => {
     expect(blankDiags(doc)).toHaveLength(1);
   });
 
+  it("exempts in-fence blanks and flags between-fence blanks across many fences", () => {
+    // Alternating fenced / indented code blocks, each with an interior double
+    // blank and separated by a double blank, so every code span is entered and
+    // left in document order. Exactly the between-block excess blanks flag.
+    const block = (i: number) =>
+      i % 2 === 0 ? "```\nx\n\n\ny\n```\n" : "para\n\n    x\n\n\n    y\n";
+    let doc = "";
+    const expected: number[] = [];
+    for (let i = 0; i < 40; i++) {
+      if (i > 0) {
+        // Separator: two blank lines; the second (at doc.length + 1) flags.
+        expected.push(doc.length + 1);
+        doc += "\n\n";
+      }
+      doc += block(i);
+    }
+    expect(blankDiags(doc).map((d) => d.from)).toEqual(expected);
+  });
+
   describe("opt-in autofix", () => {
     it("carries a fix that deletes the excess blank line INCLUDING its terminator", () => {
       const doc = "a\n\n\nb\n"; // ""@2 (allowed), ""@3 (excess, flagged)
