@@ -9,15 +9,15 @@
 // edit-sync -> host write-lock pipeline via view.dispatch. There is no raw write
 // path; normal write settlement and recovery apply to these edits too.
 //
-// Unwrap detection is PURE STRING / DELIMITER MATCHING — no Markdown parser.
-// A parser under a time budget can return an incomplete tree on a large doc and
-// misclassify an existing `**foo**` as un-bolded, corrupting it into
-// `****foo****`; string matching is deterministic and parse-free so the
-// round-trip contract holds on any doc size. The single-char `*` disambiguates
-// against `**` via the char just beyond the delimiter. Code is its own toggle:
-// its fence grows past any backtick run in the selection (code-span-source.ts),
-// so it matches whole backtick runs of equal length instead of one marker.
-// Link label escaping parses only the selected string in a full, deterministic parse.
+// Nothing here reads the editor's syntax tree. That tree is parsed under a time
+// budget, can be incomplete on a large doc, and would misclassify an existing
+// `**foo**` as un-bolded, corrupting it into `****foo****`. Bold, italic and
+// strike unwrap by delimiter matching instead; the single-char `*`
+// disambiguates against `**` via the char just beyond the delimiter. Code and
+// link labels need CommonMark's own pairing, so each runs its own full,
+// deterministic gfmParser parse of a bounded string: code parses the
+// selection's paragraph to find the span it unwraps, and a link label parses
+// only the selected string.
 
 import {
   type ChangeSpec,
@@ -27,11 +27,8 @@ import {
   type Text,
 } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
-import {
-  codeSpanSource,
-  codeSpanStripsEdges,
-  hasBacktickRunOf,
-} from "../../../markdown/code-span-source.js";
+import { codeSpanSource, codeSpanStripsEdges } from "../../../markdown/code-span-source.js";
+import { gfmParser } from "../../../markdown/gfm-parser.js";
 import { markdownLinkSource } from "../../../markdown/link-source.js";
 import type { FormatAction } from "../../../shared/protocol.js";
 
@@ -119,22 +116,62 @@ function toggleMark(state: EditorState, marker: string): FormatSpec {
   };
 }
 
-/** Length of the backtick run ending at `pos` (`dir` -1) or starting there (`dir` 1). */
-function backtickRun(doc: Text, pos: number, dir: -1 | 1): number {
-  let n = 0;
-  for (let p = dir < 0 ? pos - 1 : pos; p >= 0 && p < doc.length; p += dir) {
-    if (doc.sliceString(p, p + 1) !== "`") {
-      break;
-    }
-    n++;
+const isBlankLine = (text: string) => /^[ \t]*$/.test(text);
+
+/** The selected lines widened to the nearest blank line on each side: a code
+ *  span cannot cross a blank line, so this holds every span the selection
+ *  could touch, with its list or quote markers for the parser to read. */
+function paragraphAround(doc: Text, from: number, to: number): { start: number; text: string } {
+  let first = doc.lineAt(from);
+  while (first.number > 1 && !isBlankLine(doc.line(first.number - 1).text)) {
+    first = doc.line(first.number - 1);
   }
-  return n;
+  let last = doc.lineAt(to);
+  while (last.number < doc.lines && !isBlankLine(doc.line(last.number + 1).text)) {
+    last = doc.line(last.number + 1);
+  }
+  return { start: first.from, text: doc.sliceString(first.from, last.to) };
 }
 
-/** Toggle inline code so the rendered body is the whole selection: a wrap
- *  fences it past any backtick run inside, padded as CommonMark needs, and an
- *  unwrap removes a fence pair of equal length (plus its padding space) that
- *  no run inside could have closed first. */
+/** The code span the selection is, or is the body of — as written or with the
+ *  one-space strip applied — and the text it renders as. */
+function selectedCodeSpan(
+  doc: Text,
+  from: number,
+  to: number
+): { from: number; to: number; body: string } | null {
+  const { start, text } = paragraphAround(doc, from, to);
+  let span: { from: number; to: number; body: string } | null = null;
+  gfmParser.parse(text).iterate({
+    enter(node) {
+      if (span || node.name !== "InlineCode") {
+        return;
+      }
+      const marks = node.node.getChildren("CodeMark");
+      const open = start + marks[0].to;
+      const close = start + marks[marks.length - 1].from;
+      const raw = doc.sliceString(open, close);
+      const strips = codeSpanStripsEdges(raw);
+      const spanFrom = start + node.from;
+      const spanTo = start + node.to;
+      if (from === spanFrom && to === spanTo) {
+        span = { from: spanFrom, to: spanTo, body: strips ? raw.slice(1, -1) : raw };
+      } else if (
+        (from === open && to === close) ||
+        (strips && from === open + 1 && to === close - 1)
+      ) {
+        span = { from: spanFrom, to: spanTo, body: doc.sliceString(from, to) };
+      }
+      return false;
+    },
+  });
+  return span;
+}
+
+/** Toggle inline code so the rendered body is the whole selection. A full parse
+ *  of the paragraph finds the span the selection is (or is the body of) and
+ *  unwraps it to that body; otherwise the selection is fenced past any backtick
+ *  run inside, padded as CommonMark needs. */
 function toggleCode(state: EditorState): FormatSpec {
   const { from, to } = state.selection.main;
   const doc = state.doc;
@@ -146,48 +183,21 @@ function toggleCode(state: EditorState): FormatSpec {
     };
   }
 
-  // Inner text selected: the fences sit just outside it, after a padding space
-  // on each side when the body as written strips one.
-  for (const pad of [1, 0]) {
-    const open = from - pad;
-    const close = to + pad;
-    if (open < 0 || close > doc.length) {
-      continue;
-    }
-    const body = doc.sliceString(open, close);
-    if (pad === 1 && !codeSpanStripsEdges(body)) {
-      continue;
-    }
-    const fence = backtickRun(doc, open, -1);
-    if (fence > 0 && backtickRun(doc, close, 1) === fence && !hasBacktickRunOf(body, fence)) {
-      return {
-        changes: [
-          { from: open - fence, to: from },
-          { from: to, to: close + fence },
-        ],
-        selection: EditorSelection.range(open - fence, open - fence + (to - from)),
-      };
-    }
+  const span = selectedCodeSpan(doc, from, to);
+  if (span) {
+    return {
+      changes: { from: span.from, to: span.to, insert: span.body },
+      selection: EditorSelection.range(span.from, span.from + span.body.length),
+    };
   }
 
-  // Whole span selected, fences included.
+  // A fence beside a backtick would join that run and take in text outside the
+  // selection, so leave the document as it is.
+  if (matchAt(doc, from - 1, "`") || matchAt(doc, to, "`")) {
+    return { changes: [], selection: state.selection.main };
+  }
+
   const text = doc.sliceString(from, to);
-  const fence = text.length - text.replace(/^`+/, "").length;
-  const closingFence = text.length - text.replace(/`+$/, "").length;
-  if (fence > 0 && fence < text.length && closingFence === fence) {
-    const body = text.slice(fence, -fence);
-    if (!hasBacktickRunOf(body, fence)) {
-      const edge = fence + (codeSpanStripsEdges(body) ? 1 : 0);
-      return {
-        changes: [
-          { from, to: from + edge },
-          { from: to - edge, to },
-        ],
-        selection: EditorSelection.range(from, to - 2 * edge),
-      };
-    }
-  }
-
   const source = codeSpanSource(text);
   const start = from + (source.length - text.length) / 2;
   return {

@@ -18,12 +18,6 @@ function longestBacktickRun(text: string): number {
   return longest;
 }
 
-/** True iff `text` contains a backtick run of exactly `length` — one that would
- *  close a span opened by a fence of that length. */
-export function hasBacktickRunOf(text: string, length: number): boolean {
-  return (text.match(BACKTICK_RUN) ?? []).some((r) => r.length === length);
-}
-
 /** True iff CommonMark strips one character from each end of this code body. */
 export function codeSpanStripsEdges(body: string): boolean {
   return /^[ \n]/.test(body) && /[ \n]$/.test(body) && /[^ \n]/.test(body);

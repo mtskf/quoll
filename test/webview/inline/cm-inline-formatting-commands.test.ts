@@ -7,11 +7,11 @@ import {
   computeLinkWrap,
 } from "../../../src/webview/cm/inline/inline-formatting-commands.js";
 
-// NO Markdown language extension: detection is pure string matching, so the
-// tests deliberately construct a parser-free state. If any assertion below ever
-// needed a syntax tree it would fail here — that is the regression pin proving
-// unwrap does not depend on the parser (and so can't corrupt on a large doc
-// where the parse is incomplete).
+// NO Markdown language extension: detection never reads the editor's syntax
+// tree, so the tests deliberately construct a tree-free state. If any assertion
+// below ever needed that tree it would fail here — that is the regression pin
+// proving unwrap does not depend on the time-budgeted parse (and so can't
+// corrupt on a large doc where that parse is incomplete).
 function stateFor(doc: string, sel: { anchor: number; head?: number }): EditorState {
   return EditorState.create({
     doc,
@@ -246,9 +246,43 @@ describe("computeInlineFormat — code keeps the whole selection", () => {
     expect(applyFormat("`` a`b ``", { anchor: 0, head: 9 }, "code").doc).toBe("a`b");
   });
 
-  it("does not unwrap when the outside runs differ in length", () => {
-    // `` ``a` `` is not one span; the selection wraps instead.
+  it("leaves a selection that borders a backtick unchanged", () => {
+    // `` ``a` `` is not one span, and a fence beside a backtick would merge with it.
     const r = applyFormat("``a`", { anchor: 2, head: 3 }, "code");
-    expect(r.doc).toBe("```a``");
+    expect(r.doc).toBe("``a`");
+    expect([r.from, r.to]).toEqual([2, 3]);
+  });
+
+  it("leaves a selection that ends at a backtick outside it unchanged", () => {
+    // Fencing "a`b" here would join the trailing backtick into the closing fence.
+    const doc = "x `a`b` y";
+    const r = applyFormat(doc, { anchor: 3, head: 6 }, "code");
+    expect(r.doc).toBe(doc);
+    expect([r.from, r.to]).toEqual([3, 6]);
+  });
+
+  it.each([
+    ["on one line", "run `npm` install `foo` now", "install", ["npm", "install", "foo"]],
+    ["across lines", "see `a`\nb\n`c` here", "b", ["a", "b", "c"]],
+  ])("wraps text between two code spans %s instead of joining them", (_, doc, text, bodies) => {
+    const from = doc.indexOf(text);
+    const r = applyFormat(doc, { anchor: from, head: from + text.length }, "code");
+    expect(renderedCodeBodies(r.doc)).toEqual(bodies);
+    expect(r.doc.slice(r.from, r.to)).toBe(text);
+  });
+
+  it("keeps the fences of a selected fenced code block", () => {
+    const doc = "```\nconst x = 1;\n```";
+    const r = applyFormat(doc, { anchor: 0, head: doc.length }, "code");
+    expect(renderedCodeBodies(r.doc)).toEqual([doc]);
+    expect(r.doc.slice(r.from, r.to)).toBe(doc);
+  });
+
+  it("unwraps a span inside a list item", () => {
+    expect(applyFormat("- a `b` c", { anchor: 5, head: 6 }, "code").doc).toBe("- a b c");
+  });
+
+  it("unwraps a span that crosses a line break", () => {
+    expect(applyFormat("x `a\nb` y", { anchor: 3, head: 6 }, "code").doc).toBe("x a\nb y");
   });
 });
