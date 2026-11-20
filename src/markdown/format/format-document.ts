@@ -14,8 +14,13 @@ import { tableEdits } from "./table-format.js";
 /** `maxLength` caps the formatted document, in units of `measure` (default:
  *  UTF-16 length; the caller passes its outbound length). It is judged on the net
  *  growth of ALL rules, and a table set whose growth exceeds what is left of the
- *  budget throws `FormatTooLargeError` before any padding is rendered. A document
- *  that does not grow never throws; the caller's final size check is the backstop. */
+ *  budget throws `FormatTooLargeError` before any padding is rendered. It never
+ *  throws while the tables do not grow (table growth <= 0), even over the cap;
+ *  it throws only when they grow and, net of the other rules' shrinkage, the
+ *  result still exceeds it. Table growth is counted in UTF-16 length, which
+ *  equals its `measure` growth because table formatting preserves line endings;
+ *  `measure` must be additive over concatenation. The caller's final size check
+ *  is the backstop. */
 export function formatDocumentEdits(
   source: string,
   maxLength = Number.POSITIVE_INFINITY,

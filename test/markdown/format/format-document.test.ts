@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { applyEdits } from "../../../src/markdown/format/edit.js";
 import {
   FormatTooLargeError,
   formatDocument,
@@ -91,6 +92,19 @@ describe("formatDocument", () => {
       const grown = formatDocument(src).length;
       expect(() => formatDocumentEdits(src, grown)).not.toThrow();
       expect(() => formatDocumentEdits(src, grown - 1)).toThrow(FormatTooLargeError);
+    });
+    it("counts growth from non-table rules against the budget", () => {
+      // No built-in rule grows UTF-16 length, so weight "2" as two units (additive,
+      // like the real outbound measure): renumbering `1.` -> `2.` then grows the list.
+      const measure = (text: string) => text.length + (text.match(/2/g)?.length ?? 0);
+      const list = "1. a\n1. b\n";
+      const src = `${list}\n|a|b|\n|-|-|\n`;
+      const listEdits = formatDocumentEdits(list);
+      const listGrowth = measure(applyEdits(list, listEdits)) - measure(list);
+      expect(listGrowth).toBeGreaterThan(0);
+      const grown = measure(applyEdits(src, formatDocumentEdits(src)));
+      expect(() => formatDocumentEdits(src, grown, measure)).not.toThrow();
+      expect(() => formatDocumentEdits(src, grown - 1, measure)).toThrow(FormatTooLargeError);
     });
     it("does not refuse a document that already exceeds the cap but does not grow", () => {
       const src = "| a   | bbbb |\n| --- | ---- |\n| 1   | 2    |\n";
