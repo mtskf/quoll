@@ -247,6 +247,23 @@ it("URL syntax guard uses supplied state and owned range", () => {
   });
   expect(selectionIsPlainText(state, 0, 5)).toBe(true);
   expect(selectionIsPlainText(state, 7, 11)).toBe(false);
+  expect(decideUrlPaste(state, "https://example.com")).toBeNull();
+});
+
+it.each([
+  ["a]b", "https://example.com", "[a\\]b](https://example.com)"],
+  ["foo\\", "https://example.com", "[foo\\\\](https://example.com)"],
+  ["phase [2", "https://example.com", "[phase \\[2](https://example.com)"],
+  ["label", "https://example.com/AT&amp;T", "[label](https://example.com/AT&amp;amp;T)"],
+])("URL decision wraps %s with %s", (label, url, expected) => {
+  const state = EditorState.create({
+    doc: `before ${label} after`,
+    selection: { anchor: 7, head: 7 + label.length },
+    extensions: [quollMarkdownLanguage()],
+  });
+  const decision = decideUrlPaste(state, url);
+  expect(decision).not.toBeNull();
+  expect(decision?.render(state, 7, 7 + label.length)).toBe(expected);
 });
 
 it.each([

@@ -10,6 +10,7 @@ All notable changes to Quoll are documented here.
 - Pasting formatted text or a table no longer turns full-width (ideographic) spaces or narrow no-break spaces into ordinary spaces.
 - Typing straight after saving no longer raises a false "This file changed on disk" warning. A different change made on disk right after a save still warns.
 - A change made on disk while Quoll is still reading an earlier one is no longer missed; Quoll checks again once the first read finishes and still warns about unsaved edits.
+- Pasting a URL over selected text, or making a link with the link command, now links the whole selection even when it contains a stray `[`, `]` or a trailing backslash. A pasted URL also opens exactly as pasted, so text such as `&amp;` in it is no longer turned into `&`.
 
 ### Changed
 
