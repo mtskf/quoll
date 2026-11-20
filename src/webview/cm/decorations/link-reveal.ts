@@ -83,8 +83,8 @@ export const linkReveal: DecorationProvider = {
           }
           // Inline-form Link has a destination; reference-form does not.
           // Skip the latter — C4b is inline-only.
-          const urlChild = linkDestination(node.node, ctx.state.doc);
-          if (urlChild === null) {
+          const destination = linkDestination(node.node, ctx.state.doc);
+          if (destination === null) {
             return;
           }
           let contentStart: number | null = null;
@@ -95,8 +95,7 @@ export const linkReveal: DecorationProvider = {
           }
           // First child should be a LinkMark `[` at node.from. Use it as
           // the start of inline content (content starts AFTER `[`).
-          // Then iterate siblings: a `]` LinkMark closes the inline
-          // content.
+          // Then iterate siblings: a `]` LinkMark closes the inline content.
           do {
             if (sub.name === "LinkMark") {
               const ch = ctx.state.doc.sliceString(sub.from, sub.to);
@@ -118,7 +117,7 @@ export const linkReveal: DecorationProvider = {
           do {
             // Every LinkMark plus the destination URL — never a URL inside
             // the label, which is label text the user must still see.
-            if (sub2.name === "LinkMark" || sub2.from === urlChild.from) {
+            if (sub2.name === "LinkMark" || sub2.from === destination.from) {
               if (sub2.from < range.to && range.from < sub2.to) {
                 out.push({
                   from: sub2.from,
@@ -171,7 +170,9 @@ export const linkReveal: DecorationProvider = {
                 ctx.state,
                 ctx.tree,
                 classifyLinkTarget(
-                  decodeMarkdownDestination(ctx.state.doc.sliceString(urlChild.from, urlChild.to))
+                  decodeMarkdownDestination(
+                    ctx.state.doc.sliceString(destination.from, destination.to)
+                  )
                 ),
                 // "viewport-only" is the whole reason this reads as a named arm
                 // rather than an omitted budget: forcing a parse here would run

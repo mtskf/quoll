@@ -155,11 +155,11 @@ export function tryOpenLinkAt(
     return false;
   }
   // Reference-form Link has no destination.
-  const urlNode = linkDestination(node, state.doc);
-  if (urlNode === null) {
+  const destination = linkDestination(node, state.doc);
+  if (destination === null) {
     return false;
   }
-  const raw = state.sliceDoc(urlNode.from, urlNode.to);
+  const raw = state.sliceDoc(destination.from, destination.to);
   const decoded = decodeMarkdownDestination(raw);
   // Classify (pure), then answer the document question. The budget is spent
   // only if the arm is a fragment — see resolveLinkTarget. This switch adds
