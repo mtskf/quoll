@@ -9,14 +9,19 @@
 // edit-sync -> host write-lock pipeline via view.dispatch. There is no raw write
 // path; normal write settlement and recovery apply to these edits too.
 //
-// Unwrap detection is PURE STRING / DELIMITER MATCHING — no Markdown parser.
-// A parser under a time budget can return an incomplete tree on a large doc and
+// Bold, italic and strike never read the editor's syntax tree. That tree is
+// parsed under a time budget, can be incomplete on a large doc, and would
 // misclassify an existing `**foo**` as un-bolded, corrupting it into
-// `****foo****`; string matching is deterministic and parse-free so the
-// round-trip contract holds on any doc size. Single-char markers (`*`, `` ` ``)
-// disambiguate against `**`/double runs via the char just beyond the delimiter.
-// Link label escaping parses only the selected string in a full, deterministic parse.
+// `****foo****`. They unwrap by delimiter matching instead; the single-char `*`
+// disambiguates against `**` via the char just beyond the delimiter. Code needs
+// CommonMark's own pairing in its real container context (list, quote, fenced
+// block), so it reads the editor's tree, and only once the tree is final through
+// the end of the selection's block: before that it leaves the document as it is.
+// A wrap is also parsed before it is returned, and dropped unless the selection
+// came out as exactly one code span of its own text.
+// A link label runs its own full gfmParser parse of the selected string only.
 
+import { ensureSyntaxTree } from "@codemirror/language";
 import {
   type ChangeSpec,
   EditorSelection,
@@ -25,17 +30,19 @@ import {
   type Text,
 } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
+import { codeSpanSource, codeSpanStripsEdges } from "../../../markdown/code-span-source.js";
 import { markdownLinkSource } from "../../../markdown/link-source.js";
 import type { FormatAction } from "../../../shared/protocol.js";
+import { expandToEnclosingBlock } from "../structural-guard.js";
 
 // open === close for every inline mark; a single `marker` string is enough.
-// Keyed by the protocol's action set minus `link`, so an action added there
-// fails `pnpm compile` here until it has a marker (or an explicit non-marker
-// branch in computeInlineFormat) — the webview cannot silently ignore one.
-const MARKERS: Record<Exclude<FormatAction, "link">, string> = {
+// Keyed by the protocol's action set minus `link` and `code` (each has its own
+// branch in computeInlineFormat), so an action added there fails `pnpm compile`
+// here until it has a marker (or an explicit non-marker branch) — the webview
+// cannot silently ignore one.
+const MARKERS: Record<Exclude<FormatAction, "link" | "code">, string> = {
   bold: "**",
   italic: "*",
-  code: "`",
   strike: "~~",
 };
 
@@ -113,6 +120,168 @@ function toggleMark(state: EditorState, marker: string): FormatSpec {
   };
 }
 
+type CodeSpan = { from: number; to: number; body: string };
+type SyntaxNode = NonNullable<ReturnType<typeof ensureSyntaxTree>>["topNode"];
+
+/** The tree through the end of the block around `from..to`, or `null` while
+ *  the parse cannot finish it within the budget. Code is judged only on a
+ *  final tree. This is the tree the parse has reached, not the state's stored
+ *  `syntaxTree(state)`: `ensureSyntaxTree` advances the parse without
+ *  replacing the stored tree, which can stop short of the block. */
+function finalTree(state: EditorState, from: number, to: number) {
+  const block = expandToEnclosingBlock(state, from, to);
+  const tree = ensureSyntaxTree(state, block.to, 50);
+  return tree && { tree, block };
+}
+
+/** The bytes between an InlineCode node's first and last CodeMark. */
+function inlineCodeBody(doc: Text, node: SyntaxNode): { open: number; close: number; raw: string } {
+  const marks = node.getChildren("CodeMark");
+  const open = marks[0].to;
+  const close = marks[marks.length - 1].from;
+  return { open, close, raw: doc.sliceString(open, close) };
+}
+
+/** What the editor's tree says about inline code around the selection: the span
+ *  it is (or is the body of, as written or with the one-space strip applied),
+ *  whether it cuts into code it must not split, and the lengths of backtick
+ *  runs before it in its block that may be unmatched. `null` while the tree is
+ *  not final through the end of that block. */
+function codeContext(
+  state: EditorState,
+  from: number,
+  to: number
+): { span: CodeSpan | null; splitsCode: boolean; literalRuns: Set<number> } | null {
+  const doc = state.doc;
+  // A code span cannot cross a blank line, so every one the selection can meet
+  // or pair with sits in this run of lines.
+  const final = finalTree(state, from, to);
+  if (!final) {
+    return null;
+  }
+  let span: CodeSpan | null = null;
+  let splitsCode = false;
+  // The block's text before the selection with its code spans cut out: their
+  // runs are already paired, every other run may still take a new opener.
+  const before: string[] = [];
+  let cursor = final.block.from;
+  final.tree.iterate({
+    from: final.block.from,
+    to,
+    enter(node) {
+      const inline = node.name === "InlineCode";
+      if (!inline && node.name !== "FencedCode" && node.name !== "CodeBlock") {
+        return;
+      }
+      if (node.to <= from) {
+        if (inline) {
+          before.push(doc.sliceString(cursor, node.from), " ");
+          cursor = node.to;
+        }
+        return false;
+      }
+      if (node.from >= to) {
+        return false;
+      }
+      if (inline) {
+        const { open, close, raw } = inlineCodeBody(doc, node.node);
+        const strips = codeSpanStripsEdges(raw);
+        if (from === node.from && to === node.to) {
+          span = { from: node.from, to: node.to, body: strips ? raw.slice(1, -1) : raw };
+          return false;
+        }
+        if ((from === open && to === close) || (strips && from === open + 1 && to === close - 1)) {
+          span = { from: node.from, to: node.to, body: doc.sliceString(from, to) };
+          return false;
+        }
+      }
+      if (node.from < from || node.to > to) {
+        splitsCode = true;
+      }
+      return false;
+    },
+  });
+  before.push(doc.sliceString(cursor, from));
+  const literalRuns = new Set<number>();
+  for (const [run] of before.join("").matchAll(/`+/g)) {
+    literalRuns.add(run.length);
+  }
+  return { span, splitsCode, literalRuns };
+}
+
+/** True iff `state` parses `from..to` as exactly one code span that renders
+ *  `text`. Checked on the wrapped document, so a fence that pairs or opens
+ *  anything other than that span is caught however it came about. A span with
+ *  any child but its fences (a blockquote's `>` on a later line) does not render
+ *  its raw slice. */
+function rendersAsCode(state: EditorState, from: number, to: number, text: string): boolean {
+  const final = finalTree(state, from, to);
+  let renders = false;
+  final?.tree.iterate({
+    from,
+    to,
+    enter(node) {
+      if (node.name === "InlineCode" && node.from === from && node.to === to) {
+        const { raw } = inlineCodeBody(state.doc, node.node);
+        let onlyFences = true;
+        for (let c = node.node.firstChild; c; c = c.nextSibling) {
+          onlyFences &&= c.name === "CodeMark";
+        }
+        renders = onlyFences && (codeSpanStripsEdges(raw) ? raw.slice(1, -1) : raw) === text;
+      }
+      return !renders;
+    },
+  });
+  return renders;
+}
+
+/** Toggle inline code so the rendered body is the whole selection. The
+ *  editor's tree finds the span the selection is (or is the body of) and
+ *  unwraps it to that body; otherwise the selection is fenced past any backtick
+ *  run inside and any length an earlier unmatched run could pair with, padded
+ *  as CommonMark needs. The document stays as it is while the tree is not
+ *  final, when a fence would split code or join a neighbouring backtick, and
+ *  when the wrapped document does not parse as that one span. */
+function toggleCode(state: EditorState): FormatSpec {
+  const { from, to } = state.selection.main;
+  const doc = state.doc;
+  const unchanged: FormatSpec = { changes: [], selection: state.selection.main };
+
+  if (from === to) {
+    return {
+      changes: { from, insert: "``" },
+      selection: EditorSelection.cursor(from + 1),
+    };
+  }
+
+  const context = codeContext(state, from, to);
+  if (!context) {
+    return unchanged;
+  }
+  const { span } = context;
+  if (span) {
+    return {
+      changes: { from: span.from, to: span.to, insert: span.body },
+      selection: EditorSelection.range(span.from, span.from + span.body.length),
+    };
+  }
+
+  // Code the selection only partly covers would be split; a fence beside a
+  // backtick would join that run and take in text outside the selection.
+  if (context.splitsCode || matchAt(doc, from - 1, "`") || matchAt(doc, to, "`")) {
+    return unchanged;
+  }
+
+  const text = doc.sliceString(from, to);
+  const source = codeSpanSource(text, context.literalRuns);
+  const changes: ChangeSpec = { from, to, insert: source };
+  if (!rendersAsCode(state.update({ changes }).state, from, from + source.length, text)) {
+    return unchanged;
+  }
+  const start = from + (source.length - text.length) / 2;
+  return { changes, selection: EditorSelection.range(start, start + text.length) };
+}
+
 /** Wrap the main selection as `[text]()` with the caret in the destination slot.
  *  An empty selection gets `[]()` with the caret in the label slot. */
 export function computeLinkWrap(state: EditorState): FormatSpec {
@@ -133,6 +302,9 @@ export function computeLinkWrap(state: EditorState): FormatSpec {
 export function computeInlineFormat(state: EditorState, action: FormatAction): FormatSpec {
   if (action === "link") {
     return computeLinkWrap(state);
+  }
+  if (action === "code") {
+    return toggleCode(state);
   }
   return toggleMark(state, MARKERS[action]);
 }

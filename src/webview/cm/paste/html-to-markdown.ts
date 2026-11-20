@@ -41,6 +41,7 @@
 //    `htmlToMarkdown` wraps the whole walk in a try/catch that returns `null` for
 //    ANY thrown value, so the handler always has a safe defer-to-plain-paste path.
 
+import { codeSpanSource } from "../../../markdown/code-span-source.js";
 import { isAllowedUrl } from "../../../markdown/url-allowlist.js";
 import { encodeMarkdownDestination } from "../../../markdown/url-decode.js";
 import { MAX_LIST_NUMBER } from "../list/list-transform.js";
@@ -195,23 +196,6 @@ function markdownDestination(url: string): string {
   return encodeMarkdownDestination(url.replace(/[\r\n]/g, ""));
 }
 
-/** Length of the longest consecutive backtick run in `text` (0 when none) — the
- *  basis for choosing a code fence one backtick longer than anything inside. */
-function longestBacktickRun(text: string): number {
-  const runs = text.match(/`+/g);
-  return runs ? Math.max(...runs.map((r) => r.length)) : 0;
-}
-
-/** Fence an inline-code span: a run of backticks one longer than the longest
- *  backtick run inside the content, space-padded when content borders a backtick
- *  (CommonMark rule). Content is verbatim (never escaped). */
-function inlineCode(text: string): string {
-  const longest = longestBacktickRun(text);
-  const fence = "`".repeat(longest + 1);
-  const pad = longest > 0 || text.startsWith("`") || text.endsWith("`") ? " " : "";
-  return `${fence}${pad}${text}${pad}${fence}`;
-}
-
 /** The inline-style declarations that cancel the emphasis a tag implies, keyed by
  *  the property each tag is about. `400` is the numeric spelling of `normal`;
  *  `font-style` has no numeric form, so it lists only the keyword. Deliberately NOT
@@ -323,7 +307,7 @@ export function collectInline(
     if (!hasVisibleContent(el) || blankAfterInvisible(body)) {
       return;
     }
-    out.push({ kind: "code", markdown: count(ctx, inlineCode(body)), style });
+    out.push({ kind: "code", markdown: count(ctx, codeSpanSource(body)), style });
     return;
   }
   const children = (childStyle: StyleMask, into: InlineAtom[]): void => {

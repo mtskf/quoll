@@ -1,16 +1,19 @@
+import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
 import { EditorSelection, EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
+import { gfmParser } from "../../../src/markdown/gfm-parser.js";
 import type { FormatAction } from "../../../src/shared/protocol.js";
 import {
   computeInlineFormat,
   computeLinkWrap,
 } from "../../../src/webview/cm/inline/inline-formatting-commands.js";
+import { quollMarkdownLanguage } from "../../../src/webview/cm/markdown.js";
 
-// NO Markdown language extension: detection is pure string matching, so the
-// tests deliberately construct a parser-free state. If any assertion below ever
-// needed a syntax tree it would fail here — that is the regression pin proving
-// unwrap does not depend on the parser (and so can't corrupt on a large doc
-// where the parse is incomplete).
+// NO Markdown language extension: bold, italic and strike never read the
+// editor's syntax tree, so their tests deliberately construct a tree-free state.
+// If any of those assertions ever needed that tree it would fail here — that is
+// the regression pin proving their unwrap does not depend on the time-budgeted
+// parse (and so can't corrupt on a large doc where that parse is incomplete).
 function stateFor(doc: string, sel: { anchor: number; head?: number }): EditorState {
   return EditorState.create({
     doc,
@@ -18,9 +21,18 @@ function stateFor(doc: string, sel: { anchor: number; head?: number }): EditorSt
   });
 }
 
+// Code reads the editor's tree, so its tests run with the editor's language.
+function codeStateFor(doc: string, sel: { anchor: number; head?: number }): EditorState {
+  return EditorState.create({
+    doc,
+    selection: EditorSelection.range(sel.anchor, sel.head ?? sel.anchor),
+    extensions: [quollMarkdownLanguage()],
+  });
+}
+
 // Apply a compute result and return the resulting {doc, main range} for assertions.
 function applyFormat(doc: string, sel: { anchor: number; head?: number }, action: FormatAction) {
-  const state = stateFor(doc, sel);
+  const state = action === "code" ? codeStateFor(doc, sel) : stateFor(doc, sel);
   const { changes, selection } = computeInlineFormat(state, action);
   const next = state.update({ changes, selection }).state;
   const m = next.selection.main;
@@ -171,5 +183,228 @@ describe("computeLinkWrap", () => {
     const next = state.update({ changes, selection }).state;
     expect(next.doc.toString()).toBe("[]()");
     expect(next.selection.main.from).toBe(1); // inside []
+  });
+});
+
+// The rendered body of the document's code spans, read through the real GFM
+// parser: the bytes between the first and last CodeMark of each InlineCode,
+// with the one-space strip CommonMark applies when both ends are spaces and the
+// body is not all spaces.
+function renderedCodeBodies(doc: string): string[] {
+  const bodies: string[] = [];
+  gfmParser.parse(doc).iterate({
+    enter(node) {
+      if (node.name !== "InlineCode") {
+        return;
+      }
+      const marks = node.node.getChildren("CodeMark");
+      const raw = doc.slice(marks[0].to, marks[marks.length - 1].from);
+      bodies.push(
+        raw.length >= 2 && raw.startsWith(" ") && raw.endsWith(" ") && /[^ ]/.test(raw)
+          ? raw.slice(1, -1)
+          : raw
+      );
+      return false;
+    },
+  });
+  return bodies;
+}
+
+describe("computeInlineFormat — code keeps the whole selection", () => {
+  const cases = [
+    ["an inner backtick", "a`b"],
+    ["a backtick run", "a``b"],
+    ["several runs", "a`b``c"],
+    ["a leading backtick", "`a"],
+    ["a trailing backtick", "a`"],
+    ["spaces at both ends", " a "],
+    ["spaces and a backtick", " a`b "],
+    ["only backticks", "``"],
+    ["only spaces", "  "],
+  ] as const;
+
+  for (const [name, text] of cases) {
+    it(`renders a selection with ${name} as one code span of exactly that text`, () => {
+      const doc = `x ${text} y`;
+      const r = applyFormat(doc, { anchor: 2, head: 2 + text.length }, "code");
+      expect(renderedCodeBodies(r.doc)).toEqual([text]);
+      expect(r.doc.slice(r.from, r.to)).toBe(text);
+    });
+
+    it(`toggles a selection with ${name} back to the original bytes`, () => {
+      const doc = `x ${text} y`;
+      const once = applyFormat(doc, { anchor: 2, head: 2 + text.length }, "code");
+      const twice = applyFormat(once.doc, { anchor: once.from, head: once.to }, "code");
+      expect(twice.doc).toBe(doc);
+      expect(twice.doc.slice(twice.from, twice.to)).toBe(text);
+    });
+
+    it(`unwraps a whole selected span with ${name}`, () => {
+      const doc = `x ${text} y`;
+      const once = applyFormat(doc, { anchor: 2, head: 2 + text.length }, "code");
+      const spanTo = once.doc.length - 2;
+      const r = applyFormat(once.doc, { anchor: 2, head: spanTo }, "code");
+      expect(r.doc).toBe(doc);
+      expect(r.doc.slice(r.from, r.to)).toBe(text);
+    });
+  }
+
+  it("unwraps a hand-written double-backtick span from its inner text", () => {
+    expect(applyFormat("``a`b``", { anchor: 2, head: 5 }, "code").doc).toBe("a`b");
+  });
+
+  it("unwraps a hand-written double-backtick span selected whole", () => {
+    expect(applyFormat("`` a`b ``", { anchor: 0, head: 9 }, "code").doc).toBe("a`b");
+  });
+
+  it("leaves a selection that borders a backtick unchanged", () => {
+    // `` ``a` `` is not one span, and a fence beside a backtick would merge with it.
+    const r = applyFormat("``a`", { anchor: 2, head: 3 }, "code");
+    expect(r.doc).toBe("``a`");
+    expect([r.from, r.to]).toEqual([2, 3]);
+  });
+
+  it("leaves a selection that ends at a backtick outside it unchanged", () => {
+    // Fencing "a`b" here would join the trailing backtick into the closing fence.
+    const doc = "x `a`b` y";
+    const r = applyFormat(doc, { anchor: 3, head: 6 }, "code");
+    expect(r.doc).toBe(doc);
+    expect([r.from, r.to]).toEqual([3, 6]);
+  });
+
+  it.each([
+    ["on one line", "run `npm` install `foo` now", "install", ["npm", "install", "foo"]],
+    ["across lines", "see `a`\nb\n`c` here", "b", ["a", "b", "c"]],
+  ])("wraps text between two code spans %s instead of joining them", (_, doc, text, bodies) => {
+    const from = doc.indexOf(text);
+    const r = applyFormat(doc, { anchor: from, head: from + text.length }, "code");
+    expect(renderedCodeBodies(r.doc)).toEqual(bodies);
+    expect(r.doc.slice(r.from, r.to)).toBe(text);
+  });
+
+  it("keeps the fences of a selected fenced code block", () => {
+    const doc = "```\nconst x = 1;\n```";
+    const r = applyFormat(doc, { anchor: 0, head: doc.length }, "code");
+    expect(renderedCodeBodies(r.doc)).toEqual([doc]);
+    expect(r.doc.slice(r.from, r.to)).toBe(doc);
+  });
+
+  it("unwraps a span inside a list item", () => {
+    expect(applyFormat("- a `b` c", { anchor: 5, head: 6 }, "code").doc).toBe("- a b c");
+  });
+
+  it("unwraps a span that crosses a line break", () => {
+    expect(applyFormat("x `a\nb` y", { anchor: 3, head: 6 }, "code").doc).toBe("x a\nb y");
+  });
+
+  it("leaves the document as it is while the editor has no syntax tree", () => {
+    const state = stateFor("foo", { anchor: 0, head: 3 });
+    const { changes, selection } = computeInlineFormat(state, "code");
+    const next = state.update({ changes, selection }).state;
+    expect(next.doc.toString()).toBe("foo");
+    expect([next.selection.main.from, next.selection.main.to]).toEqual([0, 3]);
+  });
+
+  it.each([
+    ["an ordered list continuation", "1. First\n\n    para with `code` here", "code"],
+    ["a nested loose list", "- a\n\n  - b\n\n    - c `d` e", "d"],
+    ["a wide list marker's continuation", "10. item\n\n    cont `x` end", "x"],
+    ["a paragraph after a fenced block with a blank line", "```\na\n\nb\n```\n`c` d", "c"],
+  ])("unwraps a span in %s", (_, doc, text) => {
+    const from = doc.indexOf(`\`${text}\``) + 1;
+    const r = applyFormat(doc, { anchor: from, head: from + text.length }, "code");
+    expect(r.doc).toBe(doc.replace(`\`${text}\``, text));
+    expect(r.doc.slice(r.from, r.to)).toBe(text);
+  });
+
+  it.each([
+    ["its inner text", 1, 4],
+    ["the whole span", 0, 5],
+  ])("leaves backticks inside a fenced block with a blank line alone when %s is selected", (_, start, end) => {
+    const doc = "```\nx\n\n`foo`\n```";
+    const at = doc.indexOf("`foo`");
+    const r = applyFormat(doc, { anchor: at + start, head: at + end }, "code");
+    expect(r.doc).toBe(doc);
+  });
+
+  it("leaves a selection across blockquote lines alone, since the quote mark would sit inside the span", () => {
+    const doc = "> alpha\n> beta";
+    const r = applyFormat(doc, { anchor: 2, head: doc.length }, "code");
+    expect(r.doc).toBe(doc);
+  });
+
+  it("fences past an unmatched backtick earlier in the paragraph", () => {
+    const doc = "x ` y foo";
+    const from = doc.indexOf("foo");
+    const r = applyFormat(doc, { anchor: from, head: from + 3 }, "code");
+    expect(renderedCodeBodies(r.doc)).toEqual(["foo"]);
+    expect(r.doc.startsWith("x ` y ")).toBe(true);
+    expect(r.doc.slice(r.from, r.to)).toBe("foo");
+  });
+
+  it.each([
+    ["the middle of a span", "`foobar`", 2, 5],
+    ["the end of a span and text after it", "`ab` c", 2, 6],
+  ])("leaves the document as it is when the selection is %s", (_, doc, start, end) => {
+    const r = applyFormat(doc, { anchor: start, head: end }, "code");
+    expect(r.doc).toBe(doc);
+    expect([r.from, r.to]).toEqual([start, end]);
+  });
+
+  it("leaves the document as it is when the selection starts a span and ends inside it", () => {
+    // Fencing "`a" would render it whole, but only by breaking `ab` apart.
+    const doc = "`ab` c";
+    const r = applyFormat(doc, { anchor: 0, head: 2 }, "code");
+    expect(r.doc).toBe(doc);
+    expect([r.from, r.to]).toEqual([0, 2]);
+  });
+
+  it("leaves part of an indented code block alone", () => {
+    // Fencing from the line start would end the code block and render that
+    // text as a code span in a paragraph.
+    const doc = "para\n\n    code `x` here\n";
+    const from = doc.indexOf("    code");
+    const to = from + "    code".length;
+    const r = applyFormat(doc, { anchor: from, head: to }, "code");
+    expect(r.doc).toBe(doc);
+    expect([r.from, r.to]).toEqual([from, to]);
+  });
+
+  it("leaves the document as it is when the fence would open a fenced block at a line start", () => {
+    // Earlier runs of 1 and 2 push the fence to three backticks, which at the
+    // start of a line opens a fenced code block instead of a code span.
+    const doc = "x ` and ``\nfoo\nbar rest\ntrailing";
+    const from = doc.indexOf("foo");
+    const to = doc.indexOf(" rest");
+    const r = applyFormat(doc, { anchor: from, head: to }, "code");
+    expect(r.doc).toBe(doc);
+    expect([r.from, r.to]).toEqual([from, to]);
+  });
+
+  describe("after the parse has run ahead of the state's stored tree", () => {
+    // About 112KB: the state's own parse stops short of the tail, and
+    // ensureSyntaxTree advances only the parse, not the tree the state holds.
+    const filler = "lorem ipsum dolor sit amet\n\n".repeat(4000);
+    const doc = `${filler}tail \`foobar\` end`;
+    const span = doc.indexOf("`foobar`");
+
+    function parsedAhead(start: number, end: number): EditorState {
+      const state = codeStateFor(doc, { anchor: start, head: end });
+      ensureSyntaxTree(state, doc.length, 20_000);
+      expect(syntaxTree(state).length).toBeLessThan(doc.length);
+      return state;
+    }
+
+    function run(state: EditorState): string {
+      return state.update(computeInlineFormat(state, "code")).state.doc.toString();
+    }
+
+    it("unwraps a whole selected span past the stored tree's end", () => {
+      expect(run(parsedAhead(span, span + 8))).toBe(`${filler}tail foobar end`);
+    });
+
+    it("leaves the middle of a span past the stored tree's end alone", () => {
+      expect(run(parsedAhead(span + 2, span + 5))).toBe(doc);
+    });
   });
 });

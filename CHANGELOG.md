@@ -12,6 +12,7 @@ All notable changes to Quoll are documented here.
 - A change made on disk while Quoll is still reading an earlier one is no longer missed; Quoll checks again once the first read finishes and still warns about unsaved edits.
 - Format Document no longer stalls on a table whose padding would blow the document past the size limit; it now refuses straight away and leaves the document unchanged.
 - Pasting a URL over selected text, or making a link with the link command, now links the whole selection even when it contains a stray `[`, `]` or a trailing backslash. A pasted URL also opens exactly as pasted, so text such as `&amp;` in it is no longer turned into `&`.
+- Making inline code (Cmd/Ctrl+E) now keeps the whole selection inside the code even when it contains backticks or starts and ends with a space. Pressing it again removes exactly the backticks it added. Pasted inline code keeps its edge spaces too.
 
 ### Changed
 
