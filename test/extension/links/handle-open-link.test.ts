@@ -229,9 +229,9 @@ describe("handleOpenLink — symlink containment", () => {
 
   afterEach(() => temp?.dispose());
 
-  function makeFileDeps() {
+  function makeFileDeps(docDir = notes) {
     return makeDeps({
-      documentUri: makeUri(path.join(notes, "doc.md")),
+      documentUri: makeUri(path.join(docDir, "doc.md")),
       workspaceFolderOf: (uri) => (isWithinDir(uri, wsUri) ? wsUri : undefined),
       realContainment: resolveRealContainment,
     });
@@ -264,5 +264,37 @@ describe("handleOpenLink — symlink containment", () => {
     await handleOpenLink(`./${name}`, deps);
     expect(opened).toEqual([path.join(notes, name)]);
     expect(errors).toEqual([]);
+  });
+
+  describe("symlinked document folder", () => {
+    let vault: string;
+
+    beforeEach(() => {
+      const realVault = path.join(temp.dir, "outside2", "vault");
+      vault = path.join(wsUri.fsPath, "vault");
+      fs.mkdirSync(realVault, { recursive: true });
+      fs.writeFileSync(path.join(realVault, "doc.md"), "[x](./other.md)\n");
+      fs.writeFileSync(path.join(realVault, "other.md"), "# Other\n");
+      fs.symlinkSync(
+        path.join(temp.dir, "outside", "secret.md"),
+        path.join(realVault, "out.md"),
+        "file"
+      );
+      fs.symlinkSync(realVault, vault, "dir");
+    });
+
+    it("opens vault/other.md beside the document", async () => {
+      const { deps, opened, errors } = makeFileDeps(vault);
+      await handleOpenLink("./other.md", deps);
+      expect(opened).toEqual([path.join(vault, "other.md")]);
+      expect(errors).toEqual([]);
+    });
+
+    it("refuses vault/out.md when its real path is outside both roots", async () => {
+      const { deps, opened, errors } = makeFileDeps(vault);
+      await handleOpenLink("./out.md", deps);
+      expect(opened).toEqual([]);
+      expect(errors).toEqual([expect.stringContaining("points outside this workspace")]);
+    });
   });
 });

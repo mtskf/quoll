@@ -201,7 +201,9 @@ export async function handleOpenLink(href: string, deps: HandleOpenLinkDeps): Pr
     const workspaceFolder = deps.workspaceFolderOf(target);
     let outside = workspaceFolder === undefined && !isWithinDir(target, dir);
     if (!outside && target.scheme === "file") {
-      const roots = [workspaceFolder ?? dir];
+      // A symlink into another workspace folder is refused unless the
+      // document's real directory contains its referent.
+      const roots = [workspaceFolder, dir].filter((root) => root !== undefined);
       const verdicts = await Promise.all(
         roots.map((root) => deps.realContainment(target.fsPath, root.fsPath))
       );
