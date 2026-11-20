@@ -14,6 +14,10 @@ function preservesLabelSource(name: string): boolean {
   return name !== "Link" && name !== "LinkMark" && nonPlainText.test(name);
 }
 
+function escapePlainText(text: string): string {
+  return text.replace(/[\\[\]]/g, "\\$&");
+}
+
 function escapeLabel(label: string): string {
   let escaped = "";
   let plainFrom = 0;
@@ -21,14 +25,14 @@ function escapeLabel(label: string): string {
   gfmParser.parse(label).iterate({
     enter: (node) => {
       if (preservesLabelSource(node.name)) {
-        escaped += label.slice(plainFrom, node.from).replace(/[\\[\]]/g, "\\$&");
+        escaped += escapePlainText(label.slice(plainFrom, node.from));
         escaped += label.slice(node.from, node.to);
         plainFrom = node.to;
         return false;
       }
     },
   });
-  return escaped + label.slice(plainFrom).replace(/[\\[\]]/g, "\\$&");
+  return escaped + escapePlainText(label.slice(plainFrom));
 }
 
 export function markdownLinkSource(label: string, href: string): string {
