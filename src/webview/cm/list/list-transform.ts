@@ -199,8 +199,9 @@ export function leadingCharsForColumns(text: string, cols: number, tabSize: numb
   return i;
 }
 
-/** Preserve relative indentation across nested markers by expanding tabs whose
- *  width changes. Code and HTML payload whitespace is literal content. */
+/** Expand tabs whose width changes across nested list and quote prefixes to preserve indentation.
+ *  HTML continuation payload starts at its owning item's content column. Leave CodeText and
+ *  its preceding tab intact because expanding that padding can add spaces to the code. */
 function shiftLine(
   state: EditorState,
   item: SyntaxNode,
@@ -231,17 +232,35 @@ function shiftLine(
   }
   let insert = " ".repeat(col + delta - keptCol);
   const block = item.resolve(line.from, 1);
-  const end =
+  let payloadCol = Infinity;
+  if (
     block.from < line.from &&
     (block.name === "HTMLBlock" ||
       block.name === "CommentBlock" ||
       block.name === "ProcessingInstructionBlock")
-      ? i
-      : line.length;
-  while (i < end) {
+  ) {
+    let owner = block.parent;
+    while (owner && owner.name !== "ListItem") {
+      owner = owner.parent;
+    }
+    const mark = owner && listMarkOf(owner);
+    payloadCol = boundary;
+    if (mark) {
+      const markerLine = state.doc.lineAt(mark.from);
+      payloadCol = contentColumnFromMarkerLine(
+        markerLine.text,
+        mark.to - markerLine.from,
+        state.tabSize
+      );
+    }
+  }
+  while (i < line.length && col < payloadCol) {
     const pos = line.from + i;
     const node = item.resolve(pos, 1);
-    if (node.name === "CodeText") {
+    if (
+      node.name === "CodeText" ||
+      (line.text[i] === "\t" && item.resolve(pos + 1, 1).name === "CodeText")
+    ) {
       break;
     }
 

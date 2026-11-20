@@ -479,6 +479,48 @@ describe("continueListOnEnter — split keeps the item's children nested", () =>
       view.destroy();
     }
   });
+
+  it("keeps HTML continuation lines inside the nested bullet", () => {
+    const doc = "9. abcd\n      - <pre>\n    \tvalue\n        </pre>";
+    const view = mount(doc, at("9. ab".length), { withHistory: true });
+    try {
+      expect(continueListOnEnter(view)).toBe(true);
+      const { state } = view;
+      const tree = ensureSyntaxTree(state, state.doc.length, 5000);
+      const html = tree?.resolve(state.doc.toString().indexOf("value"), 1);
+      expect(html?.name).toBe("HTMLBlock");
+      expect(html?.parent?.name).toBe("ListItem");
+      expect(html?.parent?.parent?.name).toBe("BulletList");
+      expect(html?.to).toBe(state.doc.length);
+      expect(state.doc.line(4).text).toBe("         value");
+      expect(undo(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(doc);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("preserves CodeText after a quote padding tab", () => {
+    const doc = "9. abcd\n   > ```python\n   >\t\treturn\n   > ```";
+    const view = mount(doc, at("9. ab".length), { withHistory: true });
+    function codeText() {
+      const { state } = view;
+      const tree = ensureSyntaxTree(state, state.doc.length, 5000);
+      const code = tree?.resolve(state.doc.toString().indexOf("return"), 1);
+      expect(code?.name).toBe("CodeText");
+      return code && state.doc.sliceString(code.from, code.to);
+    }
+    try {
+      const before = codeText();
+      expect(before).toBe("\treturn");
+      expect(continueListOnEnter(view)).toBe(true);
+      expect(codeText()).toBe(before);
+      expect(undo(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(doc);
+    } finally {
+      view.destroy();
+    }
+  });
 });
 
 describe("continueListOnEnter — empty marker line exits the list", () => {
