@@ -2,6 +2,7 @@ import { markdownLanguage } from "@codemirror/lang-markdown";
 import { ensureSyntaxTree } from "@codemirror/language";
 import type { EditorState } from "@codemirror/state";
 
+import { markdownLinkSource } from "../../../markdown/link-source.js";
 import { type AllowlistedUrl, isAllowedUrl } from "../../../markdown/url-allowlist.js";
 
 // Ported verbatim from @codemirror/lang-markdown's built-in pasteURLAsLink: Lezer
@@ -85,21 +86,6 @@ export function selectionIsPlainText(state: EditorState, from: number, to: numbe
   return !crossesNode;
 }
 
-/**
- * Render the URL as a CommonMark link destination. A bare destination allows
- * BALANCED parens (CommonMark tracks depth, so `…/Foo_(bar)` round-trips fine),
- * but an UNBALANCED `)` — e.g. `…/foo)bar` — closes the destination early,
- * truncating the URL and leaking the tail as text. Rather than compute paren
- * balance, conservatively angle-bracket the URL whenever it carries any paren;
- * angle-bracket destinations read literally up to `>`. Guarded on the absence of
- * `<`/`>` — bytes that never appear unencoded in a real http(s) URL and that
- * would themselves break the angle form; such a value falls back to the bare
- * destination.
- */
-function linkDestination(url: string): string {
-  return /[()]/.test(url) && !/[<>]/.test(url) ? `<${url}>` : url;
-}
-
 /** Capture the URL and label range; rendering does not retain the view. */
 export function decideUrlPaste(state: EditorState, text: string) {
   const { from, to, empty } = state.selection.main;
@@ -117,7 +103,7 @@ export function decideUrlPaste(state: EditorState, text: string) {
     render: (live: EditorState, start: number, end: number) =>
       live.doc.lineAt(start).number === live.doc.lineAt(end).number &&
       selectionIsPlainText(live, start, end)
-        ? `[${live.doc.sliceString(start, end)}](${linkDestination(url)})`
+        ? markdownLinkSource(live.doc.sliceString(start, end), url)
         : text,
   };
 }

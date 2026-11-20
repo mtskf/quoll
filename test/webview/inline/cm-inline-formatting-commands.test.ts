@@ -150,11 +150,19 @@ describe("computeLinkWrap", () => {
     expect(next.selection.main.from).toBe(6); // between ( and )
   });
 
-  it("reuses url when provided (paste-URL sibling reuse)", () => {
-    const state = stateFor("foo", { anchor: 0, head: 3 });
-    const { changes } = computeLinkWrap(state, "https://x.test");
-    const next = state.update({ changes }).state;
-    expect(next.doc.toString()).toBe("[foo](https://x.test)");
+  it.each([
+    ["a]b", "[a&#93;b]()"],
+    ["**bold**", "[**bold**]()"],
+  ])("wraps %s with the caret in the empty URL slot", (label, source) => {
+    const state = stateFor(`before ${label} after`, {
+      anchor: 7,
+      head: 7 + label.length,
+    });
+    const { changes, selection } = computeLinkWrap(state);
+    const next = state.update({ changes, selection }).state;
+    expect(next.doc.toString()).toBe(`before ${source} after`);
+    expect(next.selection.main.empty).toBe(true);
+    expect(next.selection.main.from).toBe(7 + source.length - 1);
   });
 
   it("empty selection inserts []() with the caret in the text slot", () => {

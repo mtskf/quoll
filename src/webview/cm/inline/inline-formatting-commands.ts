@@ -15,6 +15,7 @@
 // `****foo****`; string matching is deterministic and parse-free so the
 // round-trip contract holds on any doc size. Single-char markers (`*`, `` ` ``)
 // disambiguate against `**`/double runs via the char just beyond the delimiter.
+// Link label escaping parses only the selected string in a full, deterministic parse.
 
 import {
   type ChangeSpec,
@@ -24,6 +25,7 @@ import {
   type Text,
 } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
+import { markdownLinkSource } from "../../../markdown/link-source.js";
 import type { FormatAction } from "../../../shared/protocol.js";
 
 // open === close for every inline mark; a single `marker` string is enough.
@@ -111,26 +113,20 @@ function toggleMark(state: EditorState, marker: string): FormatSpec {
   };
 }
 
-/** Wrap the main selection as `[text](url)` (or `[](url)` when empty). Always
- *  wraps — no unwrap. `url` defaults to "" with the caret placed in the url
- *  slot; a non-empty `url` (paste-URL reuse) is inserted verbatim. */
-export function computeLinkWrap(state: EditorState, url = ""): FormatSpec {
+/** Wrap the main selection as `[text]()` with the caret in the destination slot.
+ *  An empty selection gets `[]()` with the caret in the label slot. */
+export function computeLinkWrap(state: EditorState): FormatSpec {
   const { from, to } = state.selection.main;
   if (from === to) {
-    // "[](url)" — caret in the [] text slot.
     return {
-      changes: { from, insert: `[](${url})` },
+      changes: { from, insert: "[]()" },
       selection: EditorSelection.cursor(from + 1),
     };
   }
-  // "[text](url)" — caret in the () url slot (after "](" ).
-  const urlSlot = to + 1 + 2; // +1 for inserted "[", +2 for "]("
+  const source = markdownLinkSource(state.doc.sliceString(from, to), "");
   return {
-    changes: [
-      { from, insert: "[" },
-      { from: to, insert: `](${url})` },
-    ],
-    selection: EditorSelection.cursor(urlSlot + url.length),
+    changes: { from, to, insert: source },
+    selection: EditorSelection.cursor(from + source.length - 1),
   };
 }
 
