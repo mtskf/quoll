@@ -173,7 +173,8 @@ function toggleCode(state: EditorState): FormatSpec {
   // Whole span selected, fences included.
   const text = doc.sliceString(from, to);
   const fence = text.length - text.replace(/^`+/, "").length;
-  if (fence > 0 && fence < text.length && text.length - text.replace(/`+$/, "").length === fence) {
+  const closingFence = text.length - text.replace(/`+$/, "").length;
+  if (fence > 0 && fence < text.length && closingFence === fence) {
     const body = text.slice(fence, -fence);
     if (!hasBacktickRunOf(body, fence)) {
       const edge = fence + (codeSpanStripsEdges(body) ? 1 : 0);
