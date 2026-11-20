@@ -16,22 +16,39 @@ on:
 # `package.json.publisher`. Tag pushes trigger a LIVE publish (v0.1.0 shipped 2026-07-02),
 # so never push a `v*` tag until you intend to release that version to users.
 
-# Least-privilege GITHUB_TOKEN. Publishing never uses the workflow token
-# itself, so `contents` stays read-only. `id-token: write` mints the GitHub
-# OIDC tokens for two consumers: the Sigstore signing in the attestation steps,
-# and the Marketplace Trusted Publishing exchange in `vsce publish --oidc`.
-# `attestations: write` records the provenance + SBOM attestations in the
-# repo's attestation store. Open VSX still authenticates with OPENVSX_PAT.
+# Least-privilege GITHUB_TOKEN, granted per job. The workflow default is
+# read-only; each job widens only what it needs. Publishing never uses the
+# workflow token itself, so `contents` stays read-only everywhere.
+#
+# Why two jobs: `id-token: write` IS the Marketplace publish credential
+# (Trusted Publishing exchanges this workflow's GitHub OIDC token for a
+# Marketplace token, and the caller picks the audience). GitHub exposes the
+# OIDC request endpoint to EVERY step of a job that holds the grant, so a
+# single job would hand publish rights to the third-party anchore/sbom-action,
+# the build toolchain and scripts/*. The old VSCE_PAT sat in one step's env;
+# the job boundary is the narrowest OIDC equivalent.
+#   - `build` (gates → build → SBOM → package → audit → attest → upload)
+#     needs `id-token: write` only for Sigstore signing in the attest steps,
+#     plus `attestations: write`. It holds no registry credential.
+#   - `publish` runs no third-party action besides pnpm/action-setup, and
+#     publishes the exact .vsix `build` audited and attested. It only starts
+#     after `build` succeeds (`needs:`), so every gate in `build` still blocks
+#     both registries.
+# The Trusted Publishing policy is assumed to match on the workflow FILE
+# (owner mtskf, repo quoll, workflow publish.yml, no environment), not on the
+# job — unverified; confirm on the first OIDC publish.
 # (No `artifact-metadata: write` — that is only needed for registry storage
 # records, which this file-subject attestation does not create.)
 permissions:
   contents: read
-  id-token: write
-  attestations: write
 
 jobs:
-  publish:
+  build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       # All GitHub Actions are pinned to commit SHAs — supply-chain hardening.
       # The threat (tag remutation against a compromised maintainer / repo) applies
@@ -135,11 +152,13 @@ jobs:
       # critical path (pnpm/action-setup is a third-party action too, but runs
       # earlier during setup, before any artifact exists), and it still runs
       # BEFORE Package .vsix, so audit-vsix (below) remains the last gate before
-      # attest + publish — a compromised action here cannot mutate an
+      # attest + upload — a compromised action here cannot mutate an
       # already-audited .vsix (none exists yet). It scans the staging tree, not
-      # the workspace, so it does not need the packaged .vsix. Release-asset
-      # upload is disabled — this job holds only `contents: read`; the SBOM is
-      # kept as the sbom-action workflow artifact instead.
+      # the workspace, so it does not need the packaged .vsix. It runs in this
+      # job, which can mint OIDC tokens for Sigstore but holds no registry
+      # credential: Marketplace publishing lives in the separate `publish` job
+      # (see the header). Release-asset upload is disabled — `contents` is
+      # read-only; the SBOM is kept as the sbom-action workflow artifact instead.
       #
       # `config:` is REQUIRED, not cosmetic: syft's package.json cataloger is
       # image-scan-only, so a directory scan of the lockfile-less staging tree
@@ -176,7 +195,7 @@ jobs:
       # any internal file (docs/, .github/, .claude/, raw *.ts,
       # *.map, lockfiles, .env*, coverage, test fixtures) slipped
       # into the bundle. Tag pushes go live to Marketplace + Open
-      # VSX — this is the last line of defence.
+      # VSX — this is the last content gate before attest + publish.
       - name: Audit .vsix contents
         run: node scripts/audit-vsix.mjs extension.vsix
 
@@ -203,8 +222,51 @@ jobs:
           subject-path: extension.vsix
           sbom-path: sbom.spdx.json
 
+      # Hand the audited + attested bytes to `publish`. Uploaded only after
+      # both attest steps, so the artifact always has an attestation; the
+      # artifact digest is validated again on download.
+      - name: Upload audited .vsix
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: extension-vsix
+          path: extension.vsix
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    # Only the Marketplace OIDC exchange. No `attestations: write`: the
+    # attestations were recorded in `build`.
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # First-party actions + pnpm/action-setup only — every step of this job
+      # can mint a Marketplace publish token. Same pins as `build`.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 11.10.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      # For the lockfile-pinned vsce + ovsx. pnpm-workspace.yaml denies every
+      # dependency build script, so no package code runs at install time.
+      - name: Install publish tooling
+        run: pnpm install --frozen-lockfile
+
+      - name: Download audited .vsix
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: extension-vsix
+
       # OIDC Trusted Publishing: vsce exchanges this job's GitHub OIDC token
-      # (audience marketplace.visualstudio.com, via the workflow-level
+      # (audience marketplace.visualstudio.com, via this job's
       # `id-token: write`) for a short-lived Marketplace credential. The
       # publisher's Trusted Publishing policy (owner mtskf, repo quoll, workflow
       # publish.yml, no environment) decides who may publish, so this step
@@ -217,7 +279,9 @@ jobs:
         run: pnpm exec vsce publish --oidc --no-dependencies --packagePath extension.vsix
 
       # Token is read implicitly from the OVSX_PAT env var — never passed as a
-      # CLI arg, so the secret cannot leak into process arguments.
+      # CLI arg, so the secret cannot leak into process arguments. Kept in this
+      # job, after the Marketplace step, so a failed Marketplace publish still
+      # stops Open VSX (the pre-split order).
       - name: Publish to Open VSX
         env:
           OVSX_PAT: ${{ secrets.OPENVSX_PAT }}
