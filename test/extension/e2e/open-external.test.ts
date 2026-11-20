@@ -27,22 +27,30 @@ function markExternalOpenLog(): number {
   return readExternalOpenLog().length;
 }
 
-async function waitForExternalOpen(
-  mark: number,
-  expected: string,
-  timeoutMs = 8000
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  let observed = readExternalOpenLog().slice(mark);
-  while (!observed.includes(expected)) {
+async function waitForExternalOpen(mark: number, expected: string): Promise<void> {
+  const deadline = Date.now() + 8000;
+  for (;;) {
+    const observed = readExternalOpenLog().slice(mark);
+    if (observed.includes(expected)) {
+      return;
+    }
     if (Date.now() >= deadline) {
       assert.fail(
         `expected external open ${JSON.stringify(expected)}, observed ${JSON.stringify(observed)}`
       );
     }
     await tick();
-    observed = readExternalOpenLog().slice(mark);
   }
+}
+
+async function openSamplePanel() {
+  const harness = await getHarness();
+  await openFixtureWithQuoll("sample.md");
+  await harness.waitForEvent(isDocumentEvent, 8000);
+
+  const panel = harness.activePanel;
+  assert.ok(panel, "no active panel after openFixtureWithQuoll");
+  return panel;
 }
 
 /**
@@ -75,44 +83,29 @@ describeExternalOpen("open-external", function () {
 
   it("hands off an allowlisted URL", async () => {
     const mark = markExternalOpenLog();
-    const harness = await getHarness();
-    await openFixtureWithQuoll("sample.md");
-    await harness.waitForEvent(isDocumentEvent, 8000);
+    const panel = await openSamplePanel();
+    const href = "http://localhost:9";
 
-    const panel = harness.activePanel;
-    assert.ok(panel, "no active panel after openFixtureWithQuoll");
-    panel.simulateInbound({
-      protocol: PROTOCOL_VERSION,
-      type: "open-external",
-      href: "http://localhost:9",
-    });
+    panel.simulateInbound({ protocol: PROTOCOL_VERSION, type: "open-external", href });
 
-    await waitForExternalOpen(mark, "http://localhost:9");
+    await waitForExternalOpen(mark, href);
   });
 
   it("hands the OS the original string byte-for-byte", async () => {
     const mark = markExternalOpenLog();
-    const harness = await getHarness();
-    await openFixtureWithQuoll("sample.md");
-    await harness.waitForEvent(isDocumentEvent, 8000);
+    const panel = await openSamplePanel();
+    const href = "https://localhost:9/p/foo%2Fbar%20baz/日本語?q=a+b%20c&r=%26#x%20y";
 
-    const raw = "https://localhost:9/p/foo%2Fbar%20baz/日本語?q=a+b%20c&r=%26#x%20y";
-    const panel = harness.activePanel;
-    assert.ok(panel);
-    panel.simulateInbound({ protocol: PROTOCOL_VERSION, type: "open-external", href: raw });
+    panel.simulateInbound({ protocol: PROTOCOL_VERSION, type: "open-external", href });
 
-    await waitForExternalOpen(mark, raw);
+    await waitForExternalOpen(mark, href);
   });
 
   it("still hands off the next URL after an empty authority", async () => {
     const mark = markExternalOpenLog();
-    const harness = await getHarness();
-    await openFixtureWithQuoll("sample.md");
-    await harness.waitForEvent(isDocumentEvent, 8000);
-
+    const panel = await openSamplePanel();
     const sentinel = "http://127.0.0.1:9/sentinel";
-    const panel = harness.activePanel;
-    assert.ok(panel);
+
     // The rejected https:// open raises an expected error toast.
     panel.simulateInbound({ protocol: PROTOCOL_VERSION, type: "open-external", href: "https://" });
     panel.simulateInbound({ protocol: PROTOCOL_VERSION, type: "open-external", href: sentinel });
