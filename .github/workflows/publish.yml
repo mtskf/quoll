@@ -278,10 +278,9 @@ jobs:
       # publisher's Trusted Publishing policy (owner mtskf, repo quoll, workflow
       # publish.yml, no environment) decides who may publish, so this step
       # needs no long-lived PAT. Why now: Azure DevOps retires Global PATs on
-      # 2027-01-27, which would have broken the VSCODE_PAT path. `--oidc` is
-      # hidden from `vsce publish --help` in @vscode/vsce 4.0.0 but implemented
-      # (out/oidc.js). The PAT is no longer used, so the VSCE_PAT env is gone.
-      # Renaming this file breaks the policy match.
+      # 2027-01-27, which would have broken the VSCODE_PAT path. Needs
+      # @vscode/vsce >= 4.1.0: 4.0.0's token exchange omits `api-version`, so
+      # the Marketplace answers 400. Renaming this file breaks the policy match.
       - name: Publish to VS Code Marketplace
         run: pnpm exec vsce publish --oidc --no-dependencies --packagePath extension.vsix
 
