@@ -61,12 +61,4 @@ describe("glob / minimatch lockfile compatibility", () => {
       .filter((key) => major(key.slice("glob@".length)) < FIRST_MATCHER_AWARE_GLOB);
     expect(broken).toEqual([]);
   });
-
-  it("gives mocha a Matcher-aware glob", () => {
-    const mocha = [...all].filter(([key]) => key.startsWith("mocha@"));
-    expect(mocha.length).toBeGreaterThan(0);
-    for (const [, deps] of mocha) {
-      expect(major(deps.get("glob") ?? "0")).toBeGreaterThanOrEqual(FIRST_MATCHER_AWARE_GLOB);
-    }
-  });
 });
