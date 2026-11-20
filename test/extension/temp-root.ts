@@ -110,7 +110,9 @@ export function makeTempDirSync(slug: string): string {
 
 /** Allocate a realpath'd unit-test dir. Use sync fs so suites can mock node:fs/promises. */
 export function makeUnitTempDir(slug: string): { dir: string; dispose(): void } {
-  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `quoll-unit-${assertSlug(slug)}-`)));
+  const dir = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), `quoll-unit-${assertSlug(slug)}-`))
+  );
   return {
     dir,
     dispose(): void {
