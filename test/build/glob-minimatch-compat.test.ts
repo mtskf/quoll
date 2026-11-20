@@ -2,12 +2,12 @@
 //
 // The unscoped `minimatch` override in pnpm-workspace.yaml (Dependabot #108)
 // forces minimatch 11 onto every consumer. minimatch 11 emits `Matcher`
-// objects in `Minimatch.set`, but glob <= 12's processor only understands
-// string / GLOBSTAR / RegExp segments, so any wildcard pattern silently
-// matches nothing. For mocha that surfaces as ERR_MOCHA_NO_FILES_MATCH_PATTERN
-// on any glob spec (mocha@11 pins glob ^10). glob 13+ handles `Matcher`
-// (measured against mocha's lib/cli/lookup-files.js), hence the scoped
-// `mocha>glob` override.
+// objects in `Minimatch.set`, which glob <= 12 cannot process: it reads the
+// sibling minimatch, so any wildcard pattern silently matches nothing. For
+// mocha that surfaces as ERR_MOCHA_NO_FILES_MATCH_PATTERN (mocha@11 pins
+// glob ^10). glob 13 ships a self-contained bundle with its own minimatch,
+// so the override never reaches it; glob 14 handles `Matcher` natively.
+// Hence the scoped `mocha>glob` override.
 //
 // Reads the lockfile on disk rather than node_modules so a lockfile revert
 // goes red without a reinstall.
@@ -17,8 +17,8 @@ import { describe, expect, it } from "vitest";
 
 const lock = readFileSync(fileURLToPath(new URL("../../pnpm-lock.yaml", import.meta.url)), "utf8");
 
-// First glob major whose processor understands minimatch 11's Matcher.
-const FIRST_MATCHER_AWARE_GLOB = 13;
+// First glob major that works alongside minimatch 11 (see header).
+const FIRST_SAFE_GLOB_MAJOR = 13;
 
 const major = (version: string): number => Number.parseInt(version, 10);
 
@@ -54,11 +54,11 @@ describe("glob / minimatch lockfile compatibility", () => {
     }
   });
 
-  it("pairs minimatch 11+ only with a Matcher-aware glob", () => {
+  it("pairs minimatch 11+ only with a glob that can drive it", () => {
     const broken = globs
       .filter(([, deps]) => major(deps.get("minimatch") ?? "0") >= 11)
       .map(([key]) => key)
-      .filter((key) => major(key.slice("glob@".length)) < FIRST_MATCHER_AWARE_GLOB);
+      .filter((key) => major(key.slice("glob@".length)) < FIRST_SAFE_GLOB_MAJOR);
     expect(broken).toEqual([]);
   });
 });

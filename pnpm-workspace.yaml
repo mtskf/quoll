@@ -32,7 +32,7 @@ overrides:
   qs: ^6.16.1
   '@azure/identity': ^4.14.1
   minimatch: ^11.0.1
-  # mocha@11 pins glob ^10, whose processor cannot drive minimatch 11's Matcher
+  # mocha@11 pins glob ^10, which cannot process minimatch 11's Matcher
   # segments (wildcard specs match nothing). glob 14 declares minimatch ^11.
   # Pinned by test/build/glob-minimatch-compat.test.ts.
   'mocha>glob': ^14.0.3
