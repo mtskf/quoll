@@ -327,6 +327,12 @@ describe("computeInlineFormat — code keeps the whole selection", () => {
     expect(r.doc).toBe(doc);
   });
 
+  it("leaves a selection across blockquote lines alone, since the quote mark would sit inside the span", () => {
+    const doc = "> alpha\n> beta";
+    const r = applyFormat(doc, { anchor: 2, head: doc.length }, "code");
+    expect(r.doc).toBe(doc);
+  });
+
   it("fences past an unmatched backtick earlier in the paragraph", () => {
     const doc = "x ` y foo";
     const from = doc.indexOf("foo");

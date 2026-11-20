@@ -211,7 +211,9 @@ function codeContext(
 
 /** True iff `state` parses `from..to` as exactly one code span that renders
  *  `text`. Checked on the wrapped document, so a fence that pairs or opens
- *  anything other than that span is caught however it came about. */
+ *  anything other than that span is caught however it came about. A span with
+ *  any child but its fences (a blockquote's `>` on a later line) does not render
+ *  its raw slice. */
 function rendersAsCode(state: EditorState, from: number, to: number, text: string): boolean {
   const final = finalTree(state, from, to);
   let renders = false;
@@ -221,7 +223,11 @@ function rendersAsCode(state: EditorState, from: number, to: number, text: strin
     enter(node) {
       if (node.name === "InlineCode" && node.from === from && node.to === to) {
         const { raw } = inlineCodeBody(state.doc, node.node);
-        renders = (codeSpanStripsEdges(raw) ? raw.slice(1, -1) : raw) === text;
+        let onlyFences = true;
+        for (let c = node.node.firstChild; c; c = c.nextSibling) {
+          onlyFences &&= c.name === "CodeMark";
+        }
+        renders = onlyFences && (codeSpanStripsEdges(raw) ? raw.slice(1, -1) : raw) === text;
       }
       return !renders;
     },
