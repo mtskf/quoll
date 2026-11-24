@@ -1,11 +1,17 @@
 // Real-browser pin for the keyboard path to the "Show more" / "Show less" bars, through the
 // REAL production bundle (every keymap editor.ts wires, Tab-owning list-indent included).
-// Every case starts from editor focus and drives real key events — never button.click().
+// Toggles go through real input events (userEvent), never button.click().
 //   - editable: the fold keys (Cmd-Alt-[ / ] on macOS, Ctrl-Shift-[ / ] elsewhere) collapse
-//     and expand the long block at the caret (cm/collapse/collapse-keymap.ts);
-//   - read-only: the content is not a focus target, so Tab reaches the bar's button natively
-//     and Enter toggles it.
+//     and expand the long block at the caret (cm/collapse/collapse-keymap.ts); the caret is
+//     placed through a DOM selection, or a dispatch where the case needs several carets or
+//     a caret the DOM cannot hold;
+//   - read-only: the content is not a focus target, so the keyboard enters from the frame,
+//     Tab lands on the scroller (the read-only tab stop), PageDown scrolls, Tab reaches the
+//     bar's button and Enter toggles it, with focus following the toggle.
+// The long-block cases also pin the mouse path (a click neither takes focus nor scrolls),
+// and the tall-tail ones set up the expanded block by mouse and focus "Show less" directly.
 
+import type { EditorSelection } from "@codemirror/state";
 import { afterEach, describe, expect, it } from "vitest";
 import { userEvent } from "vitest/browser";
 import { productionPasteFixture } from "./helpers/production-paste-fixture.js";
@@ -68,11 +74,19 @@ const barIn = (f: Fixture, bar: string, state: "true" | "false") =>
   f.win.document.querySelector<HTMLButtonElement>(
     `.quoll-${bar}-collapse-toggle[aria-expanded="${state}"]`
   );
-/** The drawn `.cm-line` whose text contains `text`. */
-const lineWith = (f: Fixture, text: string) =>
-  [...f.view.contentDOM.querySelectorAll<HTMLElement>(".cm-line")].find((l) =>
-    l.textContent?.includes(text)
-  ) as HTMLElement;
+/** Tab forward (past a copy button or anything else focusable) until `target()` has focus. */
+const tabTo = async (f: Fixture, target: () => Element | null) => {
+  for (let i = 0; i < 6 && f.win.document.activeElement !== target(); i++) {
+    await userEvent.keyboard("{Tab}");
+  }
+  expect(f.win.document.activeElement).toBe(target());
+};
+/** Keyboard-only entry into a read-only editor: focus the frame as the host would, then Tab
+ *  onto the scroller, the editor's tab stop when the content is not focusable. */
+const tabIntoScroller = async (f: Fixture) => {
+  f.frame.focus();
+  await tabTo(f, () => f.view.scrollDOM);
+};
 const expectInScrollport = (f: Fixture, el: HTMLElement) => {
   const box = el.getBoundingClientRect();
   const port = f.view.scrollDOM.getBoundingClientRect();
@@ -112,11 +126,8 @@ describe("collapse bars — keyboard path (real Chromium, production bundle)", (
     it(`read-only ${c.name}: Tab reaches the bar; Enter expands and collapses, focus follows`, async () => {
       fixture = await productionPasteFixture(c.doc, "\n", false);
       const f = fixture;
-      // Read-only content is not a focus target: a click leaves focus on the page, with
-      // the sequential-navigation starting point at the clicked line.
-      await userEvent.click(lineWith(f, "line2"));
-      await userEvent.keyboard("{Tab}");
-      expect(f.win.document.activeElement).toBe(toggleOf(f, c.bar));
+      await tabIntoScroller(f);
+      await tabTo(f, () => toggleOf(f, c.bar));
 
       await userEvent.keyboard("{Enter}");
       await expect.poll(() => expanded(f, c.bar)).toBe("true");
@@ -132,6 +143,53 @@ describe("collapse bars — keyboard path (real Chromium, production bundle)", (
       await userEvent.keyboard("{Enter}");
       await expect.poll(() => expanded(f, c.bar)).toBe("false");
       expect(f.win.document.activeElement).toBe(toggleOf(f, c.bar));
+      expect(f.changes()).toBe(0);
+    });
+  }
+
+  // The block's extent is inclusive at both ends: the fence opener / first quote line, and
+  // the end of its last line.
+  for (const c of CASES) {
+    it(`editable ${c.name}: the fold keys act with the caret on either edge of the block`, async () => {
+      fixture = await productionPasteFixture(c.doc);
+      const f = fixture;
+      await f.select(0);
+      await userEvent.keyboard(chord(f, "]"));
+      await expect.poll(() => expanded(f, c.bar)).toBe("true");
+      await f.select(c.doc.indexOf("\n\npara"));
+      await userEvent.keyboard(chord(f, "["));
+      await expect.poll(() => expanded(f, c.bar)).toBe("false");
+      expect(f.changes()).toBe(0);
+    });
+
+    // foldCode / unfoldCode act on every selected line, so with several carets the key
+    // keeps that meaning even when the main one sits in a long block.
+    it(`editable ${c.name}, two carets: the fold key folds the heading and leaves the block`, async () => {
+      const doc = `${c.doc}\n# H\n\nbody\n`;
+      fixture = await productionPasteFixture(doc);
+      const f = fixture;
+      const inBlock = doc.indexOf("line2");
+      const heading = doc.indexOf("# H") + 1;
+      await f.select(inBlock);
+      await userEvent.keyboard(chord(f, "]"));
+      await expect.poll(() => expanded(f, c.bar)).toBe("true");
+      // The bundle's own EditorSelection: a test-realm instance would not pass its checks.
+      const Selection = f.view.state.selection.constructor as typeof EditorSelection;
+      f.view.dispatch({
+        selection: Selection.create([Selection.cursor(heading), Selection.cursor(inBlock)], 1),
+      });
+      const heads = () => [
+        f.view.state.selection.main.head,
+        ...f.view.state.selection.ranges.map((r) => r.head),
+      ];
+      expect(heads()).toEqual([inBlock, inBlock, heading]);
+      const shown = () => f.view.contentDOM.textContent?.includes("body") ?? false;
+      expect(shown()).toBe(true);
+
+      await userEvent.keyboard(chord(f, "["));
+      await expect.poll(shown).toBe(false);
+      expect(expanded(f, c.bar)).toBe("true");
+      expect(heads()).toEqual([inBlock, inBlock, heading]);
       expect(f.changes()).toBe(0);
     });
   }
@@ -153,12 +211,9 @@ describe("collapse bars — keyboard path (real Chromium, production bundle)", (
     it(`read-only ${c.name}, two blocks: focus follows the toggled bar, not the first one`, async () => {
       fixture = await productionPasteFixture(c.doc, "\n", false);
       const f = fixture;
-      await userEvent.click(lineWith(f, "aline2"));
+      await tabIntoScroller(f);
       // Tab past the first bar (and anything else focusable) onto the second.
-      for (let i = 0; i < 4 && f.win.document.activeElement !== toggleOf(f, c.bar, 1, 2); i++) {
-        await userEvent.keyboard("{Tab}");
-      }
-      expect(f.win.document.activeElement).toBe(toggleOf(f, c.bar, 1, 2));
+      await tabTo(f, () => toggleOf(f, c.bar, 1, 2));
 
       await userEvent.keyboard("{Enter}");
       await expect.poll(() => expanded(f, c.bar, 1, 2)).toBe("true");
@@ -181,9 +236,8 @@ describe("collapse bars — keyboard path (real Chromium, production bundle)", (
       const scroller = f.view.scrollDOM;
       const active = () => f.win.document.activeElement;
       const bar = (state: "true" | "false") => barIn(f, c.bar, state);
-      await userEvent.click(lineWith(f, "row2x"));
-      await userEvent.keyboard("{Tab}");
-      expect(active()).toBe(bar("false"));
+      await tabIntoScroller(f);
+      await tabTo(f, () => bar("false"));
 
       // Expand: the reader keeps their place, and focus stays inside the editor.
       const top = scroller.scrollTop;
@@ -212,6 +266,48 @@ describe("collapse bars — keyboard path (real Chromium, production bundle)", (
       expect(active()).toBe(more);
       await frames(f, 5);
       expectInScrollport(f, more as HTMLElement);
+      expect(f.changes()).toBe(0);
+    });
+  }
+
+  it("the scroller is the editor's tab stop only while read-only", async () => {
+    fixture = await productionPasteFixture(CASES[0].doc);
+    const f = fixture;
+    expect(f.view.scrollDOM.tabIndex).toBe(-1);
+    await f.readOnly();
+    expect(f.view.scrollDOM.tabIndex).toBe(0);
+  });
+
+  // A long preamble: no bar is drawn when the reader arrives, so the keyboard has to page
+  // down to the block from the scroller before any bar can be Tabbed to.
+  const preamble = Array.from({ length: 400 }, (_, i) => `intro${i + 1}`).join("\n\n");
+  for (const c of CASES) {
+    it(`read-only ${c.name} after a long preamble: Tab in, page down, Tab and Enter both ways`, async () => {
+      fixture = await productionPasteFixture(`${preamble}\n\n${c.doc}`, "\n", false);
+      const f = fixture;
+      const active = () => f.win.document.activeElement;
+      const bar = (state: "true" | "false") => barIn(f, c.bar, state);
+      expect(bar("false")).toBeNull();
+      await tabIntoScroller(f);
+      for (let i = 0; i < 200 && bar("false") === null; i++) {
+        await userEvent.keyboard("{PageDown}");
+        await frames(f, 3);
+      }
+      await tabTo(f, () => bar("false"));
+
+      await userEvent.keyboard("{Enter}");
+      await expect.poll(() => bar("false")).toBeNull();
+      // Focus is on "Show less" when it is on screen, else on the scroller: read on to it.
+      for (let i = 0; i < 20 && active() !== bar("true"); i++) {
+        await userEvent.keyboard(bar("true") === null ? "{PageDown}" : "{Tab}");
+        await frames(f, 3);
+      }
+      expect(active()).toBe(bar("true"));
+
+      await userEvent.keyboard("{Enter}");
+      const more = bar("false");
+      expect(more).not.toBeNull();
+      expect(active()).toBe(more);
       expect(f.changes()).toBe(0);
     });
   }
@@ -274,6 +370,34 @@ describe("collapse bars — keyboard path (real Chromium, production bundle)", (
         );
       }
       expect(f.win.document.activeElement).not.toBe(bar("false"));
+      expect(f.changes()).toBe(0);
+    });
+  }
+
+  // The fold key collapses with the caret deep in the block: the caret is parked at the
+  // last visible line, far above, and the tall tail keeps the scroll clamp from bringing
+  // it back by itself — whether the reader still sees their caret is up to the command.
+  for (const c of LONG_CASES) {
+    it(`editable long ${c.name} with a tall tail: the fold-key collapse keeps the caret on screen`, async () => {
+      fixture = await productionPasteFixture(tallTail(c));
+      const f = fixture;
+      await f.select(f.view.state.doc.toString().indexOf("row2x"));
+      await userEvent.keyboard(chord(f, "]"));
+      await expect.poll(() => barIn(f, c.bar, "false")).toBeNull();
+      const deep = f.view.state.doc.toString().indexOf("row250x");
+      f.view.dispatch({ selection: { anchor: deep }, scrollIntoView: true });
+      await frames(f, 5);
+      await f.select(deep);
+
+      await userEvent.keyboard(chord(f, "["));
+      await expect.poll(() => f.view.state.selection.main.head).not.toBe(deep);
+      await frames(f, 5);
+      const caret = f.view.coordsAtPos(f.view.state.selection.main.head);
+      const port = f.view.scrollDOM.getBoundingClientRect();
+      expect(caret).not.toBeNull();
+      expect(caret?.top).toBeGreaterThanOrEqual(port.top);
+      expect(caret?.bottom).toBeLessThanOrEqual(port.bottom);
+      expect(f.win.document.activeElement).toBe(f.view.contentDOM);
       expect(f.changes()).toBe(0);
     });
   }

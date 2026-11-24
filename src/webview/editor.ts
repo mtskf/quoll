@@ -17,7 +17,7 @@ import {
   type Text,
   Transaction,
 } from "@codemirror/state";
-import { EditorView, keymap } from "@codemirror/view";
+import { EditorView, keymap, ViewPlugin } from "@codemirror/view";
 import { perfNow, perfRecord } from "../shared/perf.js";
 import {
   buildSwitchToTextMessage,
@@ -835,7 +835,8 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // Display-only. Publishes to neither zone facet, for the reason given above.
         blockquoteCollapseField,
         // Keyboard path for both collapse bars: the fold keys collapse / expand the long
-        // block at the caret first, then fall through to heading fold (Prec.high).
+        // block at the caret first, then fall through to quollFoldKeymap's foldCode /
+        // unfoldCode (Prec.high — see cm/collapse/collapse-keymap.ts).
         quollCollapseKeymap,
         // C6b: block widget for GFM tables. Publishes its range to
         // quollBlockReplaceZones so quollSyntaxReveal above drops inline
@@ -1039,6 +1040,24 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // document's EOL. CM recognises its own linewise copy by comparing the
         // LF-normalised paste with the string it copied, so a CRLF clipboard broke
         // multi-cursor line copy → paste.
+        // Read-only, the content DOM is not focusable, so the editor would have no tab stop:
+        // no keyboard scrolling, and no way to reach a widget button (a collapse bar) that is
+        // not drawn yet. The scroller is the tab stop there. CodeMirror creates it with
+        // tabIndex -1 and has no facet for its attributes. Editable, the content is the tab
+        // stop, so the scroller stays out of the order.
+        ViewPlugin.define((view) => {
+          const sync = () => {
+            view.scrollDOM.tabIndex = view.state.facet(EditorView.editable) ? -1 : 0;
+          };
+          sync();
+          return {
+            update(u) {
+              if (u.startState.facet(EditorView.editable) !== u.state.facet(EditorView.editable)) {
+                sync();
+              }
+            },
+          };
+        }),
         editableComp.of([
           EditorView.editable.of(initialCanWrite),
           EditorState.readOnly.of(!initialCanWrite),

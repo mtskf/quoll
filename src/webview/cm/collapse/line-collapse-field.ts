@@ -360,13 +360,18 @@ export function findCollapseBlockAt<X>(
  *  `keepFocus` (the toggled bar held focus): a collapse also scrolls
  *  `concealFrom` into view in the same transaction, so the replacement "Show more" bar —
  *  possibly far above a long block's "Show less" — is drawn by this dispatch and the caller
- *  can hand it focus. An expand never scrolls: the reader keeps their place. */
+ *  can hand it focus. An expand never scrolls: the reader keeps their place.
+ *
+ *  `scrollCaret` (the keyboard command, where the caret is the reader's place): a collapse
+ *  scrolls the main head into view, so a caret parked at `safeCaret` — possibly far above
+ *  a caret deep in a long block — stays on screen. */
 export function toggleCollapse<X>(
   view: EditorView,
   target: CollapseTarget<X>,
   key: number,
   expand: boolean,
-  keepFocus = false
+  keepFocus = false,
+  scrollCaret = false
 ): void {
   const effects = target.effect.of({ key, expanded: expand });
   if (expand) {
@@ -389,6 +394,7 @@ export function toggleCollapse<X>(
   view.dispatch({
     effects: keepFocus ? [effects, EditorView.scrollIntoView(block.concealFrom)] : effects,
     ...(parked !== null ? { selection: parked } : {}),
+    scrollIntoView: scrollCaret,
   });
 }
 
@@ -418,7 +424,7 @@ export function collapseAtCaretCommand<X>(
     ) {
       return false;
     }
-    toggleCollapse(view, target, block.key, expand);
+    toggleCollapse(view, target, block.key, expand, false, true);
     return true;
   };
 }
