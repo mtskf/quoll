@@ -42,6 +42,7 @@ import {
   isDocumentEvent,
   makeTempDir,
   VIEW_TYPE,
+  writeUntilObserved,
 } from "./harness";
 import type { DocumentMessageShape, RecordedEventShape } from "./types";
 
@@ -97,17 +98,21 @@ describe("external-fs-write-propagates", function () {
     // external-edit-propagates.test.ts.
     const beforeExternalWrite = Date.now();
 
-    // Genuine out-of-process write straight to disk: bypasses the in-memory
-    // TextDocument model entirely, exactly as an external CLI edit does. VS
-    // Code's file watcher detects it and auto-reverts the (clean) backing
-    // TextDocument, firing workspace.onDidChangeTextDocument.
-    await fs.writeFile(tempFile, "## External\n\n# Initial\n\nbody\n");
-
     const isDocAfterBaseAfterAnchor = (
       e: RecordedEventShape
     ): e is RecordedEventShape & { message: DocumentMessageShape } =>
       isDocumentAfter(baseVersion)(e) && e.timestamp >= beforeExternalWrite;
-    const afterWrite = await harness.waitForEvent(isDocAfterBaseAfterAnchor, 8000);
+    // Genuine out-of-process write straight to disk: bypasses the in-memory
+    // TextDocument model entirely, exactly as an external CLI edit does. VS
+    // Code's file watcher detects it and auto-reverts the (clean) backing
+    // TextDocument, firing workspace.onDidChangeTextDocument. The watch is
+    // registered asynchronously, so a write this soon after the open can land
+    // before it is live and be lost — writeUntilObserved repeats it.
+    const afterWrite = await writeUntilObserved(
+      tempFile,
+      "## External\n\n# Initial\n\nbody\n",
+      harness.waitForEvent(isDocAfterBaseAfterAnchor, 8000)
+    );
     assert.ok(
       afterWrite.message.content.startsWith("## External"),
       `reseed Document must carry the on-disk content, got: ${JSON.stringify(
