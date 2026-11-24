@@ -10,10 +10,10 @@
 // PROVENANCE — every table is derived from the installed VS Code build. LIGHT/DARK
 // were re-derived against 1.147.0 on 2026-11-24 (they had been carried over from
 // older template stubs); HC_DARK/HC_LIGHT were authored the same way for A11Y-08b
-// and re-checked against 1.147.0 the same day — all unchanged. LIGHT / DARK are
-// the "Light (Visual Studio)" / "Dark (Visual Studio)" bases that Default Light+ /
-// Dark+ include (light_plus.json / dark_plus.json add no
-// workbench colours of their own). Sources:
+// and re-checked against 1.147.0 the same day, with no HC value changing. LIGHT /
+// DARK are the "Light (Visual Studio)" / "Dark (Visual Studio)" bases that Default
+// Light+ / Dark+ include (light_plus.json / dark_plus.json add no workbench colours
+// of their own). Sources:
 //   colorRegistry defaults:
 //     <app>/Contents/Resources/app/out/vs/workbench/workbench.desktop.main.js
 //     (`registerColor(id, { dark, light, hcDark, hcLight })`, minified as `pe(...)`)

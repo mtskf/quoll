@@ -111,8 +111,9 @@ palette into `preview.template.html`'s `:root` from
 stubs rather than every `--vscode-*` the webview reads. All four tables are
 derived from the installed VS Code build, with registry aliases resolved to
 their base (the build version and method are in that module's `PROVENANCE`
-block — after a VS Code upgrade, re-derive the whole set). `<body>` also carries the host-shaped
-`vscode-*` theme class plus `data-vscode-theme-kind`, mirroring what the real
+block — after a VS Code upgrade, re-derive the whole set). `<body>` also
+carries the host-shaped `vscode-*` theme class plus `data-vscode-theme-kind`,
+mirroring what the real
 webview host stamps.
 **`--vscode-font-family` / `--vscode-font-size` must be realistic**: the
 nested-list indent is measured at runtime from the proportional font's space
