@@ -883,9 +883,13 @@ export const quollTaskCompletedContentTheme = EditorView.theme(taskCompletedCont
 // (copyButtonThemeSpec) and the "Show N more lines" collapse toggle
 // (collapseToggleThemeSpec) — so the pair reads as a set. Single source of truth for
 // the hover tint (never duplicate the literal). The FOREGROUND is no longer shared: the
-// copy button keeps this neutral foreground and its resting dim, while the collapse
-// toggle is link-coloured at full opacity (user decision 2026-10-08). Correct in both
-// light and dark.
+// header controls (copy button + language label) keep this neutral foreground, while the
+// collapse toggle is link-coloured (user decision 2026-10-08). None of the fenced controls
+// carries the shared --quoll-control-rest-opacity dim (A11Y-12): on the light header
+// surface (#e4ebf8) VS Code's foreground is 5.17:1 at full opacity and falls to 2.41:1 at
+// 0.6, so no opacity leaves the language label at 4.5:1 text contrast. Their de-emphasis is
+// the host's secondary UI ink itself (`foreground` is #616161 against #000000 editor text
+// in Default Light), which the theme author keeps legible on widget surfaces.
 const fencedControlForeground = "var(--vscode-foreground)";
 const fencedControlHoverBackground =
   "var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.1))";
@@ -914,9 +918,9 @@ export const copyButtonThemeSpec = {
   },
   // Icon-only button: the bare Lucide glyph with NO resting background — inline-flex
   // centres the SVG; the glyph is sized in em so it tracks the panel font. The
-  // resting state is the dimmed icon alone (--quoll-control-rest-opacity); the boxed affordance
-  // (borderRadius fill) appears only on hover/focus, so at rest the button reads as
-  // an icon, not a bordered box.
+  // resting state is the bare icon in the secondary foreground (no opacity dim — see
+  // fencedControlForeground); the boxed affordance (borderRadius fill) appears only on
+  // hover/focus, so at rest the button reads as an icon, not a bordered box.
   //
   // `backgroundColor: transparent` is set EXPLICITLY, not merely omitted: this is a
   // real `<button>`, and the VS Code webview injects a default `button { background:
@@ -948,10 +952,6 @@ export const copyButtonThemeSpec = {
     boxShadow: "none",
     borderRadius: "4px",
     cursor: "pointer",
-    // Shared floating-control resting dim + fade (styles.css :root). Fallback
-    // mirrors the token default for the pre-stylesheet frame.
-    opacity: "var(--quoll-control-rest-opacity, 0.6)",
-    transition: "var(--quoll-control-transition, opacity 0.12s ease)",
     userSelect: "none",
   },
   ".quoll-copy-button svg": {
@@ -983,16 +983,13 @@ export const copyButtonThemeSpec = {
     border: "0",
   },
   ".quoll-copy-button:hover, .quoll-copy-button:focus-visible": {
-    opacity: "1",
     backgroundColor: fencedControlHoverBackground,
   },
   ".quoll-copy-button.is-copied": {
-    opacity: "1",
     color:
       "var(--vscode-testing-iconPassed, var(--vscode-button-foreground, var(--vscode-foreground)))",
   },
   ".quoll-copy-button.is-copy-failed": {
-    opacity: "1",
     color: "var(--vscode-errorForeground, var(--vscode-foreground))",
   },
 };
@@ -1114,12 +1111,6 @@ export const fencedHeaderBarThemeSpec: Record<string, Record<string, string>> = 
       zIndex: "1",
       maxWidth: "calc(100% - 4em)", // reserve room for the copy button on the right
       color: fencedControlForeground,
-      opacity: "var(--quoll-control-rest-opacity, 0.6)",
-      transition: "var(--quoll-control-transition, opacity 0.12s ease)",
-    },
-  ".quoll-language-picker-label.is-labeled:hover, .quoll-language-picker-label.is-labeled:focus-within":
-    {
-      opacity: "1",
     },
   // Decorative square-code icon overlaid on the select's LEFT padding, click-through.
   ".quoll-language-picker-label.is-labeled .quoll-language-picker-icon": {
