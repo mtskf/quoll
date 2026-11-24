@@ -92,8 +92,9 @@ interface ContentPoint {
  *
  *  Keyed on the widget's root ELEMENT rather than held in the `render` closure
  *  because CodeMirror reuses that element across widget instances and block
- *  positions. Two things invalidate an entry: `patchDOM` deletes it when the
- *  cell layout changes, and `dragForBlock` refuses it when the document or the
+ *  positions. Two things invalidate an entry: `patchDOM` deletes it on every
+ *  patch it accepts (any content change that keeps the grid shape; a shape
+ *  change is a full rebuild instead), and `dragForBlock` refuses it when the document or the
  *  block start captured at press time no longer match — the shift case, where
  *  no patch runs at all. A WeakMap so a discarded widget root takes its entry
  *  with it. */
@@ -117,16 +118,19 @@ const pendingDrag = new WeakMap<HTMLElement, PendingDrag>();
 const armedRelease = new WeakMap<HTMLElement, AbortController>();
 
 /** The current block start, or null (logged) if this root cannot be located in
- *  the view — every caller then drops the gesture, so the log is its only trace. */
-function blockBase(view: EditorView, root: HTMLElement, slice: string): AbsoluteOffset | null {
+ *  the view — every caller then drops the gesture, so the log is its only trace.
+ *  The log carries no document content: the console is not a place for the
+ *  user's text, and the listeners calling this are bound once per root, so any
+ *  instance field read here could belong to an earlier, patched-over widget. */
+function blockBase(view: EditorView, root: HTMLElement): AbsoluteOffset | null {
   try {
     if (!view.contentDOM.contains(root)) {
-      console.error("[quoll] table widget root not in contentDOM", { slice });
+      console.error("[quoll] table widget root not in contentDOM");
       return null;
     }
     return asAbsoluteOffset(view.posAtDOM(root));
   } catch (err) {
-    console.error("[quoll] table widget block position lookup failed", { slice, err });
+    console.error("[quoll] table widget block position lookup failed", { err });
     return null;
   }
 }
@@ -473,7 +477,7 @@ export class TableBlockWidget extends QuollWidget {
         }
         // No dispatch here: dispatching would fire the reveal mid-drag and pull
         // the widget out from under the pointer.
-        const base = blockBase(view, root, this.slice);
+        const base = blockBase(view, root);
         if (base === null) {
           return;
         }
@@ -544,7 +548,7 @@ export class TableBlockWidget extends QuollWidget {
             }
             const pending = pendingDrag.get(root) ?? null;
             pendingDrag.delete(root);
-            const base = blockBase(view, root, this.slice);
+            const base = blockBase(view, root);
             if (base === null) {
               return;
             }
@@ -661,7 +665,7 @@ export class TableBlockWidget extends QuollWidget {
           view.state.facet(quollOpenExternalSink)(anchor.getAttribute("href") ?? "");
           return;
         }
-        const base = blockBase(view, root, this.slice);
+        const base = blockBase(view, root);
         if (base === null) {
           return;
         }

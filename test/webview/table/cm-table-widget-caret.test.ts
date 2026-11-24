@@ -57,9 +57,8 @@ describe("TableBlockWidget caret dispatch hardening", () => {
     try {
       press(dom.querySelector("td")!, "click", 10, 10);
       expect(dispatched).toEqual([]);
-      expect(consoleError).toHaveBeenCalledWith("[quoll] table widget root not in contentDOM", {
-        slice: SRC,
-      });
+      // Exact arguments: the log names the failure and carries no document text.
+      expect(consoleError).toHaveBeenCalledWith("[quoll] table widget root not in contentDOM");
     } finally {
       consoleError.mockRestore();
       dom.remove();
@@ -81,7 +80,7 @@ describe("TableBlockWidget caret dispatch hardening", () => {
       expect(dispatched).toEqual([]);
       expect(consoleError).toHaveBeenCalledWith(
         "[quoll] table widget block position lookup failed",
-        { slice: SRC, err: boom }
+        { err: boom }
       );
     } finally {
       consoleError.mockRestore();

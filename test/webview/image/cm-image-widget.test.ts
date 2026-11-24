@@ -164,9 +164,8 @@ describe("ImageBlockWidget identity + events", () => {
     try {
       dom.click();
       expect(dispatched).toEqual([]);
-      expect(errSpy).toHaveBeenCalledWith("[quoll] image widget root not in contentDOM", {
-        slice: "![a](javascript:alert(1))",
-      });
+      // Exact arguments: the log names the failure and carries no document text.
+      expect(errSpy).toHaveBeenCalledWith("[quoll] image widget root not in contentDOM");
     } finally {
       errSpy.mockRestore();
       dom.remove();

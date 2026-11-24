@@ -138,7 +138,7 @@ export class ImageBlockWidget extends QuollWidget {
         let anchor: number | undefined;
         try {
           if (!view.contentDOM.contains(root)) {
-            console.error("[quoll] image widget root not in contentDOM", { slice: this.slice });
+            console.error("[quoll] image widget root not in contentDOM");
             return;
           }
           anchor = view.posAtDOM(root);
