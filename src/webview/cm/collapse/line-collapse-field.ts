@@ -357,7 +357,7 @@ export function findCollapseBlockAt<X>(
  *  A stale key resolves to null → the effect alone (it only edits the Set), so there is no
  *  error path.
  *
- *  `keepFocus` (a focused bar toggled from the keyboard): a collapse also scrolls
+ *  `keepFocus` (the toggled bar held focus): a collapse also scrolls
  *  `concealFrom` into view in the same transaction, so the replacement "Show more" bar —
  *  possibly far above a long block's "Show less" — is drawn by this dispatch and the caller
  *  can hand it focus. An expand never scrolls: the reader keeps their place. */

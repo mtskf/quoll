@@ -212,14 +212,58 @@ describe("collapse bars — keyboard path (real Chromium, production bundle)", (
     });
   }
 
-  // The mouse never focuses the bar, so a collapse must neither scroll to the replacement
-  // "Show more" nor take focus. A tall tail keeps the collapsed document taller than the
-  // scrollport, so after the browser clamps the scroll the bar sits above the viewport and
-  // a scroll-into-view (the keyboard path's) would be observable.
+  // A tall tail keeps the collapsed document taller than the scrollport, so the browser's
+  // scroll clamp cannot bring the replacement "Show more" on screen by itself: whether it is
+  // scrolled to is up to the toggle.
   const tail = Array.from({ length: 60 }, (_, i) => `tail${i + 1}`).join("\n\n");
+  const tallTail = (c: (typeof LONG_CASES)[number]) => c.doc.replace("para\n", `${tail}\n`);
+  const scrollToShowLess = async (f: Fixture, bar: string) => {
+    const less = () =>
+      f.win.document.querySelector<HTMLButtonElement>(
+        `.quoll-${bar}-collapse-toggle[aria-expanded="true"]`
+      );
+    for (let i = 0; i < 80 && less() === null; i++) {
+      f.view.scrollDOM.scrollTop += 300;
+      await frames(f, 3);
+    }
+    expect(less()).not.toBeNull();
+    (less() as HTMLElement).scrollIntoView({ block: "center" });
+    await frames(f, 5);
+    return less() as HTMLButtonElement;
+  };
+
+  // A focused "Show less" collapsed from the keyboard: the replacement's position at
+  // dispatch time is pre-scroll, so focus must not wait on it being in the scrollport.
+  for (const c of LONG_CASES) {
+    it(`read-only long ${c.name} with a tall tail: a keyboard collapse focuses Show more and scrolls to it`, async () => {
+      fixture = await productionPasteFixture(tallTail(c), "\n", false);
+      const f = fixture;
+      const scroller = f.view.scrollDOM;
+      await userEvent.click(toggleOf(f, c.bar));
+      const less = await scrollToShowLess(f, c.bar);
+      less.focus({ preventScroll: true });
+      expect(f.win.document.activeElement).toBe(less);
+
+      await userEvent.keyboard("{Enter}");
+      const more = f.win.document.querySelector<HTMLButtonElement>(
+        `.quoll-${c.bar}-collapse-toggle[aria-expanded="false"]`
+      );
+      expect(more).not.toBeNull();
+      expect(f.win.document.activeElement).toBe(more);
+      await frames(f, 5);
+      const box = (more as HTMLElement).getBoundingClientRect();
+      const port = scroller.getBoundingClientRect();
+      expect(box.top).toBeGreaterThanOrEqual(port.top);
+      expect(box.bottom).toBeLessThanOrEqual(port.bottom);
+      expect(f.changes()).toBe(0);
+    });
+  }
+
+  // These clicks start with the toggle unfocused (mousedown never gives it focus), so a
+  // collapse must neither scroll to the replacement "Show more" nor take focus.
   for (const c of LONG_CASES) {
     it(`read-only long ${c.name}: a mouse collapse neither scrolls to the bar nor takes focus`, async () => {
-      fixture = await productionPasteFixture(c.doc.replace("para\n", `${tail}\n`), "\n", false);
+      fixture = await productionPasteFixture(tallTail(c), "\n", false);
       const f = fixture;
       const scroller = f.view.scrollDOM;
       const bar = (state: "true" | "false") =>
@@ -227,15 +271,7 @@ describe("collapse bars — keyboard path (real Chromium, production bundle)", (
           `.quoll-${c.bar}-collapse-toggle[aria-expanded="${state}"]`
         );
       await userEvent.click(bar("false") as HTMLElement);
-      for (let i = 0; i < 80 && bar("true") === null; i++) {
-        scroller.scrollTop += 300;
-        await frames(f, 3);
-      }
-      const less = bar("true") as HTMLElement;
-      expect(less).not.toBeNull();
-      less.scrollIntoView({ block: "center" });
-      await frames(f, 5);
-      await userEvent.click(bar("true") as HTMLElement);
+      await userEvent.click(await scrollToShowLess(f, c.bar));
       await expect.poll(() => bar("true")).toBeNull();
       await frames(f, 5);
       // Not scrolled to: the replacement is undrawn, or at least above the scrollport.

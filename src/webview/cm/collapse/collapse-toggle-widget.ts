@@ -36,6 +36,13 @@ function makeChevron(d: string): SVGSVGElement {
   return svg;
 }
 
+/** Whether `el` lies wholly inside the scroller's visible client box. */
+function inScrollport(el: HTMLElement, scroller: HTMLElement): boolean {
+  const box = el.getBoundingClientRect();
+  const top = scroller.getBoundingClientRect().top + scroller.clientTop;
+  return box.top >= top && box.bottom <= top + scroller.clientHeight;
+}
+
 export interface CollapseBarClasses {
   /** Root, e.g. "quoll-fenced-collapse-bar". */
   bar: string;
@@ -55,7 +62,7 @@ export function renderCollapseBar(args: {
   expanded: boolean;
   hiddenCount: number;
   signal: AbortSignal;
-  /** `keepFocus`: the button held focus (keyboard activation) — see toggleCollapse. */
+  /** `keepFocus`: the button held focus when toggled — see toggleCollapse. */
   onToggle: (keepFocus: boolean) => void;
 }): HTMLElement {
   const { view, classes, blockKey, expanded, hiddenCount, signal, onToggle } = args;
@@ -101,16 +108,19 @@ export function renderCollapseBar(args: {
       event.stopPropagation();
       // Toggling swaps this widget for the other state's (a different decoration at a
       // different offset), so a focused button — reached with Tab in read-only mode — would
-      // drop focus to <body>, where neither Tab nor PageDown reaches the editor again. Hand
-      // focus to the replacement button (CodeMirror redraws synchronously in dispatch). A
-      // keyboard collapse scrolls its "Show more" into view in that dispatch, so it is
-      // drawn; an expand does not scroll, and a long block's "Show less" can sit beyond the
-      // viewport, undrawn — or drawn in CodeMirror's off-screen buffer. Focus goes to the
-      // replacement only when it is inside the scrollport (a focused control the reader
-      // cannot see would take the next Enter); otherwise to the scroller, which keeps
-      // keyboard scrolling and the next Tab inside the editor. preventScroll: focus must not
-      // move the reader. A mouse click never focuses the button (mousedown above), so this
-      // is keyboard-only.
+      // drop focus to <body>, where neither Tab nor PageDown reaches the editor again. When
+      // the outgoing button held focus, hand it to the replacement button (CodeMirror
+      // redraws synchronously in dispatch). A collapse ("Show less" was clicked) draws its
+      // "Show more" in that dispatch and scrolls it into view at the next measure, so it
+      // takes focus whenever it is drawn — its position right now is not yet final. An
+      // expand does not scroll, and a long block's "Show less" can sit beyond the viewport,
+      // undrawn — or drawn in CodeMirror's off-screen buffer — so it takes focus only when
+      // already inside the scrollport (a focused control the reader cannot see would take
+      // the next Enter). Otherwise focus goes to the scroller, which keeps keyboard
+      // scrolling and the next Tab inside the editor. preventScroll: focus must not move
+      // the reader. A mouse click does not give the button focus (mousedown above), so
+      // this path needs a button that already had it: keyboard activation, or a click on
+      // a bar reached with Tab.
       const hadFocus = button.ownerDocument.activeElement === button;
       onToggle(hadFocus);
       if (hadFocus) {
@@ -118,12 +128,9 @@ export function renderCollapseBar(args: {
         const next = view.contentDOM.querySelector<HTMLElement>(
           `.${classes.toggle}[data-collapse-key="${blockKey}"]`
         );
-        const box = next?.getBoundingClientRect();
-        const port = scroller.getBoundingClientRect();
-        const top = port.top + scroller.clientTop;
-        const inPort =
-          box !== undefined && box.top >= top && box.bottom <= top + scroller.clientHeight;
-        (inPort ? (next as HTMLElement) : scroller).focus({ preventScroll: true });
+        const target =
+          next !== null && (expanded || inScrollport(next, scroller)) ? next : scroller;
+        target.focus({ preventScroll: true });
       }
     },
     { signal }
