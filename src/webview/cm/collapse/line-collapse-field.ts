@@ -205,17 +205,46 @@ function hiddenByFold(folded: ReturnType<typeof foldedRanges>, pos: number): boo
   return hidden;
 }
 
+/** Where the records stop being authoritative: the start of the line holding the last
+ *  top-level node of an INCOMPLETE tree (that node may be cut short at the frontier), or
+ *  `null` when the tree spans the whole document. */
+function unseenFrom(state: EditorState): number | null {
+  const tree = syntaxTree(state);
+  if (tree.length >= state.doc.length) {
+    return null;
+  }
+  const last = tree.topNode.lastChild;
+  return last === null ? 0 : state.doc.lineAt(last.from).from;
+}
+
 /** Assemble the field state from a record list: orders by blockFrom. It does NOT dedupe —
  *  the caller passes at most one record per block (computeBounded's `byFrom` map is what
  *  guarantees that). Filters decorations only — records are passed through by reference,
  *  never copied. The folded set is fetched once, and the filter is skipped when no fold
- *  exists (the fenced typing path pays nothing). */
-function assemble<X>(blocks: CollapseRecord<X>[], state: EditorState): CollapseState<X> {
+ *  exists (the fenced typing path pays nothing).
+ *
+ *  `expanded` rebuilds from the records, plus every `requested` key at or past the parse
+ *  frontier: a block the tree has not reached yet has no record, and dropping its key there
+ *  would re-collapse it when the background parse publishes (step 5 rebuilds from this
+ *  set). A carried key whose block turns out not to exist drops on that complete rebuild. */
+function assemble<X>(
+  blocks: CollapseRecord<X>[],
+  state: EditorState,
+  requested: ReadonlySet<number>
+): CollapseState<X> {
   const sorted = [...blocks].sort((a, b) => a.blockFrom - b.blockFrom);
   const liveExpanded = new Set<number>();
   for (const b of sorted) {
     if (b.expanded) {
       liveExpanded.add(b.key);
+    }
+  }
+  const frontier = unseenFrom(state);
+  if (frontier !== null) {
+    for (const k of requested) {
+      if (k >= frontier) {
+        liveExpanded.add(k);
+      }
     }
   }
   const folded = foldedRanges(state);
@@ -233,7 +262,7 @@ export function buildCollapseState<X>(
   state: EditorState,
   expanded: ReadonlySet<number>
 ): CollapseState<X> {
-  return assemble(buildRange(spec, state, expanded, 0, state.doc.length), state);
+  return assemble(buildRange(spec, state, expanded, 0, state.doc.length), state, expanded);
 }
 
 /** DD2 fast-path: does any selection head sit inside a CURRENTLY-collapsed region
@@ -318,7 +347,7 @@ function computeBounded<X>(
       byFrom.set(r.blockFrom, r); // fresh wins (a block spanning two intervals de-dupes)
     }
   }
-  return assemble([...byFrom.values()], tr.state);
+  return assemble([...byFrom.values()], tr.state, working);
 }
 
 /** The collapsible block whose key is `key`, or null — recomputed FRESH at click time (no

@@ -10,7 +10,7 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { syntaxTree } from "@codemirror/language";
 import { EditorSelection, EditorState, type Extension } from "@codemirror/state";
 import type { DecorationSet } from "@codemirror/view";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildCollapseState } from "../../../src/webview/cm/collapse/line-collapse-field.js";
 import {
   blockquoteCollapseField,
@@ -242,6 +242,35 @@ describe("blockquoteCollapseField — non-local structure changes", () => {
     expect(now).toHaveLength(1);
     expect(now[0].expanded).toBe(true);
     expect(now[0].hiddenCount).toBe(5);
+  });
+
+  it("5b. an expanded quote past a starved parse frontier stays expanded once the tree lands", () => {
+    // A doc change rebuilds every record from the tree the edit's own transaction parsed.
+    // Advancing the clock 50ms per read makes every parse budget run out at once, so that
+    // tree stops short of the quote: the quote's sticky key must survive the rebuild that
+    // cannot see it, and come back as an expanded bar when the background parse publishes.
+    let state = stateWith(proseAround);
+    const key = state.doc.line(3).from;
+    state = state.update({
+      effects: setBlockquoteCollapseEffect.of({ key, expanded: true }),
+    }).state;
+    expect(expectMatchesFresh(state)[0].expanded).toBe(true);
+
+    let clock = Date.now();
+    const spy = vi.spyOn(Date, "now").mockImplementation(() => (clock += 50));
+    let starved: EditorState;
+    try {
+      starved = state.update({ changes: { from: 0, to: 0, insert: "x" } }).state;
+    } finally {
+      spy.mockRestore();
+    }
+    // Non-vacuity: the edit's tree really stops before the quote.
+    expect(syntaxTree(starved).length).toBeLessThan(key + 1);
+
+    const now = expectMatchesFresh(settledState(starved));
+    expect(now).toHaveLength(1);
+    expect(now[0].key).toBe(key + 1);
+    expect(now[0].expanded).toBe(true);
   });
 
   it("6. policy pin: a plain prose insertion plans a FULL rebuild (Decision 3)", () => {
