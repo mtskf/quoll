@@ -32,10 +32,13 @@ const toggleOf = (f: Fixture, bar: string) => {
 const expanded = (f: Fixture, bar: string) => toggleOf(f, bar).getAttribute("aria-expanded");
 
 // CodeMirror resolves `mac:` bindings from the platform, so drive the chord it will match.
-const chord = (f: Fixture, bracket: "[" | "]") =>
-  /Mac/.test(f.win.navigator.platform)
-    ? `{Meta>}{Alt>}${bracket === "[" ? "[[" : "]"}{/Alt}{/Meta}`
-    : `{Control>}{Shift>}${bracket === "[" ? "[[" : "]"}{/Shift}{/Control}`;
+const chord = (f: Fixture, bracket: "[" | "]") => {
+  // userEvent.keyboard reads `[` as a key-descriptor opener; `[[` types a literal `[`.
+  const key = bracket === "[" ? "[[" : "]";
+  return /Mac/.test(f.win.navigator.platform)
+    ? `{Meta>}{Alt>}${key}{/Alt}{/Meta}`
+    : `{Control>}{Shift>}${key}{/Shift}{/Control}`;
+};
 
 describe("collapse bars — keyboard path (real Chromium, production bundle)", () => {
   for (const c of CASES) {
