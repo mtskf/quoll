@@ -223,6 +223,61 @@ export async function pollUntil(
   }
 }
 
+/** Out-of-process write of `content` to `file`, repeated every `retryMs` until
+ *  `observed` settles; returns `observed`. The helper owns the deadline: after
+ *  `timeoutMs` without `observed` settling it stops writing and rejects, naming
+ *  the file and the last swallowed write error (if any).
+ *
+ *  Why repeat: every watcher that can see the write (VS Code's own watch on a
+ *  visible out-of-workspace editor, Quoll's `createFileSystemWatcher`) is
+ *  registered asynchronously in another process, and a write that lands before
+ *  that registration is live is dropped for good, never delivered late.
+ *  Measured on the 1.94 pin: a write issued 0–5ms after `createFileSystemWatcher`
+ *  produced no event at all in 3–4 of 15 tries; from 20ms on every write was
+ *  seen (~200ms). A suite that writes right after the seed sits inside that
+ *  window, and under load it loses the event and times out. There is no
+ *  readiness API to wait on, so the write itself is the probe.
+ *
+ *  Rewriting the same bytes is safe for callers: a write that was only slow and
+ *  a later duplicate land on the same content, so the effect under test does
+ *  not change. A broken watch path still fails, because no attempt is ever seen.
+ */
+export async function writeUntilObserved<T>(
+  file: string,
+  content: string,
+  observed: Promise<T>,
+  timeoutMs = 8000,
+  retryMs = 1000
+): Promise<T> {
+  // A throwing first write must not leave a later rejection of `observed` unhandled.
+  observed.catch(() => undefined);
+  await fs.writeFile(file, content);
+  let done = false;
+  let lastError: unknown;
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const cause = lastError === undefined ? "" : `; last write error: ${String(lastError)}`;
+      reject(new Error(`write to ${file} not observed within ${timeoutMs}ms${cause}`));
+    }, timeoutMs);
+  });
+  void (async () => {
+    for (;;) {
+      await tick(retryMs);
+      if (done) {
+        return;
+      }
+      await fs.writeFile(file, content).catch((e: unknown) => {
+        lastError = e;
+      });
+    }
+  })();
+  return Promise.race([observed, deadline]).finally(() => {
+    done = true;
+    clearTimeout(timer);
+  });
+}
+
 /** Open a temp `.md` in Quoll and return the NEWLY-registered panel controls.
  *  `previous` guards the second open of a two-panel run: poll until activePanel
  *  becomes distinct from it, so the caller never captures the older panel.

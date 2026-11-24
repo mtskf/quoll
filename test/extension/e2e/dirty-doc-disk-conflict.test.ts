@@ -22,6 +22,7 @@ import {
   isDocumentEvent,
   makeTempDir,
   VIEW_TYPE,
+  writeUntilObserved,
 } from "./harness";
 
 // Kept in sync with src/extension/disk-conflict.ts (the e2e cannot import src/
@@ -95,10 +96,10 @@ describe("dirty-doc-disk-conflict", function () {
     };
 
     const anchor = Date.now();
-    // Genuine out-of-process divergent write.
-    await fs.writeFile(tempFile as string, "## External\n\n# Initial\n\nbody\n");
-
-    await prompted; // the divergence was detected and the prompt shown
+    // Genuine out-of-process divergent write, repeated until the prompt shows:
+    // Quoll's watcher was created only moments ago at panel open, and a write
+    // that beats its registration is lost (see writeUntilObserved).
+    await writeUntilObserved(tempFile as string, "## External\n\n# Initial\n\nbody\n", prompted);
 
     const reloaded = await harness.waitForEvent(
       (e) =>
@@ -144,8 +145,7 @@ describe("dirty-doc-disk-conflict", function () {
       return Promise.resolve(KEEP);
     };
 
-    await fs.writeFile(tempFile as string, "## Other\n\nbody\n");
-    await prompted;
+    await writeUntilObserved(tempFile as string, "## Other\n\nbody\n", prompted);
 
     // Let any (erroneous) reload settle, then assert the buffer is untouched.
     await new Promise((r) => setTimeout(r, 400));
