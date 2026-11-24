@@ -122,4 +122,20 @@ describe("editor — failed sends preserve receipt ownership", () => {
     s.document({ ...seed, docVersion: 2, content: "a", settledEditId: 1 });
     expect(s.posted.at(-1)).toBe("abc");
   });
+
+  it("replays a failed force-post's retained bytes on Edit 1's covering ack without retyping", () => {
+    const s = mount();
+    s.type("a");
+    vi.advanceTimersByTime(300);
+    expect(s.posted).toEqual(["a"]);
+    s.fail(true);
+    s.type("ab");
+    s.editor.flushPending();
+    expect(s.state().sendFailure).not.toBeNull();
+    s.fail(false);
+    s.document({ ...seed, docVersion: 2, content: "a", settledEditId: 1 });
+    expect(s.state().sendFailure).toBeNull();
+    expect(s.posted).toEqual(["a", "ab"]);
+    expect(s.state().editInFlight).toBe(true);
+  });
 });
