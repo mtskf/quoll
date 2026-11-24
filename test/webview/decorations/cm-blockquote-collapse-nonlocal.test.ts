@@ -385,6 +385,43 @@ describe("blockquoteCollapseField — non-local structure changes", () => {
     expect(now[0].expanded).toBe(false);
   });
 
+  it("5g. a change that starts after non-blank text on the opener line does not consume the key", () => {
+    // The change begins at key + 3 (after "> l", which is not indentation) and runs to the block
+    // end, but the opener survives: the same quote is still alive at the same key.
+    const base = stateWith(proseAround);
+    const key = base.doc.line(3).from;
+    const start = base.update({
+      effects: setBlockquoteCollapseEffect.of({ key, expanded: true }),
+    }).state;
+    expect(expectMatchesFresh(start)[0].expanded).toBe(true);
+
+    const blockTo = start.doc.line(16).to;
+    const next = edit(start, key + 3, blockTo, quote(14).slice(3));
+    expect(next.doc.line(3).text).toBe("> line 1");
+    const now = expectMatchesFresh(next);
+    expect(now).toHaveLength(1);
+    expect(now[0].key).toBe(key);
+    expect(now[0].expanded).toBe(true);
+  });
+
+  it("5h. a change ending exactly at the block end consumes the key", () => {
+    // [key, blockTo] is replaced by a fresh quote (the trailing line break survives). The old
+    // block is gone, so the new quote landing on its key must stay collapsed.
+    const base = stateWith(proseAround);
+    const key = base.doc.line(3).from;
+    const start = base.update({
+      effects: setBlockquoteCollapseEffect.of({ key, expanded: true }),
+    }).state;
+    expect(expectMatchesFresh(start)[0].expanded).toBe(true);
+
+    const blockTo = start.doc.line(16).to;
+    const next = edit(start, key, blockTo, quote(14));
+    const now = expectMatchesFresh(next);
+    expect(now).toHaveLength(1);
+    expect(now[0].key).toBe(key);
+    expect(now[0].expanded).toBe(false);
+  });
+
   it("6. policy pin: a plain prose insertion plans a FULL rebuild (Decision 3)", () => {
     // Tripwire for swapping in a bounded policy. Plan Decision 3 lists three parser-verified
     // counterexamples where a distant edit changes whether a top-level Blockquote exists
