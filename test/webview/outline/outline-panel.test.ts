@@ -56,6 +56,14 @@ function mount(doc: string): { view: EditorView; host: HTMLElement } {
   return { view, host };
 }
 
+// For vi.getTimerCount() pins: the count must see only the plugin's own timers.
+// "Date" is faked too because @codemirror/language parses under a 20 ms Date.now()
+// budget and, when a loaded CPU blows it, hands the rest to a setTimeout-based
+// parse worker — one extra timer in the count. A frozen clock never runs out.
+function useCountableFakeTimers(): void {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+}
+
 function itemTexts(host: HTMLElement): string[] {
   return [...host.querySelectorAll(".quoll-outline-item")].map((el) => el.textContent ?? "");
 }
@@ -280,9 +288,7 @@ describe("quollOutline sidebar", () => {
   });
 
   it("cancels the pending debounced rebuild when the sidebar is closed", () => {
-    // Fake ONLY setTimeout/clearTimeout so getTimerCount reflects the plugin's
-    // own timers (debounce + hover-close) and nothing else.
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    useCountableFakeTimers();
     const { view: v } = mount("# Alpha\n");
     const plugin = v.plugin(outlinePlugin);
     plugin?.toggle(); // open (synchronous rebuild — no timer)
@@ -293,7 +299,7 @@ describe("quollOutline sidebar", () => {
   });
 
   it("cancels pending debounce AND hover-close timers on destroy", () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    useCountableFakeTimers();
     const { view: v, host } = mount("# Alpha\n");
     hoverToggle(host);
     v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: "# Alpha\n\n## Added\n" } });
