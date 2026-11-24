@@ -40,12 +40,29 @@ const frames = (f: Fixture, n: number) =>
     f.win.requestAnimationFrame(tick);
   });
 
-const toggleOf = (f: Fixture, bar: string) => {
+// Two long blocks of one kind: which bar receives focus, and which block the caret command
+// picks, are only observable when there is more than one candidate.
+const TWO_CASES = [
+  {
+    name: "fenced code",
+    doc: `\`\`\`\n${body(14, "a")}\n\`\`\`\n\nmid\n\n\`\`\`\n${body(14, "b")}\n\`\`\`\n\npara\n`,
+    bar: "fenced",
+  },
+  {
+    name: "blockquote",
+    doc: `${body(14, "> a")}\n\nmid\n\n${body(14, "> b")}\n\npara\n`,
+    bar: "blockquote",
+  },
+] as const;
+
+/** The `i`-th of exactly `of` bars of this kind, in document order. */
+const toggleOf = (f: Fixture, bar: string, i = 0, of = 1) => {
   const t = f.win.document.querySelectorAll<HTMLButtonElement>(`.quoll-${bar}-collapse-toggle`);
-  expect(t.length).toBe(1);
-  return t[0] as HTMLButtonElement;
+  expect(t.length).toBe(of);
+  return t[i] as HTMLButtonElement;
 };
-const expanded = (f: Fixture, bar: string) => toggleOf(f, bar).getAttribute("aria-expanded");
+const expanded = (f: Fixture, bar: string, i = 0, of = 1) =>
+  toggleOf(f, bar, i, of).getAttribute("aria-expanded");
 
 // CodeMirror resolves `mac:` bindings from the platform, so drive the chord it will match.
 const chord = (f: Fixture, bracket: "[" | "]") => {
@@ -93,6 +110,44 @@ describe("collapse bars — keyboard path (real Chromium, production bundle)", (
       await userEvent.keyboard("{Enter}");
       await expect.poll(() => expanded(f, c.bar)).toBe("false");
       expect(f.win.document.activeElement).toBe(toggleOf(f, c.bar));
+      expect(f.changes()).toBe(0);
+    });
+  }
+
+  for (const c of TWO_CASES) {
+    it(`editable ${c.name}, two blocks: the fold keys act on the block at the caret only`, async () => {
+      fixture = await productionPasteFixture(c.doc);
+      const f = fixture;
+      await f.select(c.doc.indexOf("bline2"));
+      await userEvent.keyboard(chord(f, "]"));
+      await expect.poll(() => expanded(f, c.bar, 1, 2)).toBe("true");
+      expect(expanded(f, c.bar, 0, 2)).toBe("false");
+      await userEvent.keyboard(chord(f, "["));
+      await expect.poll(() => expanded(f, c.bar, 1, 2)).toBe("false");
+      expect(expanded(f, c.bar, 0, 2)).toBe("false");
+      expect(f.changes()).toBe(0);
+    });
+
+    it(`read-only ${c.name}, two blocks: focus follows the toggled bar, not the first one`, async () => {
+      fixture = await productionPasteFixture(c.doc, "\n", false);
+      const f = fixture;
+      const line = [...f.view.contentDOM.querySelectorAll<HTMLElement>(".cm-line")].find((l) =>
+        l.textContent?.includes("aline2")
+      );
+      await userEvent.click(line as HTMLElement);
+      // Tab past the first bar (and anything else focusable) onto the second.
+      for (let i = 0; i < 4 && f.win.document.activeElement !== toggleOf(f, c.bar, 1, 2); i++) {
+        await userEvent.keyboard("{Tab}");
+      }
+      expect(f.win.document.activeElement).toBe(toggleOf(f, c.bar, 1, 2));
+
+      await userEvent.keyboard("{Enter}");
+      await expect.poll(() => expanded(f, c.bar, 1, 2)).toBe("true");
+      expect(expanded(f, c.bar, 0, 2)).toBe("false");
+      expect(f.win.document.activeElement).toBe(toggleOf(f, c.bar, 1, 2));
+      await userEvent.keyboard("{Enter}");
+      await expect.poll(() => expanded(f, c.bar, 1, 2)).toBe("false");
+      expect(f.win.document.activeElement).toBe(toggleOf(f, c.bar, 1, 2));
       expect(f.changes()).toBe(0);
     });
   }
