@@ -887,7 +887,7 @@ export const quollTaskCompletedContentTheme = EditorView.theme(taskCompletedCont
 // collapse toggle is link-coloured (user decision 2026-10-08). None of the fenced controls
 // carries the shared --quoll-control-rest-opacity dim (A11Y-12): on the light header
 // surface (#e4ebf8) VS Code's foreground is 5.17:1 at full opacity and falls to 2.41:1 at
-// 0.6, so no opacity leaves the language label at 4.5:1 text contrast. Their de-emphasis is
+// 0.6; the label needs roughly 0.95 opacity to reach 4.5:1, so no meaningful rest dim survives. Their de-emphasis is
 // the host's secondary UI ink itself (`foreground` is #616161 against #000000 editor text
 // in Default Light), which the theme author keeps legible on widget surfaces.
 const fencedControlForeground = "var(--vscode-foreground)";
@@ -1130,7 +1130,6 @@ export const fencedHeaderBarThemeSpec: Record<string, Record<string, string>> = 
     transform: "translateY(-50%)",
     width: "0.85em",
     height: "0.85em",
-    opacity: "0.7",
     pointerEvents: "none",
   },
   // Labelled select: fills the wrapper (whole area clickable, so clicking the icon or

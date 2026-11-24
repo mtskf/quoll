@@ -120,6 +120,9 @@ const labelRule =
     ".cm-line.quoll-fenced-code-fence-hidden .quoll-language-picker-label.is-labeled, .cm-line.quoll-fenced-code-has-language .quoll-language-picker-label.is-labeled"
   ];
 const copyRule = copyButtonThemeSpec[".quoll-copy-button"] as Record<string, string | undefined>;
+const caretRule = fencedHeaderBarThemeSpec[
+  ".quoll-language-picker-label.is-labeled .quoll-language-picker-caret"
+] as Record<string, string | undefined>;
 const toggleRule = collapseToggleThemeSpec[".quoll-fenced-collapse-toggle"] as Record<
   string,
   string | undefined
@@ -128,6 +131,17 @@ const toggleRule = collapseToggleThemeSpec[".quoll-fenced-collapse-toggle"] as R
 const CONTROLS = [
   { name: "copy button", rule: copyRule, surface: "--quoll-surface-header", min: 3 },
   { name: "language label", rule: labelRule, surface: "--quoll-surface-header", min: 4.5 },
+  // The caret's SVG strokes `currentColor`, so it inherits the label's colour; its own
+  // opacity composes with the label's (here both absent = 1).
+  {
+    name: "language caret",
+    rule: {
+      color: labelRule.color,
+      opacity: String(restOpacity(labelRule.opacity) * restOpacity(caretRule.opacity)),
+    },
+    surface: "--quoll-surface-header",
+    min: 3,
+  },
   { name: "collapse toggle label", rule: toggleRule, surface: "--quoll-surface-fill", min: 4.5 },
 ];
 
