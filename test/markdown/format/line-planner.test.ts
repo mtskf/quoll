@@ -75,6 +75,72 @@ describe("lineEdits — literal span scan cost", () => {
   });
 });
 
+describe("lineEdits — keep-out ranges", () => {
+  type R = { from: number; to: number };
+  // Every non-blank line has trailing whitespace (so a trim edit) and the 3+ blank
+  // runs trigger collapse edits, so a wrong skip flag on any line (protected or
+  // editable) changes the edits.
+  const src = "a \n\n\n\n  \nb  \n\t\nc   \n\n\n\nd \ne\t \n\n\n\nf  \ng \n";
+  // The contract: a line is skipped iff it intersects ANY range. Expressed as one
+  // sorted, disjoint, whole-line range per such line, which leaves no ordering,
+  // overlap or partial-line case for the planner to get wrong.
+  const perLine = (ranges: readonly R[]): R[] => {
+    const out: R[] = [];
+    for (let start = 0; start < src.length; ) {
+      const end = src.indexOf("\n", start) + 1 || src.length;
+      if (ranges.some((r) => r.from < end && start < r.to)) {
+        out.push({ from: start, to: end });
+      }
+      start = end;
+    }
+    return out;
+  };
+
+  it("skips exactly the intersecting lines for unsorted, overlapping, nested and empty ranges", () => {
+    let seed = 7;
+    const rand = (n: number) => {
+      seed = (seed * 48271) % 2147483647;
+      return seed % n;
+    };
+    for (let round = 0; round < 2000; round++) {
+      const ranges: R[] = [];
+      for (let k = rand(6); k > 0; k--) {
+        const from = rand(src.length + 1);
+        ranges.push({ from, to: Math.min(src.length, from + rand(14)) }); // 0 → empty
+      }
+      expect(lineEdits(src, ranges, [])).toEqual(lineEdits(src, perLine(ranges), []));
+    }
+  });
+
+  // Counts field reads on the ranges. A per-line rescan reads them
+  // O(lines x ranges) times; one sorted forward cursor reads them
+  // O(lines + ranges log ranges). Deterministic, unlike wall-clock timing.
+  it("reads the keep-out ranges a near-linear number of times", () => {
+    const n = 2000;
+    const table = "| a |\n| - |\n| b |\n\ntext \n\n";
+    const doc = table.repeat(n);
+    let reads = 0;
+    const ranges: R[] = [];
+    for (let i = n - 1; i >= 0; i--) {
+      const from = i * table.length;
+      ranges.push(
+        new Proxy(
+          { from, to: from + 17 },
+          {
+            get(target, key, receiver) {
+              reads += 1;
+              return Reflect.get(target, key, receiver);
+            },
+          }
+        )
+      );
+    }
+    const edits = lineEdits(doc, ranges, []);
+    expect(edits).toHaveLength(n); // one trim per "text " line
+    expect(reads).toBeLessThan(60 * n);
+  });
+});
+
 describe("lineEdits — blank collapse", () => {
   it("collapses a run of 3 blank lines to 1", () => expect(run("a\n\n\n\nb\n")).toBe("a\n\nb\n"));
   it("leaves a run of 2 blank lines untouched", () => expect(run("a\n\n\nb\n")).toBe("a\n\n\nb\n"));

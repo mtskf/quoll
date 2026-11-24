@@ -14,7 +14,7 @@
 // keep-out line ends a blank run, and a line deleted by collapse is excluded
 // from the trim pass.
 import type { Edit } from "./edit.js";
-import { type Range, rangesIntersect } from "./segment.js";
+import type { Range } from "./segment.js";
 
 type LineRecord = {
   start: number;
@@ -75,13 +75,32 @@ function endsWithUnescapedBackslash(source: string, from: number, end: number): 
   return (end - i) % 2 === 1;
 }
 
+// Per-line "intersects a keep-out range" flags. keepOut may be unsorted and
+// overlapping (protected blocks + tables), so it is sorted by `from` once and
+// walked with one forward cursor: line starts only grow, so a range ending at
+// or before this line's start can never touch a later line. A per-line `.some`
+// rescan was O(lines x ranges) — seconds on a document with ~20k small tables.
+function keepOutMask(lines: readonly LineRecord[], keepOut: readonly Range[]): boolean[] {
+  const ranges = [...keepOut].sort((a, b) => a.from - b.from);
+  let next = 0;
+  return lines.map((line) => {
+    while (next < ranges.length && ranges[next].to <= line.start) {
+      next += 1;
+    }
+    // Every later range starts at or after this one, so if this one starts past
+    // the line, none can reach it.
+    const head = ranges[next];
+    return head !== undefined && head.from < line.termEnd;
+  });
+}
+
 export function lineEdits(
   source: string,
   keepOut: readonly Range[],
   literalSpans: readonly Range[]
 ): Edit[] {
   const lines = splitLines(source);
-  const skipped = lines.map((l) => rangesIntersect(keepOut, l.start, l.termEnd));
+  const skipped = keepOutMask(lines, keepOut);
   const deleted = new Array<boolean>(lines.length).fill(false);
   const edits: Edit[] = [];
 
