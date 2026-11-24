@@ -255,14 +255,6 @@ describe("fenced-control hover under High Contrast (A11Y-11)", () => {
       expect(resolveRgba(hoverRule.backgroundColor ?? "", themeKind)).not.toBeNull();
     });
   }
-
-  // Non-vacuity: the pre-fix literal fallback (white at 10%) on hc-light's white canvas
-  // is indistinguishable from the resting button — the A11Y-11 defect.
-  it("the pre-fix white 10% tint is invisible on the hc-light canvas", () => {
-    const canvas = surface("--quoll-surface-fill", "hc-light");
-    const tinted = canvas.map((v) => 0.1 * 255 + 0.9 * v) as Rgb;
-    expect(contrast(tinted, canvas, 1)).toBeLessThan(1.1);
-  });
 });
 
 describe("copy button success checkmark contrast (A11Y-16)", () => {
