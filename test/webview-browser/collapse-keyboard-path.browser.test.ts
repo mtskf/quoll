@@ -66,11 +66,14 @@ const expanded = (f: Fixture, bar: string, i = 0, of = 1) =>
 
 // CodeMirror resolves `mac:` bindings from the platform, so drive the chord it will match.
 const chord = (f: Fixture, bracket: "[" | "]") => {
-  // userEvent.keyboard reads `[` as a key-descriptor opener; `[[` types a literal `[`.
-  const key = bracket === "[" ? "[[" : "]";
-  return /Mac/.test(f.win.navigator.platform)
-    ? `{Meta>}{Alt>}${key}{/Alt}{/Meta}`
-    : `{Control>}{Shift>}${key}{/Shift}{/Control}`;
+  if (/Mac/.test(f.win.navigator.platform)) {
+    // userEvent.keyboard reads `[` as a key-descriptor opener; `[[` types a literal `[`.
+    return `{Meta>}{Alt>}${bracket === "[" ? "[[" : "]"}{/Alt}{/Meta}`;
+  }
+  // With Shift held a real keyboard reports the shifted character (`{` / `}`), and
+  // CodeMirror reaches `Ctrl-Shift-[` / `]` through the key code. Playwright does not
+  // shift the character itself, so type it (`{{` is the literal `{`).
+  return `{Control>}{Shift>}${bracket === "[" ? "{{" : "}"}{/Shift}{/Control}`;
 };
 
 describe("collapse bars — keyboard path (real Chromium, production bundle)", () => {
