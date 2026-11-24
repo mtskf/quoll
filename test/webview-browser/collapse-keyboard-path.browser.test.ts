@@ -192,6 +192,28 @@ describe("collapse bars — keyboard path (real Chromium, production bundle)", (
       expect(heads()).toEqual([inBlock, inBlock, heading]);
       expect(f.changes()).toBe(0);
     });
+
+    // With nothing for the fold commands to act on, several carets still toggle the block.
+    it(`editable ${c.name}, two carets in the block: the fold keys expand then collapse it`, async () => {
+      fixture = await productionPasteFixture(c.doc);
+      const f = fixture;
+      await f.select(c.doc.indexOf("line2"));
+      const Selection = f.view.state.selection.constructor as typeof EditorSelection;
+      f.view.dispatch({
+        selection: Selection.create([
+          Selection.cursor(c.doc.indexOf("line2")),
+          Selection.cursor(c.doc.indexOf("line3")),
+        ]),
+      });
+      expect(f.view.state.selection.ranges.length).toBe(2);
+      expect(expanded(f, c.bar)).toBe("false");
+
+      await userEvent.keyboard(chord(f, "]"));
+      await expect.poll(() => expanded(f, c.bar)).toBe("true");
+      await userEvent.keyboard(chord(f, "["));
+      await expect.poll(() => expanded(f, c.bar)).toBe("false");
+      expect(f.changes()).toBe(0);
+    });
   }
 
   for (const c of TWO_CASES) {

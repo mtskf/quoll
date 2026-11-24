@@ -6,9 +6,10 @@
 //   Ctrl-Shift-[ (Cmd-Alt-[ on macOS) → collapse the expanded long block at the caret
 //   Ctrl-Shift-] (Cmd-Alt-] on macOS) → expand the collapsed long block at the caret
 //
-// Each command returns false when there is more than one caret, or the caret is not in a
-// long block of the other state, so the key falls through to quollFoldKeymap's foldCode /
-// unfoldCode. With a single caret the two do not compete:
+// With several carets, foldCode / unfoldCode run first, and the long block at the main
+// caret takes the key only when they act on nothing. Otherwise each command returns false
+// when the caret is not in a long block of the other state, so the key falls through to
+// quollFoldKeymap's foldCode / unfoldCode. With a single caret the two do not compete:
 // foldCode folds only a range that STARTS on the caret line, and no line of a top-level fence
 // or quote starts one (both are subtracted from folding in cm/markdown.ts). Prec.high makes
 // the order explicit rather than a side effect of extension order in editor.ts.
@@ -19,6 +20,7 @@
 // Tab when read-only); Enter toggles it. The shared renderer then hands focus to the
 // replacement bar, or to the scroller when that bar is not on screen.
 
+import { foldCode, unfoldCode } from "@codemirror/language";
 import { Prec } from "@codemirror/state";
 import { type Command, keymap } from "@codemirror/view";
 import { blockquoteCollapseField } from "../decorations/blockquote-collapse.js";
@@ -30,10 +32,12 @@ import { collapseAtCaretCommand } from "./line-collapse-field.js";
 function eitherClient(expand: boolean): Command {
   const fenced = collapseAtCaretCommand(fencedCodeCollapseField, fencedCollapseTarget, expand);
   const quote = collapseAtCaretCommand(blockquoteCollapseField, blockquoteCollapseTarget, expand);
-  // Single caret only: foldCode / unfoldCode act on every selected line, so with several
-  // carets the key keeps that meaning. Top-level blocks never overlap, so at most one
-  // client owns the caret.
-  return (view) => view.state.selection.ranges.length === 1 && (fenced(view) || quote(view));
+  const fold = expand ? unfoldCode : foldCode;
+  // foldCode / unfoldCode act on every selected line, so with several carets they go first
+  // and the block only takes the key when they find nothing to act on. Top-level blocks
+  // never overlap, so at most one client owns the main caret.
+  return (view) =>
+    (view.state.selection.ranges.length > 1 && fold(view)) || fenced(view) || quote(view);
 }
 
 export const collapseLongBlockAtCaret: Command = eitherClient(false);
