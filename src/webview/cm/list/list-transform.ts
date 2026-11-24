@@ -322,25 +322,18 @@ export function shiftOwnLines(
   item: SyntaxNode,
   newContentCol: number
 ): ChangeSpec[] {
-  const boundary = ownLinesBoundary(state, item);
-  return boundary === null ? [] : shiftOwnLinesBy(state, item, newContentCol - boundary);
-}
-
-/** The column an item's own lines shift at: its content column as the marker
- *  line's text gives it. Null when the item carries no `ListMark`. */
-function ownLinesBoundary(state: EditorState, item: SyntaxNode): number | null {
   const mark = listMarkOf(item);
   if (mark === null) {
-    return null;
+    return [];
   }
   const markerLine = state.doc.lineAt(mark.from);
-  return contentColumnFromMarkerLine(markerLine.text, mark.to - markerLine.from, state.tabSize);
-}
-
-/** `shiftOwnLines` by a column delta rather than a target content column. */
-function shiftOwnLinesBy(state: EditorState, item: SyntaxNode, delta: number): ChangeSpec[] {
-  const boundary = ownLinesBoundary(state, item);
-  if (boundary === null || delta === 0) {
+  const boundary = contentColumnFromMarkerLine(
+    markerLine.text,
+    mark.to - markerLine.from,
+    state.tabSize
+  );
+  const delta = newContentCol - boundary;
+  if (delta === 0) {
     return [];
   }
   const changes: ChangeSpec[] = [];
@@ -351,6 +344,21 @@ function shiftOwnLinesBy(state: EditorState, item: SyntaxNode, delta: number): C
     }
   }
   return changes;
+}
+
+/** The content column `mark`'s item has once its marker sits at `newMarkCol` as
+ *  `newMarker`, read off the rewritten marker line (not derived from marker
+ *  movement: a tab after the marker re-stops at the new column, so the content
+ *  column does not move by the marker delta + width delta). */
+function contentColumnAfterMove(
+  state: EditorState,
+  mark: SyntaxNode,
+  newMarkCol: number,
+  newMarker: string
+): number {
+  const line = state.doc.lineAt(mark.from);
+  const text = " ".repeat(newMarkCol) + newMarker + line.text.slice(mark.to - line.from);
+  return contentColumnFromMarkerLine(text, newMarkCol + newMarker.length, state.tabSize);
 }
 
 /** True when the item has no continuable content: a bare `- ` / `1. `, a
@@ -591,8 +599,9 @@ export type ListEditPlan =
  *
  *  Disjointness: each line gets at most one whitespace shift — a marker line
  *  by its marker-column delta (`shiftMarkerLine`), a body line by its item's
- *  content-column delta (`shiftOwnLinesBy`, which folds a forced child's
- *  re-indent and marker-width change into one delta). Marker-text replacements
+ *  content-column shift (`shiftOwnLines`, to the content column read off the
+ *  rewritten marker line, which folds a forced child's re-indent and
+ *  marker-width change into one shift). Marker-text replacements
  *  sit on the adjacent `ListMark` spans and compose separately. `renumberRun` is called
  *  for the DESTINATION run only (the parent's top-level followers touch
  *  different lines than the re-homed forced children). */
@@ -640,7 +649,6 @@ export function planOutdentItem(state: EditorState, headPos: number): ListEditPl
   // from `orderedShape`, so its number is already within the 0..9-digit range —
   // no separate cap re-check here.)
   const listMarkerLen = formatMarker(adopted).length;
-  const oldMarkerLen = mark.to - mark.from;
   // Marker-line whitespace shift is common to both paths: promote the marker
   // column to the parent's. (The marker-width change itself rides the ListMark /
   // marker-region replacement below, an adjacent change.)
@@ -670,10 +678,14 @@ export function planOutdentItem(state: EditorState, headPos: number): ListEditPl
     // Non-empty: adopt only the marker KIND — replace the ListMark span; the
     // item's content bytes (incl. its own `[ ]`/`[x]`) are untouched.
     changes.push({ from: mark.from, to: mark.to, insert: formatMarker(adopted) });
-    // Own body/descendant lines re-anchor to the NEW content column: the
-    // marker-column shift PLUS the marker-width delta.
-    const contentDelta = parentMarkCol - itemMarkCol + (listMarkerLen - oldMarkerLen);
-    changes.push(...shiftOwnLinesBy(state, item, contentDelta));
+    // Own body/descendant lines re-anchor to the NEW content column.
+    changes.push(
+      ...shiftOwnLines(
+        state,
+        item,
+        contentColumnAfterMove(state, mark, parentMarkCol, formatMarker(adopted))
+      )
+    );
   }
 
   // --- Forced children (the item's OLD following siblings) --------------
@@ -681,15 +693,12 @@ export function planOutdentItem(state: EditorState, headPos: number): ListEditPl
   // each of their lines to land at the promoted item's NEW content column, and
   // renumber them from 1 if they were ordered (folding any width change into
   // the same body-line delta — NOT a second ChangeSpec).
-  // The promoted item's REAL post-transform content column. The non-empty path
-  // replaces ONLY the ListMark span, so the item's original marker->content gap
-  // (which may be > 1 for an aligned run like `1.  a`) is preserved in the
-  // output; hard-coding gap 1 here would compute a content column LEFT of where
-  // the item actually sits, so a forced child at the true column reads as a
-  // top-level sibling instead of nesting (corrupting the outer run). The empty
-  // path synthesizes a single-space marker (gap 1).
-  const gap = Math.max(1, contentColumnOf(state, item) - (itemMarkCol + oldMarkerLen));
-  const promotedContentCol = parentMarkCol + listMarkerLen + (empty ? 1 : gap);
+  // The promoted item's REAL post-transform content column (its marker->content
+  // gap is preserved on the non-empty path; the empty path synthesizes a
+  // single-space marker).
+  const promotedContentCol = empty
+    ? parentMarkCol + listMarkerLen + 1
+    : contentColumnAfterMove(state, mark, parentMarkCol, formatMarker(adopted));
   const forced = followingListItems(item);
   let forcedOrdinal = 1;
   for (const child of forced) {
@@ -702,16 +711,15 @@ export function planOutdentItem(state: EditorState, headPos: number): ListEditPl
     // Renumber an ordered forced child from 1 under the new parent; fold the
     // marker-width delta into the child's own-line re-indent so a width cross
     // (e.g. `9.`→`10.` or `10.`→`1.`) never doubles up on a body line.
-    let childWidthDelta = 0;
+    let newChildMarker = state.doc.sliceString(childMark.from, childMark.to);
     const childShape = parseListMark(state.doc.sliceString(childMark.from, childMark.to));
     if (childShape !== null && childShape.kind === "ordered") {
       const childAdopted = orderedShape(forcedOrdinal, childShape.delim);
       if (childAdopted === null) {
         return { kind: "noop" }; // 9-digit cap — fail closed
       }
-      const newChildMarker = formatMarker(childAdopted);
+      newChildMarker = formatMarker(childAdopted);
       changes.push({ from: childMark.from, to: childMark.to, insert: newChildMarker });
-      childWidthDelta = newChildMarker.length - (childMark.to - childMark.from);
       forcedOrdinal++;
     }
     // The forced child's marker line shifts by the re-indent only (its own
@@ -720,9 +728,14 @@ export function planOutdentItem(state: EditorState, headPos: number): ListEditPl
     if (childShift !== null) {
       changes.push(childShift);
     }
-    // The forced child's OWN body/descendant lines shift by re-indent PLUS the
-    // child's marker-width delta (they re-anchor to the child's new content col).
-    changes.push(...shiftOwnLinesBy(state, child, reindentDelta + childWidthDelta));
+    // The forced child's OWN body/descendant lines re-anchor to its new content col.
+    changes.push(
+      ...shiftOwnLines(
+        state,
+        child,
+        contentColumnAfterMove(state, childMark, promotedContentCol, newChildMarker)
+      )
+    );
   }
 
   // --- Destination renumber (the parent's OLD top-level followers) ------
@@ -807,10 +820,10 @@ function newRunShapeFor(state: EditorState, item: SyntaxNode): ListMarkShape | n
  *  marker-column delta (already at/past the target — pathological alignment).
  *
  *  Disjointness (mirrors `planOutdentItem`): each line gets at most one
- *  whitespace shift. Two deltas — the marker line via
- *  `contentColumnOf(parent) - itemMarkCol`, and the item's OWN body/descendant
- *  lines (`shiftOwnLinesBy`) additionally by
- *  `newMarkerLen - oldMarkerLen`. `classifyItemLines` excludes lazy-continuation
+ *  whitespace shift — the marker line by
+ *  `contentColumnOf(parent) - itemMarkCol`, the item's OWN body/descendant lines
+ *  (`shiftOwnLines`) to the content column read off the rewritten marker line.
+ *  `classifyItemLines` excludes lazy-continuation
  *  lines so a broken 2-space doc HEALS (the lazy tail is not dragged). The moved
  *  item's ListMark rewrite and the vacated-run renumber sit on DISJOINT spans
  *  (`renumberRun(item, item.ownNumber)` touches only the followers STAYING in the
@@ -848,7 +861,6 @@ export function planIndentItem(state: EditorState, headPos: number): ListEditPla
     // `orderedShape` (inside the adopt helpers) rejected — fail closed either way
   }
 
-  const oldMarkerLen = mark.to - mark.from;
   const newMarker = formatMarker(adopted);
   const changes: ChangeSpec[] = [];
 
@@ -857,13 +869,15 @@ export function planIndentItem(state: EditorState, headPos: number): ListEditPla
   changes.push({ from: mark.from, to: mark.to, insert: newMarker });
 
   // Marker line shifts to the parent's content column; own body/descendant lines
-  // additionally absorb the marker-width change so they re-anchor to the new
-  // content column. Both shift at their column boundary, not the line start.
+  // re-anchor to the new content column. Both shift at their column boundary,
+  // not the line start.
   const markerShift = shiftMarkerLine(state, mark, markerDelta);
   if (markerShift !== null) {
     changes.push(markerShift);
   }
-  changes.push(...shiftOwnLinesBy(state, item, markerDelta + (newMarker.length - oldMarkerLen)));
+  changes.push(
+    ...shiftOwnLines(state, item, contentColumnAfterMove(state, mark, targetCol, newMarker))
+  );
 
   // Vacated outer run: the item leaves a gap, so its OWN following siblings must
   // renumber down by one. `renumberRun(item, item.ownNumber)` yields exactly that

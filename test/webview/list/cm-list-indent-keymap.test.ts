@@ -726,6 +726,64 @@ describe("indent / outdent across tab-indented lines", () => {
   });
 });
 
+// A tab right after the marker re-stops at the moved marker, so the content
+// column does not move by "marker delta + marker width delta". The children of
+// such an item must follow the content column read off the rewritten marker line.
+describe("indent / outdent of an item whose marker is followed by a tab", () => {
+  function run(
+    doc: string,
+    line: number,
+    col: number,
+    command: (view: EditorView) => boolean
+  ): { view: EditorView; result: string } {
+    const view = mount(doc, EditorSelection.cursor(0), { tabSize: 4 });
+    view.dispatch({ selection: at(view, line, col) });
+    expect(command(view)).toBe(true);
+    return { view, result: view.state.doc.toString() };
+  }
+
+  it("Tab keeps a child nested when the marker is followed by a tab", () => {
+    const { view } = run("- A\n-\tB\n\t  - C", 2, 3, indentListItem);
+    try {
+      expect(itemDepth(view, 2)).toBe(2); // B under A
+      expect(itemDepth(view, 3)).toBe(3); // C still B's child
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("Tab keeps a child nested across an ordered marker followed by a tab", () => {
+    const { view } = run("1. A\n2.\tB\n\t- c", 2, 4, indentListItem);
+    try {
+      expect(itemDepth(view, 2)).toBe(2);
+      expect(itemDepth(view, 3)).toBe(3);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("Shift-Tab keeps a forced child's own children nested when its marker is followed by a tab", () => {
+    const { view } = run("- A\n    - B\n    -\tC\n\t\t   - d", 2, 6, outdentListItem);
+    try {
+      expect(itemDepth(view, 2)).toBe(1); // B promoted
+      expect(itemDepth(view, 3)).toBe(2); // C is now B's child
+      expect(itemDepth(view, 4)).toBe(3); // d still C's child
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("Shift-Tab keeps a child nested when the marker is followed by a tab", () => {
+    const { view } = run("- A\n  -\tB\n\t- c", 2, 5, outdentListItem);
+    try {
+      expect(itemDepth(view, 2)).toBe(1); // B promoted
+      expect(itemDepth(view, 3)).toBe(2); // c still B's child
+    } finally {
+      view.destroy();
+    }
+  });
+});
+
 describe("listIndentKeymap — registration + precedence", () => {
   function mountWithKeymap(doc: string, selection: EditorSelection | SelectionRange): EditorView {
     const parent = document.createElement("div");
