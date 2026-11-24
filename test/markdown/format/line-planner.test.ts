@@ -77,8 +77,9 @@ describe("lineEdits — literal span scan cost", () => {
 
 describe("lineEdits — keep-out ranges", () => {
   type R = { from: number; to: number };
-  // Every line has trailing whitespace and blank runs flank every region, so a
-  // wrong skip flag on any line (protected or editable) changes the edits.
+  // Every non-blank line has trailing whitespace (so a trim edit) and the 3+ blank
+  // runs trigger collapse edits, so a wrong skip flag on any line (protected or
+  // editable) changes the edits.
   const src = "a \n\n\n\n  \nb  \n\t\nc   \n\n\n\nd \ne\t \n\n\n\nf  \ng \n";
   // The contract: a line is skipped iff it intersects ANY range. Expressed as one
   // sorted, disjoint, whole-line range per such line, which leaves no ordering,
@@ -98,7 +99,7 @@ describe("lineEdits — keep-out ranges", () => {
   it("skips exactly the intersecting lines for unsorted, overlapping, nested and empty ranges", () => {
     let seed = 7;
     const rand = (n: number) => {
-      seed = (seed * 1103515245 + 12345) % 2147483648;
+      seed = (seed * 48271) % 2147483647;
       return seed % n;
     };
     for (let round = 0; round < 2000; round++) {
