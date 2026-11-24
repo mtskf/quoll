@@ -252,12 +252,12 @@ export abstract class QuollWidget extends WidgetType {
       // `renderCellInto` (cell-render.ts) does, with a per-fill controller chained
       // to this one — because only the code doing the rebuilding knows that the
       // previous listeners' nodes are gone. Aborting this scope on every patch
-      // instead looks equivalent and is not: `TableBlockWidget.patchDOM`'s
-      // positional-shift arm (`from.slice === this.slice`) re-stamps offsets and
-      // leaves the rendered cells — and their LIVE anchors — in place, so a
-      // per-patch abort would disarm the click/auxclick guard on links the user
-      // can still click, silently reopening the middle-click bypass of the host's
-      // `open-external` re-validation.
+      // instead looks equivalent and is not: a patch is not required to rebuild
+      // everything the element's listeners are bound to. `TableBlockWidget.patchDOM`
+      // re-renders the cells but keeps the root, whose `mousedown` / `click`
+      // listeners (bound in `render`, on this scope) own the caret dispatch and the
+      // modifier-link `open-external` routing — a per-patch abort would kill them
+      // on an element the user can still click.
       return this.patchDOM(dom, view, prev, scopeOf(dom).signal);
     } catch (err) {
       reportOnce("patchDOM", this.widgetName, err);
