@@ -205,17 +205,46 @@ function hiddenByFold(folded: ReturnType<typeof foldedRanges>, pos: number): boo
   return hidden;
 }
 
+/** Where the records stop being authoritative: the start of the line holding the last
+ *  top-level node of an INCOMPLETE tree (that node may be cut short at the frontier), or
+ *  `null` when the tree spans the whole document. */
+function unseenFrom(state: EditorState): number | null {
+  const tree = syntaxTree(state);
+  if (tree.length >= state.doc.length) {
+    return null;
+  }
+  const last = tree.topNode.lastChild;
+  return last === null ? 0 : state.doc.lineAt(last.from).from;
+}
+
 /** Assemble the field state from a record list: orders by blockFrom. It does NOT dedupe —
  *  the caller passes at most one record per block (computeBounded's `byFrom` map is what
  *  guarantees that). Filters decorations only — records are passed through by reference,
  *  never copied. The folded set is fetched once, and the filter is skipped when no fold
- *  exists (the fenced typing path pays nothing). */
-function assemble<X>(blocks: CollapseRecord<X>[], state: EditorState): CollapseState<X> {
+ *  exists (the fenced typing path pays nothing).
+ *
+ *  `expanded` rebuilds from the records, plus every `requested` key at or past the parse
+ *  frontier: a block the tree has not reached yet has no record, and dropping its key there
+ *  would re-collapse it when the background parse publishes (step 5 rebuilds from this
+ *  set). A carried key whose block turns out not to exist drops on that complete rebuild. */
+function assemble<X>(
+  blocks: CollapseRecord<X>[],
+  state: EditorState,
+  requested: ReadonlySet<number>
+): CollapseState<X> {
   const sorted = [...blocks].sort((a, b) => a.blockFrom - b.blockFrom);
   const liveExpanded = new Set<number>();
   for (const b of sorted) {
     if (b.expanded) {
       liveExpanded.add(b.key);
+    }
+  }
+  const frontier = unseenFrom(state);
+  if (frontier !== null) {
+    for (const k of requested) {
+      if (k >= frontier) {
+        liveExpanded.add(k);
+      }
     }
   }
   const folded = foldedRanges(state);
@@ -233,7 +262,7 @@ export function buildCollapseState<X>(
   state: EditorState,
   expanded: ReadonlySet<number>
 ): CollapseState<X> {
-  return assemble(buildRange(spec, state, expanded, 0, state.doc.length), state);
+  return assemble(buildRange(spec, state, expanded, 0, state.doc.length), state, expanded);
 }
 
 /** DD2 fast-path: does any selection head sit inside a CURRENTLY-collapsed region
@@ -318,7 +347,7 @@ function computeBounded<X>(
       byFrom.set(r.blockFrom, r); // fresh wins (a block spanning two intervals de-dupes)
     }
   }
-  return assemble([...byFrom.values()], tr.state);
+  return assemble([...byFrom.values()], tr.state, working);
 }
 
 /** The collapsible block whose key is `key`, or null — recomputed FRESH at click time (no
@@ -450,8 +479,33 @@ export function defineLineCollapseField<X>(
       let working: ReadonlySet<number> = prev.expanded;
       if (tr.docChanged) {
         const mapped = new Set<number>();
+        // A key whose block a change swallows whole is gone: mapPos would park it on the
+        // deletion boundary, where a different block that later lands on that offset would open
+        // without ever being toggled. A block's identity is its extent, so "gone" means one
+        // change starts at the opener (only indentation may precede it) AND reaches the block
+        // end; deleting just the head leaves the same quote alive at the same key. Only a key
+        // with no record (carried past the parse frontier) has no extent: it falls back to
+        // "the change covers the opening line and its break".
+        const { doc } = tr.startState;
+        const blockEnd = new Map<number, number>();
+        for (const b of prev.blocks) {
+          blockEnd.set(b.key, b.blockTo);
+        }
+        const consumed = (k: number): boolean => {
+          const lineTo = doc.lineAt(k).to;
+          const end = blockEnd.get(k);
+          let hit = false;
+          tr.changes.iterChangedRanges((from, to) => {
+            const atOpener =
+              from <= k || (from <= lineTo && doc.sliceString(k, from).trim() === "");
+            hit ||= atOpener && (end === undefined ? to > lineTo : to >= end);
+          });
+          return hit;
+        };
         for (const k of prev.expanded) {
-          mapped.add(tr.changes.mapPos(k, 1));
+          if (!consumed(k)) {
+            mapped.add(tr.changes.mapPos(k, 1));
+          }
         }
         working = mapped;
       }
