@@ -857,6 +857,11 @@ export const quollHeadingRhythmTheme = EditorView.theme(headingRhythmThemeSpec);
 // it. DELIBERATELY colour-only — NO line-through: the approved design mutes, it does not
 // strike. Ink is the Quoll-owned --quoll-completed-ink token (styles.css theme blocks; HC
 // keeps full foreground).
+//
+// INSIDE A QUOTE / CALLOUT PANEL this rule never reaches a glyph: the `t.quote` highlight
+// span (Prec.high) nests INSIDE this mark and paints every text run with QUOTE_INK, so a
+// completed item there reads at quote-ink level and its AA contrast is QUOTE_INK's job, not
+// this token's. Pinned by cm-task-completed-content-panel-nesting.test.ts.
 export const taskCompletedContentThemeSpec = {
   ".quoll-task-completed-content": {
     color: "var(--quoll-completed-ink, var(--vscode-descriptionForeground, inherit))",

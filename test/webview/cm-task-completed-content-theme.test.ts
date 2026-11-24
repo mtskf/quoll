@@ -6,7 +6,9 @@ describe("taskCompletedContentThemeSpec — completed-content mute", () => {
   it("mutes .quoll-task-completed-content via the --quoll-completed-ink token", () => {
     const rule = taskCompletedContentThemeSpec[".quoll-task-completed-content"];
     expect(rule).toBeDefined();
-    expect(rule.color).toContain("--quoll-completed-ink");
+    expect(rule.color).toBe(
+      "var(--quoll-completed-ink, var(--vscode-descriptionForeground, inherit))"
+    );
   });
 
   it("does NOT strike the completed content (emphasis inversion recedes, never strikes)", () => {
