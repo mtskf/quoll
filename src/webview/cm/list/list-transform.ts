@@ -239,10 +239,19 @@ function shiftMarkerLine(state: EditorState, mark: SyntaxNode, delta: number): P
 
 /** True when `col` still lies within the indentation a fenced block's code line
  *  gives up to the opening fence (CommonMark strips up to that many columns), so
- *  a whitespace char there is container padding to move, not code content. */
+ *  a whitespace char there is container padding to move, not code content.
+ *  Inside a blockquote the fence and code lines can put their `>` at different
+ *  columns, so absolute columns say nothing: keep the bytes (never in the indent). */
 function inFenceIndent(state: EditorState, codeText: SyntaxNode, col: number): boolean {
   const fence = codeText.parent;
-  return fence?.name === "FencedCode" && col < columnAt(state, fence.from);
+  if (fence?.name !== "FencedCode") {
+    return false;
+  }
+  const line = state.doc.lineAt(codeText.from);
+  return (
+    !line.text.slice(0, codeText.from - line.from).includes(">") &&
+    col < columnAt(state, fence.from)
+  );
 }
 
 /** Expand tabs whose width changes across nested list and quote prefixes to preserve indentation.
@@ -700,8 +709,8 @@ export function planOutdentItem(state: EditorState, headPos: number): ListEditPl
   // --- Forced children (the item's OLD following siblings) --------------
   // Text order forces them to become the promoted item's children: re-indent
   // each of their lines to land at the promoted item's NEW content column, and
-  // renumber them from 1 if they were ordered (folding any width change into
-  // the same body-line delta — NOT a second ChangeSpec).
+  // renumber them from 1 if they were ordered. Each own line is shifted once,
+  // to the child's new content column read off its rewritten marker line.
   // The promoted item's REAL post-transform content column (its marker->content
   // gap is preserved on the non-empty path; the empty path synthesizes a
   // single-space marker).
@@ -717,9 +726,7 @@ export function planOutdentItem(state: EditorState, headPos: number): ListEditPl
     }
     const childMarkCol = columnAt(state, childMark.from);
     const reindentDelta = promotedContentCol - childMarkCol;
-    // Renumber an ordered forced child from 1 under the new parent; fold the
-    // marker-width delta into the child's own-line re-indent so a width cross
-    // (e.g. `9.`→`10.` or `10.`→`1.`) never doubles up on a body line.
+    // Renumber an ordered forced child from 1 under the new parent.
     let newChildMarker = state.doc.sliceString(childMark.from, childMark.to);
     const childShape = parseListMark(state.doc.sliceString(childMark.from, childMark.to));
     if (childShape !== null && childShape.kind === "ordered") {

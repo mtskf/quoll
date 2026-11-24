@@ -743,6 +743,21 @@ describe("indent / outdent across tab-indented lines", () => {
     }
   });
 
+  it("Tab keeps a tab in a quoted fenced code line whose quote sits left of the fence's", () => {
+    const view = mount("- A\n- B\n   > ~~~\n  > \tx\n   > ~~~", EditorSelection.cursor(0), {
+      tabSize: 4,
+    });
+    view.dispatch({ selection: at(view, 2, 2) });
+    try {
+      expect(indentListItem(view)).toBe(true);
+      // The tab is code content (the quote prefix is not fence indent): it must
+      // not be expanded to spaces.
+      expect(view.state.doc.line(4).text).toContain("\tx");
+    } finally {
+      view.destroy();
+    }
+  });
+
   it("Shift-Tab de-dents a tab-started body line by columns, not whole characters", () => {
     const view = mount("- a\n  - B\n\t body", EditorSelection.cursor(0), { tabSize: 4 });
     view.dispatch({ selection: at(view, 2, 4) });
