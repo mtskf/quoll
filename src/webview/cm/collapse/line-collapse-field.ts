@@ -479,15 +479,26 @@ export function defineLineCollapseField<X>(
       let working: ReadonlySet<number> = prev.expanded;
       if (tr.docChanged) {
         const mapped = new Set<number>();
-        // A key whose whole opening line (break included) a change deletes belongs to a block
-        // that is gone: mapPos would park it on the deletion boundary, where a different block
-        // that later lands on that offset would open without ever being toggled.
+        // A key whose block a change swallows whole is gone: mapPos would park it on the
+        // deletion boundary, where a different block that later lands on that offset would open
+        // without ever being toggled. A block's identity is its extent, so "gone" means one
+        // change starts at the opener (only indentation may precede it) AND reaches the block
+        // end; deleting just the head leaves the same quote alive at the same key. Only a key
+        // with no record (carried past the parse frontier) has no extent: it falls back to
+        // "the change covers the opening line and its break".
         const { doc } = tr.startState;
+        const blockEnd = new Map<number, number>();
+        for (const b of prev.blocks) {
+          blockEnd.set(b.key, b.blockTo);
+        }
         const consumed = (k: number): boolean => {
           const lineTo = doc.lineAt(k).to;
+          const end = blockEnd.get(k);
           let hit = false;
           tr.changes.iterChangedRanges((from, to) => {
-            hit ||= from <= k && to > lineTo;
+            const atOpener =
+              from <= k || (from <= lineTo && doc.sliceString(k, from).trim() === "");
+            hit ||= atOpener && (end === undefined ? to > lineTo : to >= end);
           });
           return hit;
         };
