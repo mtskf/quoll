@@ -373,7 +373,8 @@ export type EditSync = {
    *  authorities. No-op when nothing was typed in the debounce window. */
   flushIfIdle: () => void;
   /** Resolves `"settled"` once the host holds what the view shows: no debounce
-   *  pending, no Edit in flight, and the view's text equal to the last
+   *  pending, no Edit in flight, every Edit that was sent covered by a
+   *  Document's `settledEditId`, and the view's text equal to the last
    *  Document's (EOL aside) — judged AFTER the ack's drain, so a buffer that
    *  drain replays counts as in flight. For a caller that must not read host
    *  content behind the user's keystrokes (the AI handoffs); call `flushIfIdle`
@@ -466,9 +467,8 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
   // derivable from it: both trySend and replayIfNeeded raise `editInFlight`
   // BEFORE `opts.post()` and stamp `inFlight` only after it returns (flush reads
   // the pre-post flag as `wasInFlight`), and `post` can re-enter this module
-  // synchronously — `postEditMessage` dispatches `send-failure`, whose
-  // committed state is `editInFlight: false`, which drives a re-entrant
-  // onReducerCommit -> drain from inside that call. So the pairing holds BETWEEN
+  // synchronously — `postEditMessage` dispatches `send-failure`, whose commit
+  // can drive a re-entrant onReducerCommit -> drain from inside that call. So the pairing holds BETWEEN
   // statements at every assignment site, not DURING the post: the flag is the
   // single-flight gate across that window and the holder is the evidence.
   // Collapsing one into the other was proposed and rejected in review — any
@@ -490,6 +490,13 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
   // Emptied on supersession.
   let sent: { readonly id: number; readonly content: string }[] = [];
   let settledMark = 0;
+  // Highest Edit id that left (post returned true). While it is above
+  // `settledMark` the host has not judged every Edit we sent, so nothing can be
+  // settled — whatever holders say: a readonly Document or a Document that
+  // supersedes the lineage (foreign epoch) can clear the holders while an
+  // earlier Edit is still being applied.
+  // Reset only on a generation change: the host's mark survives epoch bumps.
+  let lastSentId = 0;
   // Content of the last accepted Document ("" before the seed; not read then).
   let hostContent = "";
   // Foreign writes the host did not count; added to every wire epoch.
@@ -499,6 +506,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
   const markSent = (content: string, id: number): void => {
     inFlight = { ...stampHeld(content), id, base: docVersion };
     sent.push({ id, content });
+    lastSentId = id;
   };
   let timer: ReturnType<typeof setTimeout> | null = null;
   // Document identity pair from the most recent accepted host snapshot (S3a
@@ -828,7 +836,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
   };
   // `null` = still moving. See `awaitSettled` for why this reads text, not holders.
   const settleVerdict = (): SettleOutcome | null => {
-    if (!seeded || timer !== null || editInFlight) {
+    if (!seeded || timer !== null || editInFlight || lastSentId > settledMark) {
       return null;
     }
     return sameTextIgnoringEol(opts.getDoc(), hostContent) ? "settled" : "unsynced";
@@ -1164,6 +1172,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
           toEpoch: d.externalEpoch + foreignWrites,
         });
         noteIdentityTransition();
+        lastSentId = 0; // the new host never saw our ids
       }
       if (d.canWrite) {
         // Write is back: the readonly episode is over.

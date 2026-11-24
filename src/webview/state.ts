@@ -178,7 +178,10 @@ export function reducer(state: WebviewState, action: Action): WebviewState {
       return { ...state, editInFlight: true };
     }
     case "send-failure": {
-      return { ...state, sendFailure: action.message, editInFlight: false };
+      // editInFlight is untouched: post-edit is dispatched only after a
+      // successful send, so a failed post never raised it — and an earlier
+      // Edit that did go out is still awaiting its ack.
+      return { ...state, sendFailure: action.message };
     }
     case "local-edit-attempt": {
       if (state.sendFailure === null) {

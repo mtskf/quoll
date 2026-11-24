@@ -251,12 +251,20 @@ describe("reducer — save policy: send-failure arm", () => {
   // A local send failure prevents Edit posting and surfaces the error.
   // The next local edit clears the send gate so the latest bytes can retry.
 
-  it("send-failure surfaces the error and clears editInFlight", () => {
+  it("send-failure surfaces the error and preserves an outstanding Edit", () => {
     const a = reducer(initialState, docAction({ docVersion: 1 }));
     const b = reducer(a, { type: "post-edit" });
     const c = reducer(b, { type: "send-failure", message: sendFailure });
     expect(c.sendFailure).toEqual(sendFailure);
-    expect(c.editInFlight).toBe(false);
+    expect(c.editInFlight).toBe(true);
+  });
+
+  it("send-failure leaves an idle editor idle", () => {
+    const state = reducer(initialState, docAction());
+    expect(reducer(state, { type: "send-failure", message: sendFailure })).toEqual({
+      ...state,
+      sendFailure,
+    });
   });
 
   it("post-edit is dropped while a send-failure is unresolved", () => {
@@ -346,8 +354,7 @@ describe("reducer — local-edit-attempt clears sendFailure for retry", () => {
   });
 
   it("does not touch editInFlight", () => {
-    // editInFlight was cleared by send-failure; local-edit-attempt
-    // does NOT re-arm it (the next post-edit dispatch does that).
+    // An idle send failure and its retry leave the flight flag idle.
     const a = reducer(initialState, docAction({ docVersion: 1 }));
     const withError = reducer(a, { type: "send-failure", message: sendFailure });
     const cleared = reducer(withError, { type: "local-edit-attempt" });
