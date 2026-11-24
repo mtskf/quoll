@@ -526,7 +526,7 @@ html body {
     --quoll-todo-ring: #23b06f;
     /* Copy-button success checkmark (cm/theme.ts .quoll-copy-button.is-copied).
      * Light only: the host's testing-iconPassed (#73c991 in Light+) is ~1.4:1 on the
-     * light header, so reuse the link green (4.36:1 hovered). Dark and HC leave it
+     * hovered light header (~1.7:1 at rest), so reuse the link green (4.36:1 hovered). Dark and HC leave it
      * undeclared and keep the host's own success colour. */
     --quoll-success-ink: var(--quoll-accent-green);
     /* Light selection stays the plain host colour (user kept the current light
