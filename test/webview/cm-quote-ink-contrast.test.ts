@@ -62,7 +62,7 @@
 // rather than a count deliberately: an earlier revision of this header claimed "the
 // ONE non-colour input", and the very commit that wrote it added two more. All of
 // them are safe for one reason — they are fail-LOUD. A renamed theme class trips
-// quollTokenFor's "exactly one block" guard, a renamed selector trips
+// surfaceFillFor's "exactly one block" guard, a renamed selector trips
 // quoteInkRatio's "declares no backgroundColor" guard, a renamed token trips
 // varsFor's "is missing" guard. None can quietly measure the wrong thing, which is
 // the only failure shape this file cares about.
@@ -75,11 +75,7 @@ import { describe, expect, it } from "vitest";
 
 // @ts-expect-error — plain .mjs with no bundled types; vitest transpiles it.
 import { PALETTES } from "../../scripts/preview/vscode-theme-palettes.mjs";
-import {
-  blockStyleThemeSpec,
-  quollHighlightSpec,
-  taskCompletedContentThemeSpec,
-} from "../../src/webview/cm/theme.js";
+import { blockStyleThemeSpec, quollHighlightSpec } from "../../src/webview/cm/theme.js";
 
 const AA_NORMAL_TEXT = 4.5; // WCAG 2.x AA, normal-size text
 
@@ -145,8 +141,8 @@ function callArgs(text: string, name: string): string | null {
 /**
  * Resolve `var(--x, fallback)` against `vars`. A missing variable with no
  * fallback throws rather than resolving to `transparent`: in this codebase the
- * fallback arm is load-bearing (a completed task OUTSIDE a quote sees no
- * `--quoll-quote-ink-mix` at all and MUST land on its formula's `100%`), so
+ * fallback arm is load-bearing (a depth-1 quote line declares no
+ * `--quoll-quote-ink-mix` at all and MUST land on the formula's `90%`), so
  * silently substituting a default would measure a colour no host produces.
  */
 function resolveVar(expr: string, vars: Vars): string | null {
@@ -424,9 +420,8 @@ const liveCss = stylesCss.replace(/\/\*[\s\S]*?\*\//g, "");
 /**
  * The theme class each themeKind puts on the document — the same mapping shell.ts
  * applies (`dark-theme` / `light-theme`, plus `hc-theme` for both HC kinds).
- * `--quoll-surface-fill` and `--quoll-completed-ink` are QUOLL tokens, not `--vscode-*`
- * ones, so they are not in the palette module; they are read from the shipped
- * stylesheet instead of restated.
+ * `--quoll-surface-fill` is a QUOLL token, not a `--vscode-*` one, so it is not in
+ * the palette module; it is read from the shipped stylesheet instead of restated.
  */
 const THEME_BLOCK_SELECTOR: Record<string, string> = {
   light: ".light-theme",
@@ -435,10 +430,7 @@ const THEME_BLOCK_SELECTOR: Record<string, string> = {
   "hc-dark": ":root.hc-theme",
 };
 
-/** The Quoll tokens a panel measurement needs from styles.css's theme blocks. */
-const QUOLL_TOKENS = ["--quoll-surface-fill", "--quoll-completed-ink"] as const;
-
-function quollTokenFor(themeKind: string, token: (typeof QUOLL_TOKENS)[number]): string {
+function surfaceFillFor(themeKind: string): string {
   const selector = THEME_BLOCK_SELECTOR[themeKind];
   if (selector === undefined) {
     throw new Error(`quote-ink contrast: no theme block mapped for themeKind "${themeKind}"`);
@@ -446,18 +438,18 @@ function quollTokenFor(themeKind: string, token: (typeof QUOLL_TOKENS)[number]):
   // One nesting level (`@layer theme { … }`) is handled implicitly: `[^{}]+`
   // cannot span a brace, so the inner rules match as if they were top level.
   const blocks = [...liveCss.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(
-    ([, sel, body]) => sel.includes(selector) && body.includes(`${token}:`)
+    ([, sel, body]) => sel.includes(selector) && body.includes("--quoll-surface-fill:")
   );
   if (blocks.length !== 1) {
     throw new Error(
       `quote-ink contrast: expected exactly one "${selector}" block declaring ` +
-        `${token} in styles.css, found ${blocks.length}`
+        `--quoll-surface-fill in styles.css, found ${blocks.length}`
     );
   }
   const [, , body] = blocks[0];
-  const decl = new RegExp(`${token}:\\s*([^;]+);`).exec(body);
+  const decl = /--quoll-surface-fill:\s*([^;]+);/.exec(body);
   if (!decl) {
-    throw new Error(`quote-ink contrast: no ${token} value in the "${selector}" block`);
+    throw new Error(`quote-ink contrast: no --quoll-surface-fill value in the "${selector}" block`);
   }
   return decl[1].trim();
 }
@@ -587,19 +579,6 @@ function specColor(tag: Tag, what: string): string {
 const blockSpec = blockStyleThemeSpec as Record<string, Record<string, string>>;
 const QUOTE_INK = specColor(t.quote, "t.quote");
 const BASE_RULE = blockSpec[".cm-line.quoll-blockquote"];
-const COMPLETED_INK = taskCompletedContentThemeSpec[".quoll-task-completed-content"].color;
-
-/**
- * Every ink a quote / callout panel can paint (A11Y-15). Quoted prose is QUOTE_INK; a
- * checked task inside the panel (`> - [x] done`, a `> [!TODO]` checklist) is painted
- * by the `.quoll-task-completed-content` mark instead, whose EditorView.theme rule
- * outranks the `t.quote` highlight class — so it is a second ink on the same panels
- * and has to clear the same floor. A new ink that can land inside a panel belongs here.
- */
-const PANEL_INKS = [
-  { label: "quote ink", formula: QUOTE_INK },
-  { label: "completed-task ink", formula: COMPLETED_INK },
-] as const;
 
 /**
  * The three panel levels a quote line can render at, as (label, CM selector) pairs;
@@ -624,13 +603,14 @@ const PANEL_SELECTORS = [
  * BOTH halves of the level — the fill the ink sits on and the
  * `--quoll-quote-ink-mix` step that level declares — are read from `spec` HERE,
  * inside the measured function, so there is no pre-built level array for a later
- * edit to turn back into a literal. That matters most at depth-1: the base rule's
- * `--quoll-quote-ink-mix: 90%` is the ONLY thing stepping the completed-task ink
- * there (its own fallback is 100%, the bare token), so a level restated without it
- * would measure the completed ink sub-AA while a restated mix that drifted from the
- * spec would keep reporting a number the browser no longer paints. An added depth
- * rule that deepens the fill without its ink step lands here as a sub-AA number for
- * the same reason.
+ * edit to turn back into a literal. That matters most at depth-1: the base rule
+ * declares no `--quoll-quote-ink-mix` today, so its mix is `undefined` and
+ * QUOTE_INK's inline `90%` fallback is what renders, and a hand-written `undefined`
+ * would look equivalent while failing the WRONG way. A mix declared later weights
+ * descriptionForeground higher, i.e. lighter ink and a LOWER ratio, so a restated
+ * level would keep measuring 90% and report green against a panel the browser paints
+ * sub-AA. An added depth rule that deepens the fill without its ink step lands here
+ * as a sub-AA number for the same reason.
  *
  * `spec` is a defaulted parameter so that read is OBSERVABLE: against the shipped
  * spec a real read and a restatement are indistinguishable, which is precisely what
@@ -640,15 +620,12 @@ const PANEL_SELECTORS = [
 function quoteInkRatio(
   themeKind: string,
   level: { label: string; selector: string },
-  spec: Record<string, Record<string, string>> = blockSpec,
-  inkFormula: string = QUOTE_INK
+  spec: Record<string, Record<string, string>> = blockSpec
 ): number {
   const fill = spec[level.selector]?.backgroundColor;
   const inkMix = spec[level.selector]?.["--quoll-quote-ink-mix"];
   const vars = new Map(varsFor(themeKind));
-  for (const token of QUOLL_TOKENS) {
-    vars.set(token, quollTokenFor(themeKind, token));
-  }
+  vars.set("--quoll-surface-fill", surfaceFillFor(themeKind));
   if (inkMix !== undefined) {
     vars.set("--quoll-quote-ink-mix", inkMix);
   }
@@ -665,7 +642,7 @@ function quoteInkRatio(
   }
   const canvas = resolveColor("var(--vscode-editor-background)", vars);
   const panel = compositeOver(resolveColor(fill, vars), canvas);
-  const ink = compositeOver(resolveColor(inkFormula, vars), panel);
+  const ink = compositeOver(resolveColor(QUOTE_INK, vars), panel);
   return contrastRatio(ink, panel);
 }
 
@@ -750,24 +727,21 @@ describe("quote ink resolves above the AA floor on every shipped palette (A11Y-1
     // vocabulary), so a fifth palette widens the sweep instead of going unmeasured.
     expect(THEME_KINDS.length).toBeGreaterThanOrEqual(4);
     expect(PANEL_SELECTORS.length).toBe(3);
-    expect(PANEL_INKS.map((i) => i.label)).toEqual(["quote ink", "completed-task ink"]);
   });
 
-  for (const ink of PANEL_INKS) {
-    for (const themeKind of THEME_KINDS) {
-      for (const level of PANEL_SELECTORS) {
-        it(`${ink.label} clears ${AA_NORMAL_TEXT}:1 in ${themeKind} at ${level.label}`, () => {
-          const ratio = quoteInkRatio(themeKind, level, blockSpec, ink.formula);
-          // The measured ratio rides in the failure message the way the probe reports
-          // it, so a red run says how far under AA the mix landed and against which
-          // palette — not merely that it did.
-          expect(
-            ratio,
-            `${ink.label}, ${themeKind} ${level.label}: ${ratio.toFixed(2)}:1 (AA normal text ` +
-              `${AA_NORMAL_TEXT}:1); palette: scripts/preview/vscode-theme-palettes.mjs`
-          ).toBeGreaterThanOrEqual(AA_NORMAL_TEXT);
-        });
-      }
+  for (const themeKind of THEME_KINDS) {
+    for (const level of PANEL_SELECTORS) {
+      it(`clears ${AA_NORMAL_TEXT}:1 in ${themeKind} at ${level.label}`, () => {
+        const ratio = quoteInkRatio(themeKind, level);
+        // The measured ratio rides in the failure message the way the probe reports
+        // it, so a red run says how far under AA the mix landed and against which
+        // palette — not merely that it did.
+        expect(
+          ratio,
+          `${themeKind} ${level.label}: ${ratio.toFixed(2)}:1 (AA normal text ` +
+            `${AA_NORMAL_TEXT}:1); palette: scripts/preview/vscode-theme-palettes.mjs`
+        ).toBeGreaterThanOrEqual(AA_NORMAL_TEXT);
+      });
     }
   }
 });
@@ -784,7 +758,7 @@ describe("the AA check is non-vacuous", () => {
     //  • depth-1's mix is READ from the theme spec, not restated in this file — the
     //    injection reaches the ratio only through quoteInkRatio's own lookup, so an
     //    edit that rebuilt the level as a literal (the shape this file used to carry)
-    //    would ignore the injected spec, keep measuring the shipped `90%` at 5.24 and
+    //    would ignore the injected spec, keep measuring the `90%` fallback at 5.24 and
     //    turn this assertion RED. That is the point: the restatement is only ever
     //    invisible against the SHIPPED spec.
     //
@@ -797,21 +771,6 @@ describe("the AA check is non-vacuous", () => {
     };
     expect(quoteInkRatio("light", PANEL_SELECTORS[0], withBaseMix)).toBeLessThan(AA_NORMAL_TEXT);
     expect(quoteInkRatio("light", PANEL_SELECTORS[0])).toBeGreaterThanOrEqual(AA_NORMAL_TEXT);
-  });
-
-  it("goes red for completed-task ink once the base panel stops declaring its ink mix (A11Y-15)", () => {
-    // The completed ink falls back to 100% (the bare token, right for a task OUTSIDE a
-    // quote), so depth-1 is stepped ONLY by the base rule's declared mix. Remove it and
-    // the ink reverts to the pre-A11Y-15 4.44:1 — QUOTE_INK alone would stay green on
-    // its own 90% fallback, which is why this sweep needs the second ink.
-    const { "--quoll-quote-ink-mix": _dropped, ...baseWithoutMix } = BASE_RULE;
-    const withoutBaseMix = { ...blockSpec, ".cm-line.quoll-blockquote": baseWithoutMix };
-    expect(quoteInkRatio("light", PANEL_SELECTORS[0], withoutBaseMix, COMPLETED_INK)).toBeLessThan(
-      AA_NORMAL_TEXT
-    );
-    expect(
-      quoteInkRatio("light", PANEL_SELECTORS[0], withoutBaseMix, QUOTE_INK)
-    ).toBeGreaterThanOrEqual(AA_NORMAL_TEXT);
   });
 
   it("refuses to guess at a colour form it does not model", () => {
