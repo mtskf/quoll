@@ -283,7 +283,10 @@ function toggleCode(state: EditorState): FormatSpec {
 }
 
 /** Wrap the main selection as `[text]()` with the caret in the destination slot.
- *  An empty selection gets `[]()` with the caret in the label slot. */
+ *  An empty selection gets `[]()` with the caret in the label slot. A selection
+ *  across lines is left as it is, as the URL paste does: a later line that
+ *  starts a block (a blank line, `>`, a list marker, a fence) ends the
+ *  paragraph, and the label would no longer close as one link. */
 export function computeLinkWrap(state: EditorState): FormatSpec {
   const { from, to } = state.selection.main;
   if (from === to) {
@@ -291,6 +294,9 @@ export function computeLinkWrap(state: EditorState): FormatSpec {
       changes: { from, insert: "[]()" },
       selection: EditorSelection.cursor(from + 1),
     };
+  }
+  if (state.doc.lineAt(from).number !== state.doc.lineAt(to).number) {
+    return { changes: [], selection: state.selection.main };
   }
   const source = markdownLinkSource(state.doc.sliceString(from, to), "");
   return {

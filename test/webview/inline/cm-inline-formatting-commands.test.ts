@@ -177,6 +177,23 @@ describe("computeLinkWrap", () => {
     expect(next.selection.main.from).toBe(7 + source.length - 1);
   });
 
+  // A later line that opens a block ends the paragraph, so `[a\n> b]()` is no
+  // link. Wrapping is single-line, like the URL paste: the document and the
+  // selection stay as they are for every multi-line selection.
+  it.each([
+    ["a plain continuation", "a\nb"],
+    ["a blank line", "a\n\nb"],
+    ["a quote marker", "a\n> b"],
+    ["a list marker", "a\n- b"],
+    ["an ordered list marker", "a\n1. b"],
+    ["a fence", "a\n```\nb"],
+  ])("leaves a selection across %s unchanged", (_name, text) => {
+    const doc = `x ${text} y`;
+    const r = applyFormat(doc, { anchor: 2, head: 2 + text.length }, "link");
+    expect(r.doc).toBe(doc);
+    expect([r.from, r.to]).toEqual([2, 2 + text.length]);
+  });
+
   it("empty selection inserts []() with the caret in the text slot", () => {
     const state = stateFor("", { anchor: 0 });
     const { changes, selection } = computeLinkWrap(state);
