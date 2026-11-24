@@ -1139,11 +1139,10 @@ describe("editor — postEditMessage debounce-path throw surface (V-M13(a))", ()
     handle.applyDocument({ content: "seed", eol: "\n", canWrite: true, docVersion: 1, ...PAIR });
     view.dispatch({ changes: { from: view.state.doc.length, insert: "x" } });
     vi.advanceTimersByTime(300);
-    // post-edit dispatched (single-flight set) THEN send-failure
-    // dispatched (catch arm). The reducer would clear editInFlight on
-    // send-failure.
+    // send-failure dispatched (catch arm) and NO post-edit: the reducer's
+    // in-flight flag is raised only for an Edit that actually left.
     const types = dispatchSpy.mock.calls.map(([a]) => (a as { type: string }).type);
-    expect(types).toContain("post-edit");
+    expect(types).not.toContain("post-edit");
     expect(types).toContain("send-failure");
     // The send-failure action carries the host's throw message.
     const errAction = dispatchSpy.mock.calls.find(
@@ -1688,13 +1687,33 @@ describe("editor — local-edit-attempt + discardBuffer on docChanged", () => {
     });
     m.handle.flushPending();
     expect(state.sendFailure).toContain("transport failed");
-    expect(state.editInFlight).toBe(false);
+    // Edit 1 is still unacked: the failed force-post must not release it.
+    expect(state.editInFlight).toBe(true);
     expect(editPosts()).toHaveLength(2);
     m.view.dispatch({ changes: { from: m.view.state.doc.length, insert: "Z" } });
     // The retry clears the buffer before dispatch synchronously re-enters the drain.
     expect(state.sendFailure).toBeNull();
     expect(editPosts()).toHaveLength(2);
     vi.advanceTimersByTime(300);
+    // Single-flight: the retry waits for Edit 1's ack.
+    expect(editPosts()).toHaveLength(2);
+    m.handle.applyDocument({
+      content: "safe\nX",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 2,
+      externalEpoch: 0,
+      epochGeneration: 1,
+      settledEditId: 1,
+    });
+    state = reducer(state, {
+      type: "document",
+      docVersion: 2,
+      canWrite: true,
+      themeKind: state.theme,
+    });
+    m.setState(state);
+    m.commit(state.editInFlight);
     expect(editPosts()).toHaveLength(3);
     expect((editPosts().at(-1) as { content: string }).content).toBe("safe\nXYZ");
   });

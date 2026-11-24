@@ -3541,3 +3541,103 @@ describe("cm edit-sync — stored Markdown acknowledgements", () => {
     expect(s.posted).toEqual([]);
   });
 });
+
+describe("cm edit-sync — successful-send receipt barrier", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  const track = (promise: Promise<string>) => {
+    const box: { outcome: string | null } = { outcome: null };
+    void promise.then((outcome) => {
+      box.outcome = outcome;
+    });
+    return box;
+  };
+  const receive = (s: ReturnType<typeof setup>, d: HostDocument) => {
+    s.setDoc(d.content); // editor reseeds before the reducer's commit
+    const pending = s.sync.real.onHostSnapshot(d);
+    s.sync.onReducerCommit(pending);
+  };
+  const outstanding = () => {
+    const s = setup();
+    s.sync.real.onHostSnapshot(hostDoc(1, "hello", 0));
+    s.type("a");
+    expect(s.postedIds).toEqual([1]);
+    return s;
+  };
+
+  it("failed force-post then typing waits through an old-mark Document until the covering ack", async () => {
+    const s = outstanding();
+    s.type("ab");
+    s.setPostOk(false);
+    s.sync.flush(); // attempt 2 fails; only Edit 1 reached the host
+    s.sync.onReducerCommit(true); // Fix 1a: failure preserves the outstanding flight
+    s.setPostOk(true);
+    s.type("abc");
+    expect(s.posted).toEqual([{ content: "a", baseDocVersion: 1 }]);
+    const box = track(s.sync.awaitSettled(1000));
+    // A foreign epoch can replace the view and drop its holders without
+    // acknowledging Edit 1. It must not reset the successful-send receipt.
+    receive(s, hostDoc(2, "abc", 0, 1));
+    await vi.advanceTimersByTimeAsync(0);
+    expect.soft(box.outcome).toBeNull();
+    expect(s.postedIds).toEqual([1]);
+    receive(s, hostDoc(3, "abc", 1, 1));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(box.outcome).toBe("settled");
+    expect(s.posted).toEqual([{ content: "a", baseDocVersion: 1 }]);
+  });
+
+  it("returning to seed text cannot settle Edit 1 after a send-failure commit clears its holder", async () => {
+    const s = outstanding();
+    s.setDoc("hello"); // noteLocalChange threw before scheduling this change
+    s.sync.onReducerCommit(false); // equivalent of the old send-failure drain
+    const box = track(s.sync.awaitSettled(1000));
+    await vi.advanceTimersByTimeAsync(0);
+    expect.soft(box.outcome).toBeNull();
+    receive(s, hostDoc(2, "hello", 1));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(box.outcome).toBe("settled");
+  });
+
+  it("same-generation epoch bump with mark zero keeps waiting and its covering mark rejudges the waiter", async () => {
+    const s = outstanding();
+    const box = track(s.sync.awaitSettled(1000));
+    receive(s, hostDoc(2, "a", 0, 1));
+    await vi.advanceTimersByTimeAsync(0);
+    expect.soft(box.outcome).toBeNull();
+    receive(s, hostDoc(3, "a", 1, 1));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(box.outcome).toBe("settled");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("new generation recovers with a lower settled mark", async () => {
+    const s = outstanding();
+    const box = track(s.sync.awaitSettled(1000));
+    receive(s, hostDoc(1, "a", 0, 0, 2));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(box.outcome).toBe("settled");
+    expect(s.postedIds).toEqual([1]);
+  });
+
+  it("missing ack times out unsynced", async () => {
+    const s = outstanding();
+    const box = track(s.sync.awaitSettled(1000));
+    await vi.advanceTimersByTimeAsync(999);
+    expect(box.outcome).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(box.outcome).toBe("unsynced");
+  });
+
+  it("readonly reseed with an old mark is not settled until its receipt arrives", async () => {
+    const s = outstanding();
+    receive(s, { ...hostDoc(2, "a", 0), canWrite: false });
+    const box = track(s.sync.awaitSettled(1000));
+    await vi.advanceTimersByTimeAsync(0);
+    expect.soft(box.outcome).toBeNull();
+    receive(s, { ...hostDoc(3, "a", 1), canWrite: false });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(box.outcome).toBe("settled");
+  });
+});

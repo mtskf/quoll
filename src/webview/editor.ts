@@ -263,7 +263,7 @@ export type EditorHandle = {
   isIdentityTransition(externalEpoch: number, epochGeneration: number): boolean;
 };
 
-/** Dispatch `post-edit` and ship the Edit message in the same tick.
+/** Ship the Edit message, then dispatch `post-edit` in the same tick.
  *  Returns `true` if the host accepted the message (postMessage did not
  *  throw), `false` otherwise — edit-sync consumes the boolean to decide
  *  whether to retain the buffer. */
@@ -290,11 +290,6 @@ function postEditMessage(
     });
     return false;
   }
-  try {
-    dispatch({ type: "post-edit" });
-  } catch (dispatchErr) {
-    console.error("[quoll] post-edit dispatch itself failed", dispatchErr);
-  }
   const message: WebviewToHost = {
     protocol: PROTOCOL_VERSION,
     type: "edit",
@@ -312,8 +307,8 @@ function postEditMessage(
       });
     } catch (dispatchErr) {
       // Not a reducer throw (state.ts's send-failure case is a pure spread
-      // and cannot throw) — state.editInFlight is already committed false by
-      // the time this catches. The realistic source is shell.ts's dispatch
+      // and cannot throw) — sendFailure is already committed by the time this
+      // catches. The realistic source is shell.ts's dispatch
       // side effects: renderBanners' DOM write, or the synchronous re-entrant
       // drain (onReducerCommit -> edit-sync.replayIfNeeded -> postEditMessage).
       // In that case editInFlight recovers correctly, but the "Cannot send edit"
@@ -327,6 +322,18 @@ function postEditMessage(
   });
   if (ok && QUOLL_PERF) {
     perfRecord("webview:postMessage", perfNow() - postStart);
+  }
+  if (ok) {
+    // AFTER the send, never before: the reducer's in-flight flag is a RECEIPT
+    // for an Edit the host will answer. Raised before a post that then fails,
+    // the failure arm would have to lower it — and that also lowers it for an
+    // EARLIER Edit still awaiting its ack (a failed force-post during an apply),
+    // which breaks single-flight and lets a handoff read "settled" mid-apply.
+    try {
+      dispatch({ type: "post-edit" });
+    } catch (dispatchErr) {
+      console.error("[quoll] post-edit dispatch itself failed", dispatchErr);
+    }
   }
   return ok;
 }
