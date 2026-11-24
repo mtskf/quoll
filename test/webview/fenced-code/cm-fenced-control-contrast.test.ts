@@ -11,6 +11,10 @@
 //
 // Thresholds: the copy button is icon-only (non-text UI, 3:1); the language label
 // and the "Show N more lines" label are normal-size text (4.5:1).
+//
+// A11Y-16 adds the copy button's success checkmark (`.is-copied`), measured at rest
+// and on hover / keyboard focus (both paint toolbar-hoverBackground over the surface),
+// on the header band AND the bare-block fill (the button is on every writable block).
 import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
@@ -34,8 +38,11 @@ const THEME_BLOCK: Record<string, string> = {
   "hc-dark": ":root.hc-theme",
 };
 
-/** A `--quoll-*` token's value in the theme block for `themeKind` (exactly one block). */
-function themeToken(themeKind: string, token: string): string {
+/**
+ * A `--quoll-*` token's value in the theme block for `themeKind`: at most one block may
+ * declare it, and none means undeclared (the use site's fallback applies).
+ */
+function themeToken(themeKind: string, token: string): string | undefined {
   const selector = THEME_BLOCK[themeKind];
   const blocks = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(
     ([, sel, body]) =>
@@ -44,7 +51,10 @@ function themeToken(themeKind: string, token: string): string {
         .split(",")
         .some((part) => part.trim() === selector) && body.includes(`${token}:`)
   );
-  expect(blocks, `${token} in "${selector}"`).toHaveLength(1);
+  expect(blocks.length, `${token} in "${selector}"`).toBeLessThanOrEqual(1);
+  if (blocks.length === 0) {
+    return undefined;
+  }
   return new RegExp(`${token}:\\s*([^;]+);`).exec(blocks[0][2])?.[1].trim() ?? "";
 }
 
@@ -66,12 +76,23 @@ function restOpacity(value: string | undefined): number {
   throw new Error(`unmodelled opacity ${JSON.stringify(value)}`);
 }
 
-/** Resolve hex, `var(--vscode-*)` against the palette, and `var(--quoll-*)` against styles.css. */
-function resolveColor(expr: string, themeKind: string): Rgb | null {
+/** Opaque colour plus alpha; only the hover tint is translucent here. */
+type Rgba = { rgb: Rgb; a: number };
+
+/**
+ * Resolve hex, unitless `rgba()`, `var(--vscode-*)` against the palette, and
+ * `var(--quoll-*)` against styles.css. `transparent` is null.
+ */
+function resolveRgba(expr: string, themeKind: string): Rgba | null {
   const text = expr.trim();
   const hex = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(text);
   if (hex) {
-    return [1, 2, 3].map((i) => Number.parseInt(hex[i], 16)) as Rgb;
+    return { rgb: [1, 2, 3].map((i) => Number.parseInt(hex[i], 16)) as Rgb, a: 1 };
+  }
+  const rgba = /^rgba\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*\)$/.exec(text);
+  if (rgba) {
+    const [r, g, b, a] = rgba.slice(1).map(Number.parseFloat);
+    return { rgb: [r, g, b], a };
   }
   if (text === "transparent") {
     return null;
@@ -85,12 +106,21 @@ function resolveColor(expr: string, themeKind: string): Rgb | null {
     ? (PALETTES[themeKind] as Record<string, string>)[name.slice("--vscode-".length)]
     : themeToken(themeKind, name);
   if (declared !== undefined) {
-    return resolveColor(declared, themeKind);
+    return resolveRgba(declared, themeKind);
   }
   if (fallback === undefined) {
     throw new Error(`no value and no fallback for ${name}`);
   }
-  return resolveColor(fallback, themeKind);
+  return resolveRgba(fallback, themeKind);
+}
+
+/** An OPAQUE colour (a control's ink, a surface); a translucent one is unmodelled here. */
+function resolveColor(expr: string, themeKind: string): Rgb | null {
+  const color = resolveRgba(expr, themeKind);
+  if (color !== null && color.a !== 1) {
+    throw new Error(`unexpected translucent colour ${JSON.stringify(expr)}`);
+  }
+  return color?.rgb ?? null;
 }
 
 /** WCAG relative luminance of an sRGB colour. */
@@ -144,6 +174,57 @@ const CONTROLS = [
   },
   { name: "collapse toggle label", rule: toggleRule, surface: "--quoll-surface-fill", min: 4.5 },
 ];
+
+const copiedRule = copyButtonThemeSpec[".quoll-copy-button.is-copied"] as Record<
+  string,
+  string | undefined
+>;
+const hoverRule = copyButtonThemeSpec[
+  ".quoll-copy-button:hover, .quoll-copy-button:focus-visible"
+] as Record<string, string | undefined>;
+
+/** The copy button's backdrop: the surface, plus the hover/focus tint composited over it. */
+function copyBackdrop(token: string, themeKind: string, hovered: boolean): Rgb {
+  const base = surface(token, themeKind);
+  if (!hovered) {
+    return base;
+  }
+  const tint = resolveRgba(hoverRule.backgroundColor ?? "", themeKind);
+  expect(tint, "hover tint").not.toBeNull();
+  const { rgb, a } = tint as Rgba;
+  return rgb.map((v, i) => a * v + (1 - a) * base[i]) as Rgb;
+}
+
+describe("copy button success checkmark contrast (A11Y-16)", () => {
+  for (const themeKind of Object.keys(THEME_BLOCK)) {
+    for (const token of ["--quoll-surface-header", "--quoll-surface-fill"]) {
+      for (const hovered of [false, true]) {
+        const state = hovered ? "hover/focus" : "rest";
+        it(`${themeKind}: checkmark clears 3:1 on ${token} at ${state}`, () => {
+          const fg = resolveColor(copiedRule.color ?? "", themeKind) as Rgb;
+          const ratio = contrast(fg, copyBackdrop(token, themeKind, hovered), 1);
+          expect(ratio).toBeGreaterThanOrEqual(3);
+        });
+      }
+    }
+  }
+
+  // Dark and both HC kinds keep VS Code's own success colour (only Light overrides it).
+  for (const themeKind of ["dark", "hc-light", "hc-dark"]) {
+    it(`${themeKind}: checkmark is the host testing-iconPassed`, () => {
+      expect(resolveColor(copiedRule.color ?? "", themeKind)).toEqual(
+        resolveColor("var(--vscode-testing-iconPassed)", themeKind)
+      );
+    });
+  }
+
+  // Non-vacuity: Light+'s own testing-iconPassed on the hovered header is the A11Y-16 defect.
+  it("the host testing-iconPassed fails on the hovered light header (pre-fix state)", () => {
+    const fg = resolveColor("var(--vscode-testing-iconPassed)", "light") as Rgb;
+    const bg = copyBackdrop("--quoll-surface-header", "light", true);
+    expect(contrast(fg, bg, 1)).toBeLessThan(3);
+  });
+});
 
 describe("fenced-code control resting contrast (A11Y-12)", () => {
   for (const themeKind of Object.keys(THEME_BLOCK)) {
