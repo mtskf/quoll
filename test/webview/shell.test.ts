@@ -17,6 +17,7 @@ import {
 import { EDITOR_PREF_CSS_VARS, editorPrefToCssValue } from "../../src/webview/cm/editor-prefs.js";
 import { proseLintEnabled } from "../../src/webview/cm/lint/index.js";
 import { pendingPasteOperations } from "../../src/webview/cm/paste/paste-operation.js";
+import { HEAVY_FIXTURE_TIMEOUT_MS } from "../shared/heavy-fixture-timeout.js";
 import { firePasteAt, IMAGE_FILE } from "./helpers/clipboard-double.js";
 
 // shell.ts integration tests (post C3 React-free shell). Replaces the
@@ -91,9 +92,32 @@ afterEach(() => {
   document.documentElement.classList.remove("dark-theme", "light-theme", "hc-theme");
 });
 
-async function mount(opts: { resourceBaseUri?: string } = {}): Promise<void> {
+// vitest fails a timed-out test but cannot cancel its body, so the body resumes
+// at its next await after afterEach has torn this mount down — by then the
+// module-level helpers (deliver, mountedView, container) drive the NEXT test's
+// mount. A long-running body advances timers through the returned
+// advanceTimers, which throws once this mount is no longer the live one —
+// before advancing (so a stale call cannot move the next test's fake clock) and
+// after (so a body already mid-advance stops on resume) — and so a stale body
+// stops before its next step can touch another test.
+async function mount(
+  opts: { resourceBaseUri?: string } = {}
+): Promise<{ advanceTimers(ms: number): Promise<void> }> {
   const { mountShell } = await import("../../src/webview/shell.js");
-  handle = mountShell(container as HTMLElement, { nonce: "test-nonce", ...opts });
+  const own = mountShell(container as HTMLElement, { nonce: "test-nonce", ...opts });
+  handle = own;
+  const assertLive = () => {
+    if (handle !== own) {
+      throw new Error("stale test body: its mount was torn down");
+    }
+  };
+  return {
+    async advanceTimers(ms) {
+      assertLive();
+      await vi.advanceTimersByTimeAsync(ms);
+      assertLive();
+    },
+  };
 }
 
 function buildDocument(
@@ -2946,36 +2970,81 @@ describe("shell — switch with unsent edits", () => {
     expect(switchPosts()).toHaveLength(1);
   });
 
-  it.each([
-    "button",
-    "chord",
-    "command",
-  ])("blocks %s for oversized content and retries", async (entry) => {
-    await mount();
-    vi.useFakeTimers();
-    deliver(buildDocument({ content: "seed" }));
-    const oversized = "x".repeat(MAX_CONTENT_LENGTH + 1);
-    const view = mountedView();
-    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: oversized } });
-    requestSwitch(entry);
-    await vi.advanceTimersByTimeAsync(2000);
-    expect(viewText()).toBe(oversized);
-    expect(container?.querySelector(".quoll-banner.error")?.textContent).toContain(
-      "too large to send"
-    );
-    expect(switchPosts()).toHaveLength(0);
+  it.each(["button", "chord", "command"])(
+    "blocks %s for oversized content and retries",
+    async (entry) => {
+      const shell = await mount();
+      vi.useFakeTimers();
+      deliver(buildDocument({ content: "seed" }));
+      const oversized = "x".repeat(MAX_CONTENT_LENGTH + 1);
+      const view = mountedView();
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: oversized } });
+      requestSwitch(entry);
+      await shell.advanceTimers(2000);
+      expect(viewText()).toBe(oversized);
+      expect(container?.querySelector(".quoll-banner.error")?.textContent).toContain(
+        "too large to send"
+      );
+      expect(switchPosts()).toHaveLength(0);
 
-    view.dispatch({
-      changes: { from: 0, to: view.state.doc.length, insert: "recovered" },
-      selection: { anchor: 9 },
-    });
-    requestSwitch(entry);
-    deliver(buildDocument({ docVersion: 2, content: "recovered" }));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(switchPosts()).toHaveLength(1);
-    const types = postMessage.mock.calls.map(([m]) => (m as { type?: string }).type);
-    expect(types.lastIndexOf("caret-report")).toBeLessThan(types.lastIndexOf("switch-to-text"));
-    expect(types).toContain("caret-report");
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: "recovered" },
+        selection: { anchor: 9 },
+      });
+      requestSwitch(entry);
+      deliver(buildDocument({ docVersion: 2, content: "recovered" }));
+      await shell.advanceTimers(0);
+      expect(switchPosts()).toHaveLength(1);
+      const types = postMessage.mock.calls.map(([m]) => (m as { type?: string }).type);
+      expect(types.lastIndexOf("caret-report")).toBeLessThan(types.lastIndexOf("switch-to-text"));
+      expect(types).toContain("caret-report");
+    },
+    HEAVY_FIXTURE_TIMEOUT_MS
+  );
+
+  // The interleaving a timed-out oversized body produces under load, replayed in
+  // order: afterEach and the next test's setup run, then the old body resumes
+  // from its await and goes on to deliver "recovered". It must stop at the
+  // resume instead of writing into the next test's view.
+  // Both orderings: (entry) the stale body calls advanceTimers after teardown —
+  // it must not move the next test's fake clock; (in-flight) teardown lands while
+  // the advance is awaiting — it must stop on resume.
+  it.each([
+    "entry",
+    "in-flight",
+  ] as const)("stops a body that resumes after the next test has mounted (%s)", async (ordering) => {
+    vi.useFakeTimers();
+    const stale = await mount();
+    const teardownAndRemount = async () => {
+      // afterEach, then the next test's beforeEach and mount.
+      handle?.dispose();
+      handle = null;
+      container?.remove();
+      container = document.createElement("div");
+      document.body.appendChild(container);
+      await mount();
+      deliver(buildDocument({ content: "next" }));
+    };
+    const resume = () =>
+      stale
+        .advanceTimers(ordering === "entry" ? 5000 : 0)
+        .then(() => deliver(buildDocument({ docVersion: 2, content: "recovered" })));
+
+    let staleBody: Promise<void>;
+    let clockBefore = 0;
+    if (ordering === "entry") {
+      await teardownAndRemount();
+      clockBefore = Date.now();
+      staleBody = resume();
+    } else {
+      staleBody = resume();
+      await teardownAndRemount();
+    }
+    await expect(staleBody).rejects.toThrow("stale test body");
+    if (ordering === "entry") {
+      expect(Date.now()).toBe(clockBefore);
+    }
+    expect(viewText()).toBe("next");
   });
 
   it.each([
