@@ -120,6 +120,28 @@ describe("remember last editor surface (session-only)", function () {
     assert.ok(!tabs.some(customTab(uri)), "not bounced to Quoll");
   });
 
+  // The native in-place switch (View: Reopen Editor With Text Editor) goes
+  // through replaceEditors and never touches Quoll's own swap code. On 1.94 it
+  // fires "text opened (Quoll sibling still open)" and "Quoll closed" as
+  // separate tab events: the open records nothing, and the watcher's closed
+  // loop records "text". If a host ever reorders those events, the text open
+  // has no sibling and the reopen below bounces back to Quoll.
+  it("Reopen Editor With → Text Editor remembers text", async () => {
+    const uri = tempMd("reopen-with-text.md");
+    await openInQuoll(uri);
+    assert.ok(allTabs().some(customTab(uri)), "precondition: open in Quoll");
+    await vscode.commands.executeCommand("workbench.action.reopenTextEditor");
+    await waitFor(() => allTabs().some(textTab(uri)) && !allTabs().some(customTab(uri)));
+    assert.ok(allTabs().some(textTab(uri)), "replaced by a text tab");
+    assert.ok(!allTabs().some(customTab(uri)), "Quoll tab replaced, not kept beside");
+    await closeDocTabs(uri);
+    await openInText(uri);
+    await tick(600); // give any (erroneous) restore time to fire
+    const tabs = allTabs();
+    assert.ok(tabs.some(textTab(uri)), "stays in text");
+    assert.ok(!tabs.some(customTab(uri)), "not bounced to Quoll");
+  });
+
   it("native Open With → Quoll is never bounced, even when text is remembered", async () => {
     const uri = tempMd("open-with.md");
     // Remember text (fresh text open records "text") — the DEFAULT memory state.
