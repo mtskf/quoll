@@ -898,8 +898,19 @@ export const quollTaskCompletedContentTheme = EditorView.theme(taskCompletedCont
 // the host's secondary UI ink itself (`foreground` is #616161 against #000000 editor text
 // in Default Light), which the theme author keeps legible on widget surfaces.
 const fencedControlForeground = "var(--vscode-foreground)";
-const fencedControlHoverBackground =
-  "var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.1))";
+
+// High Contrast (A11Y-11): VS Code registers `toolbar.hoverBackground` as null for both HC
+// kinds, so the background fallback is `transparent` rather than an invented tint (white
+// at 10% was invisible on hc-light's white canvas). HC hover is instead the workbench's
+// own toolbar affordance, copied from its CSS: a 1px dashed `toolbar.hoverOutline`
+// (= contrastActiveBorder under both HC kinds, null under dark/light, so outside HC the
+// declaration is invalid at computed-value time and no outline paints). Hover-only via
+// `:not(:focus-visible)`, so it never replaces a keyboard focus ring.
+const fencedControlHoverBackground = "var(--vscode-toolbar-hoverBackground, transparent)";
+const fencedControlHoverOutline = {
+  outline: "1px dashed var(--vscode-toolbar-hoverOutline)",
+  outlineOffset: "-1px",
+};
 
 export const copyButtonThemeSpec = {
   // The open fence line is the panel's top row; making it the positioning
@@ -992,6 +1003,7 @@ export const copyButtonThemeSpec = {
   ".quoll-copy-button:hover, .quoll-copy-button:focus-visible": {
     backgroundColor: fencedControlHoverBackground,
   },
+  ".quoll-copy-button:hover:not(:focus-visible)": fencedControlHoverOutline,
   // `--quoll-success-ink` is declared in the LIGHT theme block only (A11Y-16): Light+
   // ships testing-iconPassed as #73c991, ~1.4:1 on the hovered light header (~1.7:1 at rest). Dark and both HC
   // kinds leave it undeclared and keep VS Code's own success colour.
@@ -1366,6 +1378,8 @@ export const collapseToggleThemeSpec = {
     collapseToggleHover,
   ".quoll-blockquote-collapse-toggle:hover, .quoll-blockquote-collapse-toggle:focus-visible":
     collapseToggleHover,
+  ".quoll-fenced-collapse-toggle:hover:not(:focus-visible)": fencedControlHoverOutline,
+  ".quoll-blockquote-collapse-toggle:hover:not(:focus-visible)": fencedControlHoverOutline,
   ".quoll-fenced-collapse-toggle svg": collapseToggleSvg,
   ".quoll-blockquote-collapse-toggle svg": collapseToggleSvg,
   // Callout accent on the blockquote bar: same shadow + per-type colours as the rows

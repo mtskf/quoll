@@ -183,6 +183,8 @@ const HC_DARK = {
   descriptionForeground: "rgba(255, 255, 255, 0.7)",
   errorForeground: "#F48771",
   focusBorder: "#F38518",
+  // toolbar.hoverOutline → contrastActiveBorder → focusBorder (null under light/dark).
+  "toolbar-hoverOutline": "#F38518",
   contrastBorder: "#6FC3DF",
   "widget-border": "#6FC3DF",
   "panel-border": "#6FC3DF",
@@ -229,6 +231,8 @@ const HC_LIGHT = {
   descriptionForeground: "rgba(41, 41, 41, 0.7)",
   errorForeground: "#B5200D",
   focusBorder: "#006BBD",
+  // toolbar.hoverOutline → contrastActiveBorder → focusBorder (null under light/dark).
+  "toolbar-hoverOutline": "#006BBD",
   contrastBorder: "#0F4A85",
   "widget-border": "#0F4A85",
   "panel-border": "#0F4A85",
