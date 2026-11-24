@@ -1047,7 +1047,10 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // stop, so the scroller stays out of the order.
         // Tab from the scroller goes to the first control on screen: native Tab takes the
         // first in DOM order, which can be one CodeMirror drew above the scrollport, and
-        // scrolls back to it. With none on screen, native Tab proceeds.
+        // scrolls back to it. "On screen" means a non-empty box that overlaps the scrollport
+        // both ways; a control cut by an edge is scrolled whole into view after it takes
+        // focus (a no-op for a control that is already whole). With none on screen, native
+        // Tab proceeds.
         ViewPlugin.define((view) => {
           const scroller = view.scrollDOM;
           const sync = () => {
@@ -1070,12 +1073,21 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
               "button, a[href], input, select, textarea, [tabindex]"
             )) {
               const box = el.getBoundingClientRect();
-              if (el.tabIndex < 0 || box.bottom <= port.top || box.top >= port.bottom) {
+              if (
+                el.tabIndex < 0 ||
+                box.width <= 0 ||
+                box.height <= 0 ||
+                box.bottom <= port.top ||
+                box.top >= port.bottom ||
+                box.right <= port.left ||
+                box.left >= port.right
+              ) {
                 continue;
               }
               el.focus({ preventScroll: true });
               // focus() is a no-op on a disabled or hidden control: try the next one.
               if (view.root.activeElement === el) {
+                el.scrollIntoView({ block: "nearest", inline: "nearest" });
                 event.preventDefault();
                 return;
               }

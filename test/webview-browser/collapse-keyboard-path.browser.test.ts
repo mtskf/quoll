@@ -316,6 +316,11 @@ describe("collapse bars — keyboard path (real Chromium, production bundle)", (
       expect(above.getBoundingClientRect().bottom).toBeLessThan(port().top);
       expectInScrollport(f, onScreen);
 
+      // Shift+Tab is not ours: it leaves the scroller, it does not take the bar on screen.
+      scroller.focus({ preventScroll: true });
+      await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
+      expect(f.win.document.activeElement).not.toBe(onScreen);
+
       scroller.focus({ preventScroll: true });
       const top = scroller.scrollTop;
       await userEvent.keyboard("{Tab}");
@@ -323,7 +328,55 @@ describe("collapse bars — keyboard path (real Chromium, production bundle)", (
       await frames(f, 3);
       expect(scroller.scrollTop).toBe(top);
     });
+
+    // A bar cut by the bottom edge is on screen only in part: Tab takes it and brings it
+    // fully into view, so the next Enter lands on a control the reader can see.
+    it(`read-only ${c.name}, a bar cut by the scrollport edge: Tab takes it and shows it whole`, async () => {
+      fixture = await productionPasteFixture(doc, "\n", false);
+      const f = fixture;
+      const scroller = f.view.scrollDOM;
+      const bars = () =>
+        f.win.document.querySelectorAll<HTMLButtonElement>(`.quoll-${c.bar}-collapse-toggle`);
+      for (let i = 0; i < 120 && bars().length < 2; i++) {
+        scroller.scrollTop += 50;
+        await frames(f, 3);
+      }
+      const bar = toggleOf(f, c.bar, 1, 2);
+      scroller.scrollTop +=
+        bar.getBoundingClientRect().top - scroller.getBoundingClientRect().bottom + 4;
+      await frames(f, 5);
+      const cut = bar.getBoundingClientRect();
+      const port = scroller.getBoundingClientRect();
+      expect(cut.top).toBeLessThan(port.bottom);
+      expect(cut.bottom).toBeGreaterThan(port.bottom);
+
+      scroller.focus({ preventScroll: true });
+      await userEvent.keyboard("{Tab}");
+      expect(f.win.document.activeElement).toBe(bar);
+      // Within a pixel: scrollTop is whole pixels, the layout is not.
+      await expect.poll(() => bar.getBoundingClientRect().bottom - port.bottom < 1).toBe(true);
+    });
   }
+
+  // A control pushed off sideways (a wide table cell, say) is vertically on screen but not
+  // visible: Tab must not put focus there. The offset is forced with a transform, and a
+  // synthetic Tab keeps the check on the handler (native Tab would take the bar itself).
+  it("read-only: Tab does not take a bar that is off screen sideways", async () => {
+    fixture = await productionPasteFixture(CASES[0].doc, "\n", false);
+    const f = fixture;
+    const scroller = f.view.scrollDOM;
+    const bar = toggleOf(f, "fenced");
+    bar.style.transform = "translateX(3000px)";
+    const port = scroller.getBoundingClientRect();
+    expect(bar.getBoundingClientRect().left).toBeGreaterThanOrEqual(port.right);
+    expect(bar.getBoundingClientRect().top).toBeLessThan(port.bottom);
+
+    scroller.focus({ preventScroll: true });
+    const tab = new f.win.KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+    scroller.dispatchEvent(tab);
+    expect(tab.defaultPrevented).toBe(false);
+    expect(f.win.document.activeElement).toBe(scroller);
+  });
 
   it("the scroller is the editor's tab stop only while read-only", async () => {
     fixture = await productionPasteFixture(CASES[0].doc);
