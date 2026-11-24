@@ -16,7 +16,7 @@
 //
 // Read-only: the content DOM is not a focus target, so these keys never reach it there.
 // Tab lands on the scroller instead (the read-only tab stop, editor.ts), PageDown scrolls
-// to the block, and the next Tab reaches the bar's <button> natively (list-indent declines
+// to the block, and the next Tab reaches the on-screen bar's <button> (list-indent declines
 // Tab when read-only); Enter toggles it. The shared renderer then hands focus to the
 // replacement bar, or to the scroller when that bar is not on screen.
 

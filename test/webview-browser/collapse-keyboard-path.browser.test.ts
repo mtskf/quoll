@@ -292,6 +292,39 @@ describe("collapse bars — keyboard path (real Chromium, production bundle)", (
     });
   }
 
+  // CodeMirror draws past the scrollport, so an earlier bar can still be in the DOM above
+  // it. Tab from the scroller must take the bar the reader is looking at, not scroll back.
+  const paras = (n: number) => Array.from({ length: n }, (_, i) => `p${i + 1}`).join("\n\n");
+  for (const c of TWO_CASES) {
+    const [first, second] = c.doc.split("\n\nmid\n\n");
+    const doc = `${first}\n\n${paras(10)}\n\n${second.replace("para\n", `${paras(60)}\n`)}`;
+    it(`read-only ${c.name}, an earlier bar drawn above the scrollport: Tab takes the one on screen`, async () => {
+      fixture = await productionPasteFixture(doc, "\n", false);
+      const f = fixture;
+      const scroller = f.view.scrollDOM;
+      const bars = () =>
+        f.win.document.querySelectorAll<HTMLButtonElement>(`.quoll-${c.bar}-collapse-toggle`);
+      for (let i = 0; i < 120 && bars().length < 2; i++) {
+        scroller.scrollTop += 50;
+        await frames(f, 3);
+      }
+      const port = () => scroller.getBoundingClientRect();
+      scroller.scrollTop +=
+        (bars()[1] as HTMLElement).getBoundingClientRect().top - port().top - 20;
+      await frames(f, 5);
+      const [above, onScreen] = [toggleOf(f, c.bar, 0, 2), toggleOf(f, c.bar, 1, 2)];
+      expect(above.getBoundingClientRect().bottom).toBeLessThan(port().top);
+      expectInScrollport(f, onScreen);
+
+      scroller.focus({ preventScroll: true });
+      const top = scroller.scrollTop;
+      await userEvent.keyboard("{Tab}");
+      expect(f.win.document.activeElement).toBe(onScreen);
+      await frames(f, 3);
+      expect(scroller.scrollTop).toBe(top);
+    });
+  }
+
   it("the scroller is the editor's tab stop only while read-only", async () => {
     fixture = await productionPasteFixture(CASES[0].doc);
     const f = fixture;

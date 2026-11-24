@@ -1045,16 +1045,52 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // not drawn yet. The scroller is the tab stop there. CodeMirror creates it with
         // tabIndex -1 and has no facet for its attributes. Editable, the content is the tab
         // stop, so the scroller stays out of the order.
+        // Tab from the scroller goes to the first control on screen: native Tab takes the
+        // first in DOM order, which can be one CodeMirror drew above the scrollport, and
+        // scrolls back to it. With none on screen, native Tab proceeds.
         ViewPlugin.define((view) => {
+          const scroller = view.scrollDOM;
           const sync = () => {
-            view.scrollDOM.tabIndex = view.state.facet(EditorView.editable) ? -1 : 0;
+            scroller.tabIndex = view.state.facet(EditorView.editable) ? -1 : 0;
+          };
+          const tabToOnScreen = (event: KeyboardEvent) => {
+            if (
+              event.target !== scroller ||
+              event.key !== "Tab" ||
+              event.shiftKey ||
+              event.ctrlKey ||
+              event.altKey ||
+              event.metaKey ||
+              view.state.facet(EditorView.editable)
+            ) {
+              return;
+            }
+            const port = scroller.getBoundingClientRect();
+            for (const el of scroller.querySelectorAll<HTMLElement>(
+              "button, a[href], input, select, textarea, [tabindex]"
+            )) {
+              const box = el.getBoundingClientRect();
+              if (el.tabIndex < 0 || box.bottom <= port.top || box.top >= port.bottom) {
+                continue;
+              }
+              el.focus({ preventScroll: true });
+              // focus() is a no-op on a disabled or hidden control: try the next one.
+              if (view.root.activeElement === el) {
+                event.preventDefault();
+                return;
+              }
+            }
           };
           sync();
+          scroller.addEventListener("keydown", tabToOnScreen);
           return {
             update(u) {
               if (u.startState.facet(EditorView.editable) !== u.state.facet(EditorView.editable)) {
                 sync();
               }
+            },
+            destroy() {
+              scroller.removeEventListener("keydown", tabToOnScreen);
             },
           };
         }),
