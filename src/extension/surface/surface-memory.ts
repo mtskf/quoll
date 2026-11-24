@@ -85,6 +85,8 @@ export function reconcileOpen(
   hasSibling: boolean
 ): EditorSurface | null {
   const { record, reopen } = decideOpenReconcile(surfaces.get(uriKey), shown, hasSibling);
+  // A Quoll open is always deliberate, so it supersedes any in-flight forward
+  // swap claim. A text adopt is not, so it records without superseding.
   if (record === "quoll") {
     noteSurface(uriKey, record);
   } else if (record === "text") {
