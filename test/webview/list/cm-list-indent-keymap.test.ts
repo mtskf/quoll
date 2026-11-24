@@ -482,7 +482,7 @@ describe("outdentListItem", () => {
   });
 
   // (j) combined adversarial: the moved item's OWN child + an ordered forced
-  //     child + a destination width change all feed the net-delta map at once.
+  //     child + a destination width change all shift lines in one plan.
   it("(j) combined: own child + ordered forced child + destination renumber", () => {
     // parent "9. p" (adopted "10." — dest run "10. z" → "11. z", width 3→3).
     // moved item "1. a" has own child "      - kid"; ordered forced sibling
@@ -601,10 +601,9 @@ describe("outdentListItem", () => {
     }
   });
 
-  // (test-analyzer-3) tab-indented nested item outdent: the documented
-  //     whole-tab removal (leadingCharsForColumns counts a straddling tab
-  //     whole) is exercised — a tab-indented child promotes by removing the
-  //     whole tab, not a partial column count. Lands after fable-1's fix.
+  // (test-analyzer-3) tab-indented nested item outdent: a tab that ends exactly
+  //     at the item's marker column is removed whole when the destination is
+  //     column 0 (the straddling case lives in "across tab-indented lines").
   it("(test-analyzer-3) tab-indented nested item outdents by whole-tab removal", () => {
     const view = mount("- A\n\t- B", EditorSelection.cursor(0), { tabSize: 4 });
     view.dispatch({ selection: EditorSelection.cursor(view.state.doc.line(2).to) }); // in "\t- B"
@@ -644,6 +643,216 @@ describe("outdentListItem", () => {
     try {
       expect(outdentListItem(view)).toBe(true);
       expect(view.state.doc.toString()).toBe("paragraph");
+    } finally {
+      view.destroy();
+    }
+  });
+});
+
+// The planners shift a line at its column BOUNDARY (the marker column for a
+// marker line, the old content column for a body line), not at the line start:
+// spaces prepended before a tab are absorbed by its tab stop, and a tab that
+// straddles the target column must be split, not dropped whole.
+describe("indent / outdent across tab-indented lines", () => {
+  it("Tab nests an item whose marker line is tab-indented", () => {
+    const view = mount("- outer\n  1. A\n\t2. B\n  3. C", EditorSelection.cursor(0), {
+      tabSize: 4,
+    });
+    view.dispatch({ selection: at(view, 3, 4) }); // in "\t2. B"
+    try {
+      expect(itemDepth(view, 3)).toBe(2); // B starts as A's sibling
+      expect(indentListItem(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("- outer\n  1. A\n\t 1. B\n  2. C");
+      expect(itemDepth(view, 3)).toBe(3); // B is now A's child
+      expect(itemDepth(view, 4)).toBe(2);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("Shift-Tab splits a tab that straddles the destination column", () => {
+    const view = mount("- outer\n  - A\n\t- B", EditorSelection.cursor(0), { tabSize: 4 });
+    view.dispatch({ selection: at(view, 3, 3) }); // in "\t- B"
+    try {
+      expect(itemDepth(view, 3)).toBe(3);
+      expect(outdentListItem(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("- outer\n  - A\n  - B");
+      expect(itemDepth(view, 3)).toBe(2); // A's sibling, not a top-level item
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("Shift-Tab on an empty item under a straddling tab keeps the caret after the marker", () => {
+    const view = mount("- outer\n  - A\n\t- ", EditorSelection.cursor(0), { tabSize: 4 });
+    view.dispatch({ selection: at(view, 3, 3) });
+    try {
+      expect(outdentListItem(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("- outer\n  - A\n  - ");
+      expect(view.state.selection.main.head).toBe(view.state.doc.line(3).to);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("Tab leaves the code bytes of a fenced block in the item untouched", () => {
+    const doc = "- A\n-   B\n\n\t```\n\t\tx\n\t```";
+    const view = mount(doc, EditorSelection.cursor(0), { tabSize: 4 });
+    view.dispatch({ selection: at(view, 2, 5) }); // in "-   B"
+    try {
+      expect(indentListItem(view)).toBe(true);
+      // Only the container indentation before column 4 moves; the code line's
+      // own tab after it is kept byte-for-byte.
+      expect(view.state.doc.toString()).toBe("- A\n  -   B\n\n\t  ```\n\t  \tx\n\t  ```");
+      expect(itemDepth(view, 2)).toBe(2);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("Tab moves a body line whose tab straddles the old content column", () => {
+    const view = mount("- A\n- B\n\n\t  body", EditorSelection.cursor(0), { tabSize: 4 });
+    view.dispatch({ selection: at(view, 2, 2) });
+    try {
+      expect(indentListItem(view)).toBe(true);
+      // The tab ends past the old content column (2), so the added columns go
+      // after it: the body keeps its indented-code offset from the new column.
+      expect(view.state.doc.toString()).toBe("- A\n  - B\n\n        body");
+      settledView(view);
+      const body = view.state.doc.line(4);
+      const node = syntaxTree(view.state).resolveInner(body.to - 1, -1);
+      expect(node.name).toBe("CodeText");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("Tab keeps a fenced code line's content width when its tab straddles the fence indent", () => {
+    const view = mount("- A\n- B\n\n\t ~~~\n\t\tx\n\t ~~~", EditorSelection.cursor(0), {
+      tabSize: 4,
+    });
+    view.dispatch({ selection: at(view, 2, 2) });
+    try {
+      expect(indentListItem(view)).toBe(true);
+      // Fence moves 5 -> 7; the code line moves with it so `x` stays 3 columns
+      // right of the fence (the literal stays "   x").
+      expect(view.state.doc.toString()).toBe("- A\n  - B\n\n       ~~~\n          x\n       ~~~");
+      expect(itemDepth(view, 5)).toBe(2);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("Tab keeps a tab in a quoted fenced code line whose quote sits left of the fence's", () => {
+    const view = mount("- A\n- B\n   > ~~~\n  > \tx\n   > ~~~", EditorSelection.cursor(0), {
+      tabSize: 4,
+    });
+    view.dispatch({ selection: at(view, 2, 2) });
+    try {
+      expect(indentListItem(view)).toBe(true);
+      // The tab is code content (the quote prefix is not fence indent): it must
+      // not be expanded to spaces.
+      expect(view.state.doc.line(4).text).toContain("\tx");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("Shift-Tab de-dents a tab-started body line by columns, not whole characters", () => {
+    const view = mount("- a\n  - B\n\t body", EditorSelection.cursor(0), { tabSize: 4 });
+    view.dispatch({ selection: at(view, 2, 4) });
+    try {
+      expect(outdentListItem(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("- a\n- B\n   body");
+      expect(itemDepth(view, 3)).toBe(1); // still B's paragraph
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("Shift-Tab de-dents a tab-started body line of a forced child by columns", () => {
+    const view = mount("- a\n    - B\n    - C\n\t  body", EditorSelection.cursor(0), {
+      tabSize: 4,
+    });
+    view.dispatch({ selection: at(view, 2, 6) });
+    try {
+      expect(outdentListItem(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("- a\n- B\n  - C\n\tbody");
+      expect(itemDepth(view, 3)).toBe(2); // C is now B's child
+      expect(itemDepth(view, 4)).toBe(2); // body still belongs to C
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("Shift-Tab re-homes a tab-indented forced child at the promoted item's content column", () => {
+    const view = mount("- outer\n  - A\n\t- B\n\t- C", EditorSelection.cursor(0), {
+      tabSize: 4,
+    });
+    view.dispatch({ selection: at(view, 3, 3) }); // in "\t- B"
+    try {
+      expect(outdentListItem(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("- outer\n  - A\n  - B\n\t- C");
+      expect(itemDepth(view, 3)).toBe(2);
+      expect(itemDepth(view, 4)).toBe(3); // C is now B's child
+    } finally {
+      view.destroy();
+    }
+  });
+});
+
+// A tab right after the marker re-stops at the moved marker, so the content
+// column does not move by "marker delta + marker width delta". The children of
+// such an item must follow the content column read off the rewritten marker line.
+describe("indent / outdent of an item whose marker is followed by a tab", () => {
+  function run(
+    doc: string,
+    line: number,
+    col: number,
+    command: (view: EditorView) => boolean
+  ): { view: EditorView; result: string } {
+    const view = mount(doc, EditorSelection.cursor(0), { tabSize: 4 });
+    view.dispatch({ selection: at(view, line, col) });
+    expect(command(view)).toBe(true);
+    return { view, result: view.state.doc.toString() };
+  }
+
+  it("Tab keeps a child nested when the marker is followed by a tab", () => {
+    const { view } = run("- A\n-\tB\n\t  - C", 2, 3, indentListItem);
+    try {
+      expect(itemDepth(view, 2)).toBe(2); // B under A
+      expect(itemDepth(view, 3)).toBe(3); // C still B's child
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("Tab keeps a child nested across an ordered marker followed by a tab", () => {
+    const { view } = run("1. A\n2.\tB\n\t- c", 2, 4, indentListItem);
+    try {
+      expect(itemDepth(view, 2)).toBe(2);
+      expect(itemDepth(view, 3)).toBe(3);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("Shift-Tab keeps a forced child's own children nested when its marker is followed by a tab", () => {
+    const { view } = run("- A\n    - B\n    -\tC\n\t\t   - d", 2, 6, outdentListItem);
+    try {
+      expect(itemDepth(view, 2)).toBe(1); // B promoted
+      expect(itemDepth(view, 3)).toBe(2); // C is now B's child
+      expect(itemDepth(view, 4)).toBe(3); // d still C's child
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("Shift-Tab keeps a child nested when the marker is followed by a tab", () => {
+    const { view } = run("- A\n  -\tB\n\t- c", 2, 5, outdentListItem);
+    try {
+      expect(itemDepth(view, 2)).toBe(1); // B promoted
+      expect(itemDepth(view, 3)).toBe(2); // c still B's child
     } finally {
       view.destroy();
     }
