@@ -22,13 +22,13 @@
 //      HC kinds, so treating alpha as opaque would report a ratio the user never
 //      sees — on exactly the token this audit is about. Ancestor-accumulated CSS
 //      `opacity` is folded in for the same reason (a dimmed control is dimmer
-//      than its `color` says). Backdrops are `background-color` only: a gradient cannot be rasterised
-//      here, so samples with one painted beneath them (detected by hit-test, since
-//      the fenced header band is a sibling, not an ancestor) print an explicit
-//      caveat rather than a number that looks exact (for the header controls the
-//      ratio against the real band colour is computed in CI by
-//      test/webview/fenced-code/cm-fenced-control-contrast.test.ts). A SECOND known limit has no
-//      detector: accumulated `opacity` is applied to the foreground only, while
+//      than its `color` says). Backdrops are `background-color` only: a gradient
+//      cannot be rasterised here, so samples with one painted beneath them
+//      (detected by hit-test, since the fenced header band is a sibling, not an
+//      ancestor) print an explicit caveat rather than a number that looks exact
+//      (for the header controls the ratio against the real band colour is
+//      computed in CI by test/webview/fenced-code/cm-fenced-control-contrast.test.ts).
+//      A SECOND known limit has no detector: accumulated `opacity` is applied to the foreground only, while
 //      `effectiveBg` composites ancestor `background-color`s at full strength. CSS
 //      composites an `opacity < 1` group — text AND any background layers inside it
 //      — as one unit, so the two models agree only while every layer effectiveBg

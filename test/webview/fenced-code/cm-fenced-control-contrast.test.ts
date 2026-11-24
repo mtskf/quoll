@@ -93,13 +93,14 @@ function resolveColor(expr: string, themeKind: string): Rgb | null {
   return resolveColor(fallback, themeKind);
 }
 
-const luminance = (c: Rgb): number => {
+/** WCAG relative luminance of an sRGB colour. */
+function luminance(c: Rgb): number {
   const [r, g, b] = c.map((v) => {
     const s = v / 255;
     return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
   });
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-};
+}
 
 /** WCAG ratio of `fg` at element opacity `alpha`, composited source-over onto `bg`. */
 function contrast(fg: Rgb, bg: Rgb, alpha: number): number {
