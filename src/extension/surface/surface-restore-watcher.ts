@@ -8,8 +8,9 @@
 // two surfaces apart. The Tabs API separates TabInputCustom (Quoll) from
 // TabInputText (built-in) cleanly. This is the only onDidChangeTabs listener FOR
 // SURFACE MEMORY; it coexists with the per-panel revert-rescue listener
-// (quoll-editor-panel.ts, watches e.closed — a separate concern). We read only
-// e.opened.
+// (quoll-editor-panel.ts, watches e.closed — a separate concern). We read
+// e.opened to reconcile opens, and e.closed only to remember "text" when the
+// last Quoll tab for a file closes while a text tab for it stays open.
 //
 // Restore is ASYMMETRIC (upgrade-to-Quoll only). Quoll's custom-editor priority
 // is "option", so VS Code never opens Quoll by default — a Quoll tab opening is
@@ -47,7 +48,7 @@ import type { IsWritableFileSystem } from "../file-system.js";
 import { canEditWith } from "./can-edit-with.js";
 import { openInQuollEditor } from "./open-in-quoll.js";
 import { openInTextEditor } from "./reopen-text-editor.js";
-import { type EditorSurface, reconcileOpen } from "./surface-memory.js";
+import { type EditorSurface, noteTextLeftOpen, reconcileOpen } from "./surface-memory.js";
 import { closeSourceTabIfClean } from "./surface-swap.js";
 
 function isMarkdownUri(uri: { path: string }): boolean {
@@ -182,7 +183,9 @@ export async function restoreSurface(
 
 /** Register the surface-restore watcher. For every newly OPENED `.md` tab, ask
  *  the in-memory store to reconcile: adopt the shown surface, or (asymmetric)
- *  upgrade a default text open into a remembered Quoll surface. A per-URI
+ *  upgrade a default text open into a remembered Quoll surface. For every
+ *  CLOSED Quoll tab, remember "text" if it was the file's last Quoll tab and a
+ *  text tab remains. A per-URI
  *  in-flight `Set` suppresses overlapping restores of the same URI
  *  (restoreSurface is fire-and-forget; several opened events for one URI can
  *  arrive close together). `quollViewType` is QuollEditorPanel.viewType (passed
@@ -208,9 +211,8 @@ export function registerSurfaceRestoreWatcher(
       // start a second restore. It is a DUPLICATE TEXT open landing mid-restore,
       // and which harm it does depends on how far the restore has got: before
       // the Quoll tab exists it re-enters decideOpenReconcile's upgrade branch
-      // and starts a redundant second restore; once the Quoll tab IS live the
-      // sibling makes reconcileOpen record "text" instead, silently overwriting
-      // the remembered "quoll" we are in the middle of restoring to.
+      // and starts a redundant second restore. Once the Quoll tab is live, a
+      // text open beside it is left in place and memory is not touched.
       if (restoring.has(uriKey)) {
         continue;
       }
@@ -236,6 +238,25 @@ export function registerSurfaceRestoreWatcher(
       void restoreSurface(reopen, uri, tab, quollViewType, deps).finally(() =>
         restoring.delete(uriKey)
       );
+    }
+    // A Quoll tab closed. If it was the last one for its file and a text tab
+    // remains, the text editor is what the user kept: remember it. This is the
+    // native route to a "text" memory: Reopen Editor With → Text Editor opens
+    // the text tab (beside the Quoll sibling, so nothing is recorded), then
+    // closes the Quoll tab, as two separate tab events. The closed tab is
+    // already gone from the live model when this fires.
+    for (const tab of e.closed) {
+      const closed = classifyOpenedTab(tab.input, quollViewType);
+      if (closed?.surface !== "quoll") {
+        continue;
+      }
+      const uriKey = closed.uri.toString();
+      const inputs = allOpenTabInputs();
+      const textRemains = hasSiblingInOtherSurface(inputs, uriKey, "quoll", quollViewType);
+      const quollRemains = hasSiblingInOtherSurface(inputs, uriKey, "text", quollViewType);
+      if (textRemains && !quollRemains) {
+        noteTextLeftOpen(uriKey);
+      }
     }
   });
 }

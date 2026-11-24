@@ -3,6 +3,8 @@ import type { Tab, TextDocument, Uri } from "vscode";
 import { TabInputCustom, TabInputText, window } from "vscode";
 import {
   __clearSurfaceMemoryForTest,
+  __getRememberedSurfaceForTest,
+  claimSurface,
   noteSurface,
 } from "../../../src/extension/surface/surface-memory.js";
 import {
@@ -330,6 +332,11 @@ describe("restoreSurface (seamed orchestrator)", () => {
  *  old one. */
 const stubTabGroups = window.tabGroups.all as unknown as unknown[];
 
+/** Fire a complete TabChangeEvent (VS Code always sends all three arrays). */
+function fireTabs(e: { opened?: unknown[]; closed?: unknown[] }): void {
+  fireTabChange({ opened: [], closed: [], changed: [], ...e });
+}
+
 describe("registerSurfaceRestoreWatcher in-flight guard", () => {
   const uriKey = "file:///a.md";
 
@@ -354,17 +361,15 @@ describe("registerSurfaceRestoreWatcher in-flight guard", () => {
    *  tab (not `undefined`, not some other tab) reaches the finalizer. */
   function fireTextOpen(): { input: TabInputText } {
     const tab = { input: new TabInputText(restoreUri) };
-    fireTabChange({ opened: [tab] });
+    fireTabs({ opened: [tab] });
     return tab;
   }
 
   it("suppresses an overlapping restore of the SAME uri while one is in flight", async () => {
     // Several `opened` events for one URI can arrive close together (the
     // watcher's fire-and-forget restore spans them). Without the guard the
-    // second text open starts a duplicate restore — and if restore #1 has
-    // already opened the Quoll tab, `hasSibling` makes reconcileOpen ADOPT the
-    // shown text surface, silently overwriting the remembered "quoll". Hold
-    // openDoc pending to keep restore #1 in flight across the second event.
+    // second text open starts a duplicate restore before the Quoll tab exists.
+    // Hold openDoc pending to keep restore #1 in flight across the second event.
     noteSurface(uriKey, "quoll");
     let releaseDoc: (doc: TextDocument) => void = () => {};
     const docReady = new Promise<TextDocument>((resolve) => {
@@ -468,7 +473,8 @@ describe("registerSurfaceRestoreWatcher in-flight guard", () => {
     try {
       fireTextOpen();
       await flushTasks();
-      expect(calls).toEqual([]); // sibling ⇒ adopt the shown surface, never bounce
+      expect(calls).toEqual([]);
+      expect(__getRememberedSurfaceForTest(uriKey)).toBe("quoll");
     } finally {
       sub.dispose();
     }
@@ -487,7 +493,7 @@ describe("registerSurfaceRestoreWatcher in-flight guard", () => {
     const { deps, calls } = makeRestoreDeps(fakeDoc(false));
     const sub = registerSurfaceRestoreWatcher("quoll.editMarkdown", deps);
     try {
-      fireTabChange({
+      fireTabs({
         opened: [{ input: new TabInputText(restoreUri) }, { input: new TabInputText(otherUri) }],
       });
       // Synchronous: the handler loops e.opened without awaiting, and
@@ -504,7 +510,7 @@ describe("registerSurfaceRestoreWatcher in-flight guard", () => {
     const { deps, calls } = makeRestoreDeps(fakeDoc(false));
     const sub = registerSurfaceRestoreWatcher("quoll.editMarkdown", deps);
     try {
-      fireTabChange({
+      fireTabs({
         opened: [{ input: new TabInputCustom(restoreUri, "quoll.editMarkdown") }],
       });
       await flushTasks();
@@ -521,5 +527,82 @@ describe("registerSurfaceRestoreWatcher in-flight guard", () => {
     fireTextOpen();
     await flushTasks();
     expect(calls).toEqual([]);
+  });
+});
+
+describe("registerSurfaceRestoreWatcher on a closed Quoll tab", () => {
+  const uriKey = "file:///a.md";
+  const quollTab = () => ({ input: new TabInputCustom(restoreUri, quollVt) });
+  const textTab = () => ({ input: new TabInputText(restoreUri) });
+  let sub: { dispose(): void };
+  let calls: string[];
+
+  beforeEach(() => {
+    resetStubTabListeners();
+    __clearSurfaceMemoryForTest();
+    stubTabGroups.length = 0;
+    const restore = makeRestoreDeps(fakeDoc(false));
+    calls = restore.calls;
+    sub = registerSurfaceRestoreWatcher(quollVt, restore.deps);
+  });
+
+  afterEach(() => {
+    sub.dispose();
+    resetStubTabListeners();
+    __clearSurfaceMemoryForTest();
+    stubTabGroups.length = 0;
+  });
+
+  /** Set the live tab model the handler reads (the closed tab is already gone). */
+  function liveTabs(...tabs: unknown[]): void {
+    stubTabGroups.length = 0;
+    stubTabGroups.push({ tabs });
+  }
+
+  it('records "text" for an in-place Reopen Editor With → Text Editor', async () => {
+    // VS Code opens the text tab beside the Quoll tab (one event), then closes
+    // the Quoll tab (a separate event).
+    noteSurface(uriKey, "quoll");
+    liveTabs(quollTab(), textTab());
+    fireTabs({ opened: [textTab()] });
+    expect(__getRememberedSurfaceForTest(uriKey)).toBe("quoll");
+    liveTabs(textTab());
+    fireTabs({ closed: [quollTab()] });
+    expect(__getRememberedSurfaceForTest(uriKey)).toBe("text");
+    // A later fresh text open stays in the text editor.
+    liveTabs();
+    fireTabs({ opened: [textTab()] });
+    await flushTasks();
+    expect(calls).toEqual([]);
+  });
+
+  it("records nothing when no text tab remains", () => {
+    noteSurface(uriKey, "quoll");
+    fireTabs({ closed: [quollTab()] });
+    expect(__getRememberedSurfaceForTest(uriKey)).toBe("quoll");
+  });
+
+  it("records nothing when another Quoll tab for the file remains", () => {
+    noteSurface(uriKey, "quoll");
+    liveTabs(quollTab(), textTab());
+    fireTabs({ closed: [quollTab()] });
+    expect(__getRememberedSurfaceForTest(uriKey)).toBe("quoll");
+  });
+
+  it('leaves "text" after a forward swap closes its own Quoll tab', () => {
+    const claim = claimSurface(uriKey);
+    liveTabs(textTab());
+    fireTabs({ closed: [quollTab()] });
+    expect(__getRememberedSurfaceForTest(uriKey)).toBe("text");
+    claim.record("text");
+    expect(__getRememberedSurfaceForTest(uriKey)).toBe("text");
+  });
+
+  it("does not supersede an outstanding claim", () => {
+    noteSurface(uriKey, "quoll");
+    const claim = claimSurface(uriKey);
+    liveTabs(textTab());
+    fireTabs({ closed: [quollTab()] });
+    expect(claim.isCurrent()).toBe(true);
   });
 });

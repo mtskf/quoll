@@ -187,10 +187,9 @@ describe("caret-handoff wiring: activeEditorSub reveal guard", () => {
 });
 
 // applyCaretToTextEditor is BEST-EFFORT and must never throw: the panel's
-// switch-to-text fulfilled arm calls it right before finalizeForwardSwap, and a
-// throw there skips the finalize (surface memory stays on the restore watcher's
-// sibling-adopt "text", the Quoll tab is never closed) as an unhandled rejection
-// — `.then(f, r)`'s `r` does not catch a throw from `f`. Pinned here, at the
+// switch-to-text path calls it right before finalizeForwardSwap, and a throw
+// there skips the finalize (no outcome recorded in surface memory, the Quoll tab
+// is never closed) and turns the switch into an abort. Pinned here, at the
 // wiring, so every caller (that arm + the activeEditorSub tracker) inherits it.
 describe("caret-handoff wiring: applyCaretToTextEditor never throws", () => {
   beforeEach(() => {

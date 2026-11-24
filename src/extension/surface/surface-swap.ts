@@ -18,7 +18,7 @@ import {
 } from "vscode";
 import type { EditSettledBarrier } from "../session/edit-settled-barrier.js";
 import { showSafely } from "./show-safely.js";
-import { noteSurface } from "./surface-memory.js";
+import type { SurfaceClaim } from "./surface-memory.js";
 
 /** Safety gate: close the source tab only when there is one AND the document is
  *  provably clean — either it was already clean, or it was dirty and the save
@@ -147,17 +147,21 @@ const REAL_SWAP_DEPS: FinalizeSwapDeps = {
  *
  *  Resolves to the OUTCOME: `true` when the swap completed — the source tab was
  *  closed, or was already gone at re-resolve (nothing left to close). `false`
- *  when it did not: no captured source tab, the doc could not be made clean
- *  (save false / throws / still dirty), `closeTab`
+ *  when it did not: the swap was superseded, there was no captured source tab,
+ *  the doc could not be made clean (save false / throws / still dirty), `closeTab`
  *  resolved false (cancelled), or anything threw (e.g. `openDoc`). Still never
  *  throws. Forward swaps consume it through `finalizeForwardSwap`. */
 export async function finalizeSurfaceSwap(
   uri: Uri,
   sourceTab: Tab | undefined,
-  deps: FinalizeSwapDeps = REAL_SWAP_DEPS
+  deps: FinalizeSwapDeps = REAL_SWAP_DEPS,
+  isCurrent: () => boolean = () => true
 ): Promise<boolean> {
   try {
     const doc = await deps.openDoc(uri);
+    if (!isCurrent()) {
+      return false;
+    }
     const wasDirty = doc.isDirty;
     let saveSucceeded = false;
     // Only save a dirty FILE-scheme doc. A non-file/untitled doc's save() can
@@ -171,6 +175,9 @@ export async function finalizeSurfaceSwap(
         console.error("[quoll] surface-swap: save before close failed", err);
         saveSucceeded = false;
       }
+    }
+    if (!isCurrent()) {
+      return false;
     }
     const allow = shouldCloseSourceTab({
       hasSourceTab: sourceTab !== undefined,
@@ -213,43 +220,46 @@ export async function finalizeSurfaceSwap(
   }
 }
 
-/** FORWARD-only (Quoll → text) wrapper around `finalizeSurfaceSwap`: awaits the
- *  outcome, then records it in surface memory — "text" when the swap completed,
- *  "quoll" when it did not. The write is deliberately LAST: the restore watcher
- *  already recorded "text" (sibling-adopt) the moment the target text tab opened
- *  beside the still-open Quoll tab, so only a write after finalize settles can
- *  correct a refused / failed swap back to "quoll". Same arguments as
- *  `finalizeSurfaceSwap`; never throws. Known boundary: overlapping operations
- *  on the same URI are not arbitrated — writing after finalize's awaits widens
- *  the window in which an earlier swap can settle after a newer surface
- *  selection and overwrite its memory (per-URI arbitration is ARCH-06a-2's). */
+/** Finalize a Quoll → text swap while its claim is current, then record the
+ *  outcome if it still owns the URI: "text" on completion, "quoll" otherwise. */
 export async function finalizeForwardSwap(
   uri: Uri,
   sourceTab: Tab | undefined,
+  claim: SurfaceClaim,
   deps: FinalizeSwapDeps = REAL_SWAP_DEPS
 ): Promise<boolean> {
-  const completed = await finalizeSurfaceSwap(uri, sourceTab, deps);
-  noteSurface(uri.toString(), completed ? "text" : "quoll");
+  const completed = await finalizeSurfaceSwap(uri, sourceTab, deps, claim.isCurrent);
+  claim.record(completed ? "text" : "quoll");
   return completed;
 }
 
-/** Forward switch body for the panel's `switch-to-text` arm. One try/catch around
- *  open → caret restore → finalize, so a throw anywhere (including a synchronous
- *  one from `open`) still reports `postAborted`; a refused finalize and a barrier
- *  drop report it too. Every stopped switch must release the webview's lock. */
+/** Forward switch body for the panel's `switch-to-text` arm. Claim the URI at
+ *  switch receipt, before the barrier may defer the switch, so a deliberate
+ *  selection made while it waits supersedes it; a superseded switch never opens
+ *  text. Every stopped switch reports an abort to release the webview's lock. */
 export function runForwardSwitch(deps: {
   barrier: Pick<EditSettledBarrier, "run">;
+  claim: () => SurfaceClaim;
   open: () => Promise<unknown>;
   restoreCaret: () => void;
-  finalize: () => Promise<boolean>;
+  finalize: (claim: SurfaceClaim) => Promise<boolean>;
   postAborted: () => void;
   onError?: (err: unknown) => void;
 }): void {
+  const claim = deps.claim();
   const op = async (): Promise<void> => {
     try {
+      if (!claim.isCurrent()) {
+        deps.postAborted();
+        return;
+      }
       await deps.open();
+      if (!claim.isCurrent()) {
+        deps.postAborted();
+        return;
+      }
       deps.restoreCaret();
-      if (!(await deps.finalize())) {
+      if (!(await deps.finalize(claim))) {
         deps.postAborted();
       }
     } catch (err) {
