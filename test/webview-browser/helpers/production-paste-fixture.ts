@@ -51,6 +51,7 @@ export async function productionPasteFixture(
     settledEditId: 0,
   };
   const send = (message: HostToWebview) => win.postMessage(message, "*");
+  let seeded = false;
   Object.defineProperty(win, "acquireVsCodeApi", {
     value: () => ({
       getState: () => undefined,
@@ -58,6 +59,16 @@ export async function productionPasteFixture(
       postMessage(message: WebviewToHost) {
         messages.push(message);
         if (message.type === "ready") {
+          // The shell subscribed before posting ready, so this listener runs
+          // after the shell's handler for the same event: once it fires, the
+          // seed (content, canWrite) is applied. Waiting on the content alone
+          // is vacuous for an empty seed, and the editor mounts read-only.
+          win.addEventListener("message", function onSeed(event) {
+            if (event.data?.type === "document") {
+              seeded = true;
+              win.removeEventListener("message", onSeed);
+            }
+          });
           send(snapshot);
         }
         if (message.type === "edit") {
@@ -87,7 +98,8 @@ export async function productionPasteFixture(
     if (!view) {
       throw new Error("Production EditorView not found");
     }
-    await expect.poll(() => view.state.doc.toString()).toBe(content.replace(/\r\n?/g, "\n"));
+    await expect.poll(() => seeded).toBe(true);
+    expect(view.state.doc.toString()).toBe(content.replace(/\r\n?/g, "\n"));
 
     // Observe dispatch without injecting foreign facets, effects or extensions.
     let documentChanges = 0;
