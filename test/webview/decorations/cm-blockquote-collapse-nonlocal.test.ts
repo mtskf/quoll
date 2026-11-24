@@ -273,6 +273,70 @@ describe("blockquoteCollapseField — non-local structure changes", () => {
     expect(now[0].expanded).toBe(true);
   });
 
+  it("5c. an expanded quote cut short by the frontier (key === frontier) stays expanded", () => {
+    // Several paragraphs (bare `>` between them): the parser advances one paragraph at a time,
+    // so a starved budget can stop INSIDE the quote, leaving its key exactly on the frontier.
+    const multi = lines(14, (k) => (k % 3 === 2 ? ">" : `> line ${k}`));
+    let state = stateWith(["prose above", "", ...multi, "", "prose below"].join("\n"));
+    const key = state.doc.line(3).from;
+    state = state.update({
+      effects: setBlockquoteCollapseEffect.of({ key, expanded: true }),
+    }).state;
+    expect(state.field(blockquoteCollapseField).blocks[0].expanded).toBe(true);
+
+    // Freeze the clock for the first n reads, then jump: the parse stops after a few advances.
+    let starved: EditorState | null = null;
+    for (let n = 1; n <= 40 && starved === null; n++) {
+      const base = Date.now();
+      let calls = 0;
+      const spy = vi
+        .spyOn(Date, "now")
+        .mockImplementation(() => (++calls <= n ? base : base + 1e6));
+      let candidate: EditorState;
+      try {
+        candidate = state.update({ changes: { from: key + 3, to: key + 3, insert: "x" } }).state;
+      } finally {
+        spy.mockRestore();
+      }
+      const tree = syntaxTree(candidate);
+      const last = tree.topNode.lastChild;
+      if (
+        tree.length < candidate.doc.length &&
+        last !== null &&
+        last.name === "Blockquote" &&
+        candidate.doc.lineAt(last.from).from === key &&
+        candidate.field(blockquoteCollapseField).blocks.length === 0
+      ) {
+        starved = candidate;
+      }
+    }
+    // Non-vacuity: the tree ends in a truncated quote, too short to have a record yet.
+    expect(starved).not.toBeNull();
+
+    const now = expectMatchesFresh(settledState(starved as EditorState));
+    expect(now).toHaveLength(1);
+    expect(now[0].key).toBe(key);
+    expect(now[0].expanded).toBe(true);
+  });
+
+  it("5d. a deleted expanded quote's key does not open a different quote that lands on it", () => {
+    // Quote A (expanded), a prose separator, quote B (collapsed). One edit deletes A and the
+    // separator, so B now starts at A's old offset. B was never toggled: it must stay collapsed.
+    const doc = [quote(14), "", "sep", "", quote(14), "", "tail"].join("\n");
+    let state = stateWith(doc);
+    state = state.update({
+      effects: setBlockquoteCollapseEffect.of({ key: 0, expanded: true }),
+    }).state;
+    expect(expectMatchesFresh(state).map((b) => b.expanded)).toEqual([true, false]);
+
+    state = edit(state, 0, state.doc.line(18).from, "");
+    expect(state.doc.line(1).text).toBe("> line 1");
+    const now = expectMatchesFresh(state);
+    expect(now).toHaveLength(1);
+    expect(now[0].key).toBe(0);
+    expect(now[0].expanded).toBe(false);
+  });
+
   it("6. policy pin: a plain prose insertion plans a FULL rebuild (Decision 3)", () => {
     // Tripwire for swapping in a bounded policy. Plan Decision 3 lists three parser-verified
     // counterexamples where a distant edit changes whether a top-level Blockquote exists

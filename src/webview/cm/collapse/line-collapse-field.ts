@@ -479,8 +479,22 @@ export function defineLineCollapseField<X>(
       let working: ReadonlySet<number> = prev.expanded;
       if (tr.docChanged) {
         const mapped = new Set<number>();
+        // A key whose whole opening line (break included) a change deletes belongs to a block
+        // that is gone: mapPos would park it on the deletion boundary, where a different block
+        // that later lands on that offset would open without ever being toggled.
+        const { doc } = tr.startState;
+        const consumed = (k: number): boolean => {
+          const lineTo = doc.lineAt(k).to;
+          let hit = false;
+          tr.changes.iterChangedRanges((from, to) => {
+            hit ||= from <= k && to > lineTo;
+          });
+          return hit;
+        };
         for (const k of prev.expanded) {
-          mapped.add(tr.changes.mapPos(k, 1));
+          if (!consumed(k)) {
+            mapped.add(tr.changes.mapPos(k, 1));
+          }
         }
         working = mapped;
       }
