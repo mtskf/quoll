@@ -710,6 +710,66 @@ describe("indent / outdent across tab-indented lines", () => {
     }
   });
 
+  it("Tab moves a body line whose tab straddles the old content column", () => {
+    const view = mount("- A\n- B\n\n\t  body", EditorSelection.cursor(0), { tabSize: 4 });
+    view.dispatch({ selection: at(view, 2, 2) });
+    try {
+      expect(indentListItem(view)).toBe(true);
+      // The tab ends past the old content column (2), so the added columns go
+      // after it: the body keeps its indented-code offset from the new column.
+      expect(view.state.doc.toString()).toBe("- A\n  - B\n\n        body");
+      settledView(view);
+      const body = view.state.doc.line(4);
+      const node = syntaxTree(view.state).resolveInner(body.to - 1, -1);
+      expect(node.name).toBe("CodeText");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("Tab keeps a fenced code line's content width when its tab straddles the fence indent", () => {
+    const view = mount("- A\n- B\n\n\t ~~~\n\t\tx\n\t ~~~", EditorSelection.cursor(0), {
+      tabSize: 4,
+    });
+    view.dispatch({ selection: at(view, 2, 2) });
+    try {
+      expect(indentListItem(view)).toBe(true);
+      // Fence moves 5 -> 7; the code line moves with it so `x` stays 3 columns
+      // right of the fence (the literal stays "   x").
+      expect(view.state.doc.toString()).toBe("- A\n  - B\n\n       ~~~\n          x\n       ~~~");
+      expect(itemDepth(view, 5)).toBe(2);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("Shift-Tab de-dents a tab-started body line by columns, not whole characters", () => {
+    const view = mount("- a\n  - B\n\t body", EditorSelection.cursor(0), { tabSize: 4 });
+    view.dispatch({ selection: at(view, 2, 4) });
+    try {
+      expect(outdentListItem(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("- a\n- B\n   body");
+      expect(itemDepth(view, 3)).toBe(1); // still B's paragraph
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("Shift-Tab de-dents a tab-started body line of a forced child by columns", () => {
+    const view = mount("- a\n    - B\n    - C\n\t  body", EditorSelection.cursor(0), {
+      tabSize: 4,
+    });
+    view.dispatch({ selection: at(view, 2, 6) });
+    try {
+      expect(outdentListItem(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("- a\n- B\n  - C\n\tbody");
+      expect(itemDepth(view, 3)).toBe(2); // C is now B's child
+      expect(itemDepth(view, 4)).toBe(2); // body still belongs to C
+    } finally {
+      view.destroy();
+    }
+  });
+
   it("Shift-Tab re-homes a tab-indented forced child at the promoted item's content column", () => {
     const view = mount("- outer\n  - A\n\t- B\n\t- C", EditorSelection.cursor(0), {
       tabSize: 4,

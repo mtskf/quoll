@@ -237,9 +237,18 @@ function shiftMarkerLine(state: EditorState, mark: SyntaxNode, delta: number): P
   return shift === null ? null : { from: shift.from, to: shift.to, insert: shift.insert };
 }
 
+/** True when `col` still lies within the indentation a fenced block's code line
+ *  gives up to the opening fence (CommonMark strips up to that many columns), so
+ *  a whitespace char there is container padding to move, not code content. */
+function inFenceIndent(state: EditorState, codeText: SyntaxNode, col: number): boolean {
+  const fence = codeText.parent;
+  return fence?.name === "FencedCode" && col < columnAt(state, fence.from);
+}
+
 /** Expand tabs whose width changes across nested list and quote prefixes to preserve indentation.
  *  HTML continuation payload starts at its owning item's content column. Preserve CodeText
- *  and any quote-padding tab immediately before it. */
+ *  (past the fence's own indentation) and any quote-padding tab immediately
+ *  before it. */
 function shiftLine(
   state: EditorState,
   item: SyntaxNode,
@@ -283,7 +292,7 @@ function shiftLine(
     const pos = line.from + i;
     const node = item.resolve(pos, 1);
     if (
-      node.name === "CodeText" ||
+      (node.name === "CodeText" && !inFenceIndent(state, node, col)) ||
       (line.text[i] === "\t" &&
         item.resolve(pos, -1).name === "QuoteMark" &&
         item.resolve(pos + 1, 1).name === "CodeText")
