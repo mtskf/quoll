@@ -7,43 +7,36 @@
 // measurement (A11Y-08b). One table per themeKind makes "a themeKind has no
 // palette" impossible to express.
 //
-// PROVENANCE — it DIFFERS per themeKind; do not read the HC claim as covering all four:
-//   • HC_DARK / HC_LIGHT are verbatim from the installed VS Code build:
-//       colorRegistry defaults:
-//         <app>/Contents/Resources/app/out/vs/workbench/workbench.desktop.main.js
-//         (`registerColor(id, { dark, light, hcDark, hcLight })`)
-//       Dark High Contrast theme overrides:
-//         <app>/Contents/Resources/app/extensions/theme-defaults/themes/hc_black.json
-//       (hc_light.json overrides nothing relevant → Light High Contrast is pure
-//        registry defaults.)
-//     TWO of the HC tokens live OUTSIDE the `registerColor(...)` call shape — search
-//     for these where they actually are, not in workbench.desktop.main.js:
-//       gitDecoration-addedResourceForeground → <app>/…/app/extensions/git/package.json,
-//         `contributes.colors` (note the key names there are `highContrast` /
-//         `highContrastLight`, not `hcDark` / `hcLight`)
-//       terminal-ansiGreen → the ANSI defaults table in workbench.desktop.main.js
-//         (`"terminal.ansiGreen":{index:2,defaults:{…}}`), not a registerColor call
-//   • LIGHT / DARK are APPROXIMATIONS of Default Light+ / Dark+, carried over
-//     unchanged from the template's older stub block; they were never re-derived
-//     against the installed build. The drift KNOWN as of 2026-08-05 — NOT known to
-//     be exhaustive, since 30 of the 82 light/dark token-kind pairs resolve through
-//     registry aliases that have not all been re-derived:
-//       list-activeSelectionBackground dark (#094771 vs registry #04395E)
-//       textCodeBlock-background (both kinds)
-//       terminal-ansiGreen light (#00bc00 vs #107C10)
-//       testing-iconPassed light (#388a34 vs #73c991)
-//       editorHoverWidget-border light + dark, and editorWidget-border both
-//         (vs the transparent(foreground, .2) alias)
-//       editorError-foreground light (#cd3131 vs #E51400)
-//       editorInfo-foreground both (vs {light:#0063d3, dark:#59a4f9})
-//       charts-blue both (bare alias of editorInfo.foreground)
-//     ⚠️ ALIASES are the trap here: editorHoverWidget.border is a bare alias of
-//     editorWidget.border and charts.red of editorError.foreground, so the table
-//     currently carries ONE registry colour under TWO values — charts-red #e51400
-//     (correct) beside editorError-foreground #cd3131 (stale), which no real host
-//     can produce. Alias arms must be refreshed together.
-//     Left as-is deliberately — refreshing them is separate work with its own
-//     contrast fallout; this note exists so nobody reads them as measured.
+// PROVENANCE — every table is derived from the installed VS Code build. LIGHT/DARK
+// were re-derived against 1.147.0 on 2026-11-24 (they had been carried over from
+// older template stubs); HC_DARK/HC_LIGHT were authored the same way for A11Y-08b
+// and re-checked against 1.147.0 the same day — all unchanged. LIGHT / DARK are
+// the "Light (Visual Studio)" / "Dark (Visual Studio)" bases that Default Light+ /
+// Dark+ include (light_plus.json / dark_plus.json add no
+// workbench colours of their own). Sources:
+//   colorRegistry defaults:
+//     <app>/Contents/Resources/app/out/vs/workbench/workbench.desktop.main.js
+//     (`registerColor(id, { dark, light, hcDark, hcLight })`, minified as `pe(...)`)
+//   theme-file overrides (win over the registry):
+//     <app>/Contents/Resources/app/extensions/theme-defaults/themes/
+//       light_vs.json / dark_vs.json / hc_black.json
+//     (hc_light.json overrides nothing relevant → Light High Contrast is pure
+//      registry defaults.)
+//   TWO tokens live OUTSIDE the `registerColor(...)` call shape — search for these
+//   where they actually are, not as registerColor calls:
+//     gitDecoration-addedResourceForeground → <app>/…/app/extensions/git/package.json,
+//       `contributes.colors` (note the key names there are `highContrast` /
+//       `highContrastLight`, not `hcDark` / `hcLight`)
+//     terminal-ansiGreen → the ANSI defaults table in workbench.desktop.main.js
+//       (`"terminal.ansiGreen":{index:2,defaults:{…}}`), not a registerColor call
+// Values are what the registry RESOLVES to, not what its literal says: an alias
+// (`editorHoverWidget.border` → `editorWidget.border` → transparent(
+// editorWidget.foreground, .2) → foreground) is followed to its base, through the
+// theme file at every hop, so alias arms always agree (charts-red ≡
+// editorError-foreground, charts-blue ≡ editorInfo-foreground). The 2026-11-24 pass
+// evaluated every token in all four tables this way; every value matches.
+// A VS Code upgrade can move any of them — re-derive the whole set, never patch a
+// named subset.
 // When checking a value: VS Code resolves a colour as (theme file override) >
 // (colorRegistry default), so a registry-only citation is NOT evidence of drift —
 // check extensions/theme-defaults/themes/{light,dark}_vs.json first.
@@ -100,17 +93,17 @@ const LIGHT = {
   "editor-foreground": "#000000",
   "editor-selectionBackground": "#add6ff",
   "editorCursor-foreground": "#000000",
-  "editorError-foreground": "#cd3131",
+  "editorError-foreground": "#e51400",
   "editorWarning-foreground": "#bf8803",
-  "editorInfo-foreground": "#1a85ff",
+  "editorInfo-foreground": "#0063d3",
   "editorLineNumber-foreground": "#237893",
   "editorLineNumber-activeForeground": "#0b216f",
   "editorWidget-background": "#f3f3f3",
   "editorWidget-foreground": "#616161",
-  "editorWidget-border": "#d4d4d4",
+  "editorWidget-border": "rgba(97, 97, 97, 0.2)",
   "editorHoverWidget-background": "#f3f3f3",
   "editorHoverWidget-foreground": "#616161",
-  "editorHoverWidget-border": "#c8c8c8",
+  "editorHoverWidget-border": "rgba(97, 97, 97, 0.2)",
   "button-background": "#007acc",
   "button-foreground": "#ffffff",
   "list-activeSelectionBackground": "#0060c0",
@@ -118,25 +111,25 @@ const LIGHT = {
   "list-hoverBackground": "#e8e8e8",
   "textLink-foreground": "#006ab1",
   "textLink-activeForeground": "#006ab1",
-  "textCodeBlock-background": "#e8e8e8",
+  "textCodeBlock-background": "rgba(220, 220, 220, 0.4)",
   "inputValidation-errorBackground": "#f2dede",
   "inputValidation-warningBackground": "#f6f5d2",
-  "charts-blue": "#1a85ff",
+  "charts-blue": "#0063d3",
   "charts-green": "#388a34",
   "charts-purple": "#652d90",
   "charts-red": "#e51400",
   "charts-yellow": "#bf8803",
-  "terminal-ansiGreen": "#00bc00",
-  "testing-iconPassed": "#388a34",
+  "terminal-ansiGreen": "#107c10",
+  "testing-iconPassed": "#73c991",
   "gitDecoration-addedResourceForeground": "#587c0c",
 };
 
 // Standalone, NOT `{ ...LIGHT, … }`: a spread is the same cross-themeKind cascade
 // this module exists to remove, just relocated from CSS into JS — a token added to
 // LIGHT would silently land in DARK carrying the light value while correctly
-// missing from both HC tables. The three tokens that are genuinely registry-identical
-// with light (panel-border, button-foreground, list-activeSelectionForeground) are
-// repeated here on purpose.
+// missing from both HC tables. The four tokens that are genuinely registry-identical
+// with light (panel-border, button-foreground, list-activeSelectionForeground,
+// testing-iconPassed) are repeated here on purpose.
 const DARK = {
   foreground: "#cccccc",
   descriptionForeground: "rgba(204, 204, 204, 0.7)",
@@ -152,26 +145,26 @@ const DARK = {
   "editorCursor-foreground": "#aeafad",
   "editorError-foreground": "#f14c4c",
   "editorWarning-foreground": "#cca700",
-  "editorInfo-foreground": "#3794ff",
+  "editorInfo-foreground": "#59a4f9",
   "editorLineNumber-foreground": "#858585",
   "editorLineNumber-activeForeground": "#c6c6c6",
   "editorWidget-background": "#252526",
   "editorWidget-foreground": "#cccccc",
-  "editorWidget-border": "#454545",
+  "editorWidget-border": "rgba(204, 204, 204, 0.2)",
   "editorHoverWidget-background": "#252526",
   "editorHoverWidget-foreground": "#cccccc",
-  "editorHoverWidget-border": "#454545",
+  "editorHoverWidget-border": "rgba(204, 204, 204, 0.2)",
   "button-background": "#0e639c",
   "button-foreground": "#ffffff",
-  "list-activeSelectionBackground": "#094771",
+  "list-activeSelectionBackground": "#04395e",
   "list-activeSelectionForeground": "#ffffff",
   "list-hoverBackground": "#2a2d2e",
   "textLink-foreground": "#3794ff",
   "textLink-activeForeground": "#3794ff",
-  "textCodeBlock-background": "rgba(255, 255, 255, 0.08)",
+  "textCodeBlock-background": "rgba(10, 10, 10, 0.4)",
   "inputValidation-errorBackground": "#5a1d1d",
   "inputValidation-warningBackground": "#352a05",
-  "charts-blue": "#3794ff",
+  "charts-blue": "#59a4f9",
   "charts-green": "#89d185",
   "charts-purple": "#b180d7",
   "charts-red": "#f14c4c",
