@@ -267,6 +267,37 @@ const HC_LIGHT = {
   "gitDecoration-addedResourceForeground": "#374E06",
 };
 
+// Bundled VS Code themes that are NOT a themeKind of their own (each reports as plain
+// `dark` / `light` over the wire) but ship colours the four tables above do not
+// cover. Kept OUT of PALETTES on purpose: PALETTES' keys are pinned to the themeKind
+// wire vocabulary and drive the harness, which never renders these. They exist for
+// test/webview/cm-quote-ink-contrast.test.ts, so each carries ONLY the three tokens
+// that test consumes (its REQUIRED_TOKENS) plus the themeKind whose Quoll surface
+// fill it renders under. Read from each theme file's own `colors` block in 1.147.0
+// (2026-11-24); none of the three tokens is inherited through its `include`.
+//   2026 Dark  → extensions/theme-defaults/themes/2026-dark.json
+//   2026 Light → extensions/theme-defaults/themes/2026-light.json
+// 2026 Dark is why this exists: under the old 90/83/76 ink ramp its depth-3 quote
+// measured 4.24:1 (A11Y-17). Re-read these on a VS Code bump with the tables above.
+export const EXTRA_THEMES = {
+  "2026-dark": {
+    themeKind: "dark",
+    palette: {
+      descriptionForeground: "#8C8C8C",
+      "editor-foreground": "#BBBEBF",
+      "editor-background": "#121314",
+    },
+  },
+  "2026-light": {
+    themeKind: "light",
+    palette: {
+      descriptionForeground: "#606060",
+      "editor-foreground": "#202020",
+      "editor-background": "#FFFFFF",
+    },
+  },
+};
+
 export const PALETTES = { light: LIGHT, dark: DARK, "hc-dark": HC_DARK, "hc-light": HC_LIGHT };
 
 /** The themeKinds this module can render, derived from the tables themselves so

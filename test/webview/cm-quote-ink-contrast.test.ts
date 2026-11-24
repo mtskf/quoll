@@ -74,7 +74,7 @@ import { type Tag, tags as t } from "@lezer/highlight";
 import { describe, expect, it } from "vitest";
 
 // @ts-expect-error — plain .mjs with no bundled types; vitest transpiles it.
-import { PALETTES } from "../../scripts/preview/vscode-theme-palettes.mjs";
+import { EXTRA_THEMES, PALETTES } from "../../scripts/preview/vscode-theme-palettes.mjs";
 import { blockStyleThemeSpec, quollHighlightSpec } from "../../src/webview/cm/theme.js";
 
 const AA_NORMAL_TEXT = 4.5; // WCAG 2.x AA, normal-size text
@@ -620,11 +620,12 @@ const PANEL_SELECTORS = [
 function quoteInkRatio(
   themeKind: string,
   level: { label: string; selector: string },
-  spec: Record<string, Record<string, string>> = blockSpec
+  spec: Record<string, Record<string, string>> = blockSpec,
+  palette: unknown = PALETTES[themeKind]
 ): number {
   const fill = spec[level.selector]?.backgroundColor;
   const inkMix = spec[level.selector]?.["--quoll-quote-ink-mix"];
-  const vars = new Map(varsFor(themeKind));
+  const vars = new Map(varsFor(themeKind, palette));
   vars.set("--quoll-surface-fill", surfaceFillFor(themeKind));
   if (inkMix !== undefined) {
     vars.set("--quoll-quote-ink-mix", inkMix);
@@ -647,6 +648,20 @@ function quoteInkRatio(
 }
 
 const THEME_KINDS: string[] = Object.keys(PALETTES);
+
+/**
+ * What the sweep measures: one case per themeKind table, plus each bundled theme in
+ * EXTRA_THEMES (a theme that reports an existing themeKind but ships its own colours —
+ * VS Code's 2026 Dark is what A11Y-17 found sub-AA with only the four tables swept).
+ * An extra theme borrows its themeKind's Quoll surface fill, which is what a real
+ * host paints under it.
+ */
+const SWEEP: { name: string; themeKind: string; palette: unknown }[] = [
+  ...THEME_KINDS.map((themeKind) => ({ name: themeKind, themeKind, palette: PALETTES[themeKind] })),
+  ...Object.entries(EXTRA_THEMES as Record<string, { themeKind: string; palette: unknown }>).map(
+    ([name, { themeKind, palette }]) => ({ name, themeKind, palette })
+  ),
+];
 
 describe("quote ink resolves above the AA floor on every shipped palette (A11Y-14)", () => {
   it("measures the ONE formula both use sites carry", () => {
@@ -719,26 +734,30 @@ describe("quote ink resolves above the AA floor on every shipped palette (A11Y-1
     ).toHaveLength(1);
   });
 
-  it("actually generated a case per themeKind and panel level", () => {
-    // The AA cases below are GENERATED from these two lists, so an empty one would
-    // make this whole file vacuously green — the exact shape of failure it exists to
-    // remove. The kinds are derived from the palette module rather than restated
-    // here (test/build/theme-palettes.test.ts pins that list equal to the wire
-    // vocabulary), so a fifth palette widens the sweep instead of going unmeasured.
+  it("actually generated a case per swept palette and panel level", () => {
+    // The AA cases below are GENERATED from SWEEP (PALETTES + EXTRA_THEMES) and
+    // PANEL_SELECTORS, so an empty list would make this whole file vacuously green —
+    // the exact shape of failure it exists to remove. The kinds are derived from the
+    // palette module rather than restated here (test/build/theme-palettes.test.ts
+    // pins that list equal to the wire vocabulary), so a new palette or a new
+    // EXTRA_THEMES entry widens the sweep instead of going unmeasured. The
+    // "2026-dark" pin stops EXTRA_THEMES being emptied, which would drop VS Code's
+    // 2026 Dark (A11Y-17) from the sweep.
     expect(THEME_KINDS.length).toBeGreaterThanOrEqual(4);
+    expect(SWEEP.map((c) => c.name)).toContain("2026-dark");
     expect(PANEL_SELECTORS.length).toBe(3);
   });
 
-  for (const themeKind of THEME_KINDS) {
+  for (const { name, themeKind, palette } of SWEEP) {
     for (const level of PANEL_SELECTORS) {
-      it(`clears ${AA_NORMAL_TEXT}:1 in ${themeKind} at ${level.label}`, () => {
-        const ratio = quoteInkRatio(themeKind, level);
+      it(`clears ${AA_NORMAL_TEXT}:1 in ${name} at ${level.label}`, () => {
+        const ratio = quoteInkRatio(themeKind, level, blockSpec, palette);
         // The measured ratio rides in the failure message the way the probe reports
         // it, so a red run says how far under AA the mix landed and against which
         // palette — not merely that it did.
         expect(
           ratio,
-          `${themeKind} ${level.label}: ${ratio.toFixed(2)}:1 (AA normal text ` +
+          `${name} ${level.label}: ${ratio.toFixed(2)}:1 (AA normal text ` +
             `${AA_NORMAL_TEXT}:1); palette: scripts/preview/vscode-theme-palettes.mjs`
         ).toBeGreaterThanOrEqual(AA_NORMAL_TEXT);
       });
