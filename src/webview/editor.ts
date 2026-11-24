@@ -17,7 +17,7 @@ import {
   type Text,
   Transaction,
 } from "@codemirror/state";
-import { EditorView, keymap } from "@codemirror/view";
+import { EditorView, keymap, ViewPlugin } from "@codemirror/view";
 import { perfNow, perfRecord } from "../shared/perf.js";
 import {
   buildSwitchToTextMessage,
@@ -30,6 +30,7 @@ import {
 } from "../shared/protocol.js";
 import { applyCaret, type Caret, selectionCharCount, selectionToCaret } from "./cm/caret.js";
 import { quollCodeRefClickHandler, quollCodeRefKeymap } from "./cm/code-ref/code-ref-handlers.js";
+import { quollCollapseKeymap } from "./cm/collapse/collapse-keymap.js";
 import { quollContextHandoffKeymap } from "./cm/context-handoff.js";
 import { blockStyle } from "./cm/decorations/block-style.js";
 import { blockZoneArrowKeymap } from "./cm/decorations/block-zone-arrow-keymap.js";
@@ -833,6 +834,10 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // invalidation policy (always a top-level re-walk — see the field header).
         // Display-only. Publishes to neither zone facet, for the reason given above.
         blockquoteCollapseField,
+        // Keyboard path for both collapse bars: the fold keys collapse / expand the long
+        // block at the caret first, then fall through to quollFoldKeymap's foldCode /
+        // unfoldCode (Prec.high — see cm/collapse/collapse-keymap.ts).
+        quollCollapseKeymap,
         // C6b: block widget for GFM tables. Publishes its range to
         // quollBlockReplaceZones so quollSyntaxReveal above drops inline
         // marks inside the widget; CodeMirror requires block widgets
@@ -1035,6 +1040,72 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // document's EOL. CM recognises its own linewise copy by comparing the
         // LF-normalised paste with the string it copied, so a CRLF clipboard broke
         // multi-cursor line copy → paste.
+        // Read-only, the content DOM is not focusable, so the editor would have no tab stop:
+        // no keyboard scrolling, and no way to reach a widget button (a collapse bar) that is
+        // not drawn yet. The scroller is the tab stop there. CodeMirror creates it with
+        // tabIndex -1 and has no facet for its attributes. Editable, the content is the tab
+        // stop, so the scroller stays out of the order.
+        // Tab from the scroller goes to the first control on screen: native Tab takes the
+        // first in DOM order, which can be one CodeMirror drew above the scrollport, and
+        // scrolls back to it. "On screen" means a non-empty box that overlaps the scrollport
+        // both ways; a control cut by an edge is scrolled whole into view after it takes
+        // focus (a no-op for a control that is already whole). With none on screen, native
+        // Tab proceeds.
+        ViewPlugin.define((view) => {
+          const scroller = view.scrollDOM;
+          const sync = () => {
+            scroller.tabIndex = view.state.facet(EditorView.editable) ? -1 : 0;
+          };
+          const tabToOnScreen = (event: KeyboardEvent) => {
+            if (
+              event.target !== scroller ||
+              event.key !== "Tab" ||
+              event.shiftKey ||
+              event.ctrlKey ||
+              event.altKey ||
+              event.metaKey ||
+              view.state.facet(EditorView.editable)
+            ) {
+              return;
+            }
+            const port = scroller.getBoundingClientRect();
+            for (const el of scroller.querySelectorAll<HTMLElement>(
+              "button, a[href], input, select, textarea, [tabindex]"
+            )) {
+              const box = el.getBoundingClientRect();
+              if (
+                el.tabIndex < 0 ||
+                box.width <= 0 ||
+                box.height <= 0 ||
+                box.bottom <= port.top ||
+                box.top >= port.bottom ||
+                box.right <= port.left ||
+                box.left >= port.right
+              ) {
+                continue;
+              }
+              el.focus({ preventScroll: true });
+              // focus() is a no-op on a disabled or hidden control: try the next one.
+              if (view.root.activeElement === el) {
+                el.scrollIntoView({ block: "nearest", inline: "nearest" });
+                event.preventDefault();
+                return;
+              }
+            }
+          };
+          sync();
+          scroller.addEventListener("keydown", tabToOnScreen);
+          return {
+            update(u) {
+              if (u.startState.facet(EditorView.editable) !== u.state.facet(EditorView.editable)) {
+                sync();
+              }
+            },
+            destroy() {
+              scroller.removeEventListener("keydown", tabToOnScreen);
+            },
+          };
+        }),
         editableComp.of([
           EditorView.editable.of(initialCanWrite),
           EditorState.readOnly.of(!initialCanWrite),

@@ -91,6 +91,11 @@ export const blockquoteCollapseTarget: CollapseTarget<CalloutType | null> = {
 
 /** Toggle a quote's expanded state; collapsing also parks every selection head inside the
  *  soon-concealed region in the SAME transaction. */
-export function toggleBlockquoteCollapse(view: EditorView, key: number, expand: boolean): void {
-  toggleCollapse(view, blockquoteCollapseTarget, key, expand);
+export function toggleBlockquoteCollapse(
+  view: EditorView,
+  key: number,
+  expand: boolean,
+  keepFocus = false
+): void {
+  toggleCollapse(view, blockquoteCollapseTarget, key, expand, keepFocus);
 }

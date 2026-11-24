@@ -40,7 +40,7 @@ import {
   StateField,
   type Transaction,
 } from "@codemirror/state";
-import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
+import { type Command, Decoration, type DecorationSet, EditorView } from "@codemirror/view";
 import { type Interval, intersects } from "../bounded-recompute.js";
 import { hostDocumentReseed } from "../host-reseed.js";
 import type { QuollWidget } from "../widget-base.js";
@@ -355,12 +355,23 @@ export function findCollapseBlockAt<X>(
  *  plus, in the SAME transaction, parking every selection head inside [concealFrom,
  *  collapseTo] at `safeCaret`, so the build's auto-expand does not immediately re-open it.
  *  A stale key resolves to null → the effect alone (it only edits the Set), so there is no
- *  error path. */
+ *  error path.
+ *
+ *  `keepFocus` (the toggled bar held focus): a collapse also scrolls
+ *  `concealFrom` into view in the same transaction, so the replacement "Show more" bar —
+ *  possibly far above a long block's "Show less" — is drawn by this dispatch and the caller
+ *  can hand it focus. An expand never scrolls: the reader keeps their place.
+ *
+ *  `scrollCaret` (the keyboard command, where the caret is the reader's place): a collapse
+ *  scrolls the main head into view, so a caret parked at `safeCaret` — possibly far above
+ *  a caret deep in a long block — stays on screen. */
 export function toggleCollapse<X>(
   view: EditorView,
   target: CollapseTarget<X>,
   key: number,
-  expand: boolean
+  expand: boolean,
+  keepFocus = false,
+  scrollCaret = false
 ): void {
   const effects = target.effect.of({ key, expanded: expand });
   if (expand) {
@@ -368,18 +379,54 @@ export function toggleCollapse<X>(
     return;
   }
   const block = findCollapseBlockAt(target, view.state, key);
-  const parked =
-    block === null
-      ? null
-      : parkSelectionOutsideConceal(
-          view.state.selection,
-          block.concealFrom,
-          // Park heads on the trailing edge too (collapseTo, not concealTo): otherwise
-          // collapsing with the caret there would auto-expand right back.
-          block.collapseTo,
-          block.safeCaret
-        );
-  view.dispatch(parked !== null ? { effects, selection: parked } : { effects });
+  if (block === null) {
+    view.dispatch({ effects });
+    return;
+  }
+  const parked = parkSelectionOutsideConceal(
+    view.state.selection,
+    block.concealFrom,
+    // Park heads on the trailing edge too (collapseTo, not concealTo): otherwise
+    // collapsing with the caret there would auto-expand right back.
+    block.collapseTo,
+    block.safeCaret
+  );
+  view.dispatch({
+    effects: keepFocus ? [effects, EditorView.scrollIntoView(block.concealFrom)] : effects,
+    ...(parked !== null ? { selection: parked } : {}),
+    scrollIntoView: scrollCaret,
+  });
+}
+
+/** The keyboard path to `toggleCollapse`: a Command that collapses (`expand === false`) or
+ *  expands the block of `field` whose extent [blockFrom, blockTo] holds the MAIN head, but
+ *  only when that block is in the other state and its bar is not hidden by an outer fold.
+ *  Returns false otherwise (no block there, already in the target state, or folded away) so
+ *  the binding falls through to the next command bound to the same key. Reads the records,
+ *  not the decorations: a fold-suppressed record has none.
+ *  No readOnly guard — the toggle is an effect, never a document change. */
+export function collapseAtCaretCommand<X>(
+  field: StateField<CollapseState<X>>,
+  target: CollapseTarget<X>,
+  expand: boolean
+): Command {
+  return (view) => {
+    const head = view.state.selection.main.head;
+    const block = view.state
+      .field(field, false)
+      ?.blocks.find((b) => b.blockFrom <= head && head <= b.blockTo);
+    // A bar an outer fold hides (assemble's rule) is not there to toggle: the key belongs
+    // to the fold, and toggling would park the caret inside it, which unfolds it.
+    if (
+      block === undefined ||
+      block.expanded === expand ||
+      hiddenByFold(foldedRanges(view.state), block.decoFrom)
+    ) {
+      return false;
+    }
+    toggleCollapse(view, target, block.key, expand, false, true);
+    return true;
+  };
 }
 
 /** One reducer, two configs. `bounded` (production) asks the client's `docChangePlan` on a

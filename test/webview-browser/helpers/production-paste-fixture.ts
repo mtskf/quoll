@@ -13,7 +13,11 @@ import {
 } from "../../../src/shared/protocol.js";
 
 /** Real production entry in its own realm; only the VS Code host is simulated. */
-export async function productionPasteFixture(content = "", eol: DocumentEol = "\n") {
+export async function productionPasteFixture(
+  content = "",
+  eol: DocumentEol = "\n",
+  canWrite = true
+) {
   const frame = document.createElement("iframe");
   frame.style.cssText = "width:800px;height:360px;border:0";
   frame.srcdoc = `<!doctype html><html><head>
@@ -40,7 +44,7 @@ export async function productionPasteFixture(content = "", eol: DocumentEol = "\
     content,
     docVersion: 1,
     themeKind: "light",
-    canWrite: true,
+    canWrite,
     eol,
     externalEpoch: 0,
     epochGeneration: 1,
