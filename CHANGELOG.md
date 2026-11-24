@@ -14,6 +14,7 @@ All notable changes to Quoll are documented here.
 - Pasting a URL over selected text, or making a link with the link command, now links the whole selection even when it contains a stray `[`, `]` or a trailing backslash. A pasted URL also opens exactly as pasted, so text such as `&amp;` in it is no longer turned into `&`.
 - Making inline code (Cmd/Ctrl+E) now keeps the whole selection inside the code even when it contains backticks or starts and ends with a space. Pressing it again removes exactly the backticks it added. Pasted inline code keeps its edge spaces too.
 - A link whose text is itself a URL, such as `[https://a.test](https://b.test)`, now opens the link's real target when clicked, and its text stays visible when the cursor moves away.
+- The language label and copy button on a code block's header are easier to read in light themes. They no longer fade out at rest, and stay in the theme's secondary text colour.
 
 ### Changed
 

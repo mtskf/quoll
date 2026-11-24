@@ -807,12 +807,6 @@ describe("quollCopyButtonTheme", () => {
     expect(btn.right).toBeDefined();
   });
 
-  it("draws its resting dim + fade from the shared floating-control tokens (no per-control literal)", () => {
-    const btn = copyButtonThemeSpec[".quoll-copy-button"];
-    expect(btn.opacity).toMatch(/^var\(--quoll-control-rest-opacity/);
-    expect(btn.transition).toMatch(/^var\(--quoll-control-transition/);
-  });
-
   it("hides the copy live region off-screen (clip) while keeping it in the a11y tree", () => {
     // The SR status node must be invisible to sighted users but still announced —
     // the canonical sr-only clip: 1px box, hidden overflow, clip rect, out of flow

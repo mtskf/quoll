@@ -182,11 +182,14 @@ html body {
       var(--quoll-surface-border,
         var(--vscode-editorWidget-border, var(--vscode-panel-border, #888)));
     --quoll-table-cell-pad: 4px 8px;
-    /* Shared resting appearance of every hover-revealed floating control — the
+    /* Shared resting appearance of the hover-revealed floating chrome controls — the
      * two corner toggles below (.quoll-outline-toggle / .quoll-switch-editor-toggle)
-     * PLUS the fenced-code copy button + collapse toggle in cm/theme.ts, which
-     * consume these via var(). One token pair so the dimmed rest look + hover fade
-     * can never drift per-control: retune here and all four move together.
+     * and the outline pin. One token pair so the dimmed rest look + hover fade
+     * can never drift per-control: retune here and they all move together.
+     * The fenced-code controls (cm/theme.ts) deliberately do NOT use it (A11Y-12):
+     * their language/"Show N more lines" labels are text, and the dim pulls them
+     * under 4.5:1 on the code panel surfaces. These icon-only controls measure
+     * ≥ 3.16:1 at 0.6 (light, on editorWidget-background) — retune only above that.
      *   --quoll-control-rest-opacity  the dim applied at rest; hover/focus/active
      *                                 restore full opacity. Converged to one value
      *                                 (was 0.5 / 0.6 / 0.85 across the four controls).
