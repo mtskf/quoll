@@ -29,9 +29,9 @@
  *
  * TODO (follow-up, out of scope here to keep 1PR=1purpose): this file has grown
  * past the 500-line guideline — the planners + their private helpers
- * (`resolveItemAtEof`, the adopt/shape
- * builders) form a distinct concern from the marker primitives / classification
- * and could move to a `list-indent-plan.ts`, leaving the primitives here.
+ * (`resolveItemAtEof`, the adopt/shape builders) form a distinct concern from
+ * the marker primitives / classification and could move to a
+ * `list-indent-plan.ts`, leaving the primitives here.
  */
 
 import { ensureSyntaxTree } from "@codemirror/language";

@@ -482,7 +482,7 @@ describe("outdentListItem", () => {
   });
 
   // (j) combined adversarial: the moved item's OWN child + an ordered forced
-  //     child + a destination width change all feed the net-delta map at once.
+  //     child + a destination width change all shift lines in one plan.
   it("(j) combined: own child + ordered forced child + destination renumber", () => {
     // parent "9. p" (adopted "10." — dest run "10. z" → "11. z", width 3→3).
     // moved item "1. a" has own child "      - kid"; ordered forced sibling
