@@ -3571,7 +3571,7 @@ describe("cm edit-sync — successful-send receipt barrier", () => {
     s.type("ab");
     s.setPostOk(false);
     s.sync.flush(); // attempt 2 fails; only Edit 1 reached the host
-    s.sync.onReducerCommit(true); // Fix 1a: failure preserves the outstanding flight
+    s.sync.onReducerCommit(true); // failed send preserves the outstanding flight
     s.setPostOk(true);
     s.type("abc");
     expect(s.posted).toEqual([{ content: "a", baseDocVersion: 1 }]);
@@ -3588,10 +3588,10 @@ describe("cm edit-sync — successful-send receipt barrier", () => {
     expect(s.posted).toEqual([{ content: "a", baseDocVersion: 1 }]);
   });
 
-  it("returning to seed text cannot settle Edit 1 after a send-failure commit clears its holder", async () => {
+  it("returning to seed text cannot settle Edit 1 once the holders are cleared without a covering ack", async () => {
     const s = outstanding();
     s.setDoc("hello"); // noteLocalChange threw before scheduling this change
-    s.sync.onReducerCommit(false); // equivalent of the old send-failure drain
+    s.sync.onReducerCommit(false); // holders cleared, but Edit 1 has no covering ack yet
     const box = track(s.sync.awaitSettled(1000));
     await vi.advanceTimersByTimeAsync(0);
     expect.soft(box.outcome).toBeNull();
