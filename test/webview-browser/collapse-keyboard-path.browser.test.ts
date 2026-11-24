@@ -396,6 +396,18 @@ describe("collapse bars — keyboard path (real Chromium, production bundle)", (
     expect(f.view.scrollDOM.tabIndex).toBe(0);
   });
 
+  // Write access restored while the read-only tab stop holds focus: the scroller leaves the
+  // tab order, so focus must move to the content or typing and editor keys go nowhere.
+  it("a read-only → writable flip moves focus from the scroller to the content", async () => {
+    fixture = await productionPasteFixture(CASES[0].doc, "\n", false);
+    const f = fixture;
+    await tabIntoScroller(f);
+    await f.writable();
+    await expect.poll(() => f.win.document.activeElement).toBe(f.view.contentDOM);
+    await userEvent.keyboard("Z");
+    await expect.poll(() => f.view.state.doc.toString().includes("Z")).toBe(true);
+  });
+
   // A long preamble: no bar is drawn when the reader arrives, so the keyboard has to page
   // down to the block from the scroller before any bar can be Tabbed to.
   const preamble = Array.from({ length: 400 }, (_, i) => `intro${i + 1}`).join("\n\n");

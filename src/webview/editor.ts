@@ -1099,6 +1099,20 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
             update(u) {
               if (u.startState.facet(EditorView.editable) !== u.state.facet(EditorView.editable)) {
                 sync();
+                // Write access restored while the scroller holds focus (the read-only tab
+                // stop, or a click there): it has just left the tab order, and keys would
+                // miss the content. Hand focus to the content. Deferred: focusing runs
+                // CodeMirror's focus handling, which must not dispatch inside this update.
+                if (u.state.facet(EditorView.editable) && view.root.activeElement === scroller) {
+                  queueMicrotask(() => {
+                    if (
+                      view.state.facet(EditorView.editable) &&
+                      view.root.activeElement === scroller
+                    ) {
+                      view.focus();
+                    }
+                  });
+                }
               }
             },
             destroy() {
