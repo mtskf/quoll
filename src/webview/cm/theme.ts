@@ -985,9 +985,12 @@ export const copyButtonThemeSpec = {
   ".quoll-copy-button:hover, .quoll-copy-button:focus-visible": {
     backgroundColor: fencedControlHoverBackground,
   },
+  // `--quoll-success-ink` is declared in the LIGHT theme block only (A11Y-16): Light+
+  // ships testing-iconPassed as #73c991, ~1.4:1 on the light header. Dark and both HC
+  // kinds leave it undeclared and keep VS Code's own success colour.
   ".quoll-copy-button.is-copied": {
     color:
-      "var(--vscode-testing-iconPassed, var(--vscode-button-foreground, var(--vscode-foreground)))",
+      "var(--quoll-success-ink, var(--vscode-testing-iconPassed, var(--vscode-button-foreground, var(--vscode-foreground))))",
   },
   ".quoll-copy-button.is-copy-failed": {
     color: "var(--vscode-errorForeground, var(--vscode-foreground))",
