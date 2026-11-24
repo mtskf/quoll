@@ -1,4 +1,4 @@
-// Map a viewport point inside a rendered table widget to ABSOLUTE LF-internal
+// Map a viewport point inside a rendered table widget to block-relative LF-internal
 // source offsets, so a drag over the display-only widget can be replayed as a
 // CodeMirror range selection.
 //
@@ -31,12 +31,8 @@
 // while preserving total length would have passed the gate and mapped every
 // offset wrongly, silently. The map has no such contract to break.
 //
-// Staleness: the map is keyed on the cell ELEMENT, and `stampRow` re-points the
-// offset stamps on a positional shift WITHOUT re-rendering, so a map must be
-// proven current before it is trusted. Both halves are checked —
-// `sourceLength` against the stamps and `renderedText` against the cell's live
-// `textContent`. Lengths alone would let a same-length stale map through; the
-// text comparison is the one check a coincidence of lengths cannot fool.
+// The cell's source map is validated against the stamped source span length
+// and the cell's live textContent before lookup.
 
 import { Facet } from "@codemirror/state";
 
@@ -120,42 +116,33 @@ export const quollTableCaretResolver = Facet.define<CaretResolver, CaretResolver
   combine: (values) => (values.length > 0 ? values[values.length - 1] : defaultCaretResolver),
 });
 
+declare const blockOffsetBrand: unique symbol;
+/** An LF-internal source offset from the start of the table block. */
+export type BlockOffset = number & { readonly [blockOffsetBrand]: true };
+
+function asBlockOffset(value: number): BlockOffset {
+  return value as BlockOffset;
+}
+
 declare const absoluteOffsetBrand: unique symbol;
-/** An LF-internal offset into the WHOLE document — what `data-cell-from`
- *  carries and what a CodeMirror selection is dispatched with. Declared HERE
- *  rather than in cell-source-map.ts because the map speaks only its own
- *  cell-relative space; this is the space the DOM stamps and the editor use,
- *  and this module is the only one that converts between the two. */
+/** An LF-internal document offset for CodeMirror selection dispatch. */
 export type AbsoluteOffset = number & { readonly [absoluteOffsetBrand]: true };
 
-/** THE constructor of an {@link AbsoluteOffset} — a cast, not a guard (see the
- *  brand note in cell-source-map.ts). It checks nothing, so the guarantee lives
- *  at each MINT, and a grep for `asAbsoluteOffset` is how a reader audits them.
- *  Deliberately not an enumeration: mints span modules — today `stampedOffset`
- *  (only what `Number.isSafeInteger` has just accepted), `cellPointAt` (clamped
- *  between two already-branded bounds), table-widget.ts's outside-release seam
- *  (`view.posAtCoords`, which CodeMirror has already clamped to
- *  `[0, doc.length]`), and table-widget.ts's `blockStartOf` (the widget's
- *  `docFrom`, which reaches its constructor as `state.doc.lineAt(...).from` or
- *  that value remapped through `tr.changes.mapPos` — CodeMirror document
- *  positions either way) — so no list written HERE can stay complete, and an
- *  earlier one silently did not. The grep is the check; those are examples of
- *  what it should find at each hit. */
 export function asAbsoluteOffset(value: number): AbsoluteOffset {
   return value as AbsoluteOffset;
 }
 
 /** A pointer position resolved against one rendered table cell. */
 export interface CellPoint {
-  /** Absolute source offset of the cell's content start (`data-cell-from`). */
-  readonly cellFrom: AbsoluteOffset;
-  /** Absolute source offset of the cell's content end (`data-cell-to`). */
-  readonly cellTo: AbsoluteOffset;
-  /** Absolute source offset under the pointer, or `null` when this cell has no
+  /** Block-relative source offset of the cell's content start (`data-cell-from`). */
+  readonly cellFrom: BlockOffset;
+  /** Block-relative source offset of the cell's content end (`data-cell-to`). */
+  readonly cellTo: BlockOffset;
+  /** Block-relative source offset under the pointer, or `null` when this cell has no
    *  exact mapping for it — no current source map (an unrendered or
    *  hand-built cell), or a boundary the map cannot place because invisible
    *  source (a live image) sits on one side of it. */
-  readonly offset: AbsoluteOffset | null;
+  readonly offset: BlockOffset | null;
 }
 
 /** Characters of rendered text preceding `(node, offset)` within `cell`.
@@ -207,17 +194,17 @@ function textOffsetWithinCell(cell: Element, node: Node, offset: number): Render
  *  fraction all pass validation and land a silently broken selection that no
  *  try/catch can observe. `Element`, not `HTMLElement`: `getAttribute` lives on
  *  Element and this module stays realm-independent (no `instanceof`). */
-export function stampedOffset(cell: Element, name: string): AbsoluteOffset | null {
+export function stampedOffset(cell: Element, name: string): BlockOffset | null {
   const raw = cell.getAttribute(name);
   // Decimal digits only. `Number` alone accepts "" (→ 0), " 78 ", "-5", "78.5"
-  // and "7e2"; the widget only ever writes `String(nodeFrom + cell.from)`, so
+  // and "7e2"; the widget only ever writes `String(nodeOffset + cell.from)`, so
   // digits ARE the contract. `isSafeInteger` then rejects a digit string long
   // enough to lose precision.
   if (raw === null || !/^\d+$/.test(raw)) {
     return null;
   }
   const value = Number(raw);
-  return Number.isSafeInteger(value) ? asAbsoluteOffset(value) : null;
+  return Number.isSafeInteger(value) ? asBlockOffset(value) : null;
 }
 
 /** Resolve a viewport point inside `root` (a `.quoll-table-block` widget) to
@@ -272,14 +259,7 @@ export function cellPointAt(
     if (within === null) {
       return { cellFrom, cellTo, offset: null };
     }
-    // Snapshot check — the map is only usable while it still describes BOTH
-    // this source span and this DOM. `stampRow` moves the stamps without
-    // re-rendering, and `patchRow` re-renders in place, so either half can move
-    // under a map that outlived it.
-    //
-    // `cellTo - cellFrom` is an absolute-space DELTA, which is a LENGTH and so
-    // comparable with the cell-relative `sourceLength`. The brands cannot
-    // certify this one: subtraction erases them, exactly as addition does.
+    // The map must still describe both the stamped span length and the rendered DOM.
     const map = getCellSourceMap(cell);
     if (
       map === null ||
@@ -306,13 +286,13 @@ export function cellPointAt(
     // prevent.
     //
     // This is the ONE sanctioned crossing from the cell-relative source space
-    // into the absolute one — the addition cell-source-map.ts's header warns
+    // into the block-relative one — the addition cell-source-map.ts's header warns
     // about, legal here and only here because the two checks above proved the
     // map describes THIS cell's source and `relative` is a safe integer. Both
     // `+` and `Math.min` erase the brand (TS types either as plain `number`),
     // so the mint is what re-asserts the space, and its absence anywhere else
     // is a compile error.
-    const offset = asAbsoluteOffset(Math.min(Math.max(cellFrom + relative, cellFrom), cellTo));
+    const offset = asBlockOffset(Math.min(Math.max(cellFrom + relative, cellFrom), cellTo));
     return { cellFrom, cellTo, offset };
   } catch {
     return null;

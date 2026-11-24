@@ -2,26 +2,22 @@
 // What `toDOM` produces and what a click on it does: DOM shape, cell escaping,
 // the offset stamps, the link/image URL gates, the resource-base threading that
 // resolves a relative in-cell image, and the collapsed-caret/open-external
-// routing a click on that fresh DOM takes. Two rows here call `updateDOM`, each
-// because it extends material that lives here rather than because it is about
-// reuse: one takes the click AFTER a re-stamp, the other checks that a
-// relative image introduced by a cell edit resolves against the same base the
-// fresh-render rows use. `updateDOM`'s own reuse/refusal contract is
-// cm-table-widget-update.test.ts. Pointer GESTURES (drag, and the untrusted
-// cell-stamp boundary) are cm-table-widget-drag.test.ts / -caret.test.ts.
-// Fixtures: helpers/widget-fixtures.ts.
+// routing of clicks. Fixtures live in helpers/widget-fixtures.ts.
 import { EditorState } from "@codemirror/state";
-import { EditorView, type EditorView as EditorViewType, WidgetType } from "@codemirror/view";
-import { describe, expect, it } from "vitest";
+import { EditorView, WidgetType } from "@codemirror/view";
+import { describe, expect, it, vi } from "vitest";
 
 import { parseTable } from "../../../src/markdown/table/index.js";
 import { PROTOCOL_VERSION } from "../../../src/shared/protocol.js";
+import { quollMarkdownLanguage } from "../../../src/webview/cm/markdown.js";
 import {
   openExternalSinkFor,
   quollOpenExternalSink,
 } from "../../../src/webview/cm/open-external.js";
+import { tableBlockField } from "../../../src/webview/cm/table/table-field.js";
 import { TableBlockWidget } from "../../../src/webview/cm/table/table-widget.js";
-import { makeWidget, mockView, stubView } from "./helpers/widget-fixtures.js";
+import { settledMount } from "../helpers/settled-view.js";
+import { makeWidget, mockView, SRC, stubView } from "./helpers/widget-fixtures.js";
 
 describe("TableBlockWidget.toDOM", () => {
   it("renders a wrapper <div> containing <table> with <thead>, <tbody>, and one <tr> per row", () => {
@@ -144,21 +140,21 @@ describe("TableBlockWidget.toDOM", () => {
     expect(makeWidget(src).ignoreEvent()).toBe(true);
   });
 
-  it("eq() is true for the same (docFrom, slice) and false when slice differs", () => {
+  it("eq() is true for the same slice and node offset and false when slice differs", () => {
     const src = "| A |\n| - |\n| 1 |";
-    const a = makeWidget(src, 100);
+    const a = makeWidget(src, 2);
     const parsed = parseTable(src, 0, src.length);
     if (parsed === null) {
       throw new Error("fixture must parse");
     }
-    const b = new TableBlockWidget(parsed, src, 100, 0);
+    const b = new TableBlockWidget(parsed, src, 2);
     expect(a.eq(b)).toBe(true);
     const otherSrc = "| A |\n| - |\n| 2 |";
     const parsedOther = parseTable(otherSrc, 0, otherSrc.length);
     if (parsedOther === null) {
       throw new Error("fixture must parse");
     }
-    const c = new TableBlockWidget(parsedOther, otherSrc, 100, 0);
+    const c = new TableBlockWidget(parsedOther, otherSrc, 2);
     expect(a.eq(c)).toBe(false);
   });
 
@@ -180,13 +176,9 @@ describe("TableBlockWidget.toDOM", () => {
     expect(a.eq(a)).toBe(true);
   });
 
-  // Codex re-review Conf 82 — two byte-identical tables at different doc
-  // positions must NOT eq, or CM reuses the wrong DOM.
-  it("eq() is false for the same slice at different docFrom positions", () => {
+  it("eq() is false for the same slice at different node offsets", () => {
     const src = "| A |\n| - |\n| 1 |";
-    const a = makeWidget(src, 0);
-    const b = makeWidget(src, 100);
-    expect(a.eq(b)).toBe(false);
+    expect(makeWidget(src).eq(makeWidget(src, 2))).toBe(false);
   });
 
   it("renders a row whose cell count differs from the header (no padding, no truncation)", () => {
@@ -206,17 +198,16 @@ describe("TableBlockWidget.toDOM", () => {
     expect(tbody?.querySelectorAll("tr").length).toBe(0);
   });
 
-  it("stamps each cell with its absolute LF-internal source offset (data-cell-from)", () => {
+  it("stamps each cell with its block-relative LF-internal source offset (data-cell-from)", () => {
     const src = "| a | b |\n| - | - |\n| c | d |";
     const table = parseTable(src, 0, src.length);
     if (!table) {
       throw new Error("fixture parse failed");
     }
-    const dom = new TableBlockWidget(table, src, 0, 0).toDOM(mockView);
+    const dom = new TableBlockWidget(table, src, 0).toDOM(mockView);
     const head = dom.querySelectorAll("thead th");
     expect((head[0] as HTMLElement).dataset.cellFrom).toBe("2"); // 'a' at "| a"→2
     expect((head[1] as HTMLElement).dataset.cellFrom).toBe("6"); // 'b' at "| a | b"→6
-    expect((dom as HTMLElement).dataset.docFrom).toBe("0"); // dom IS the .quoll-table-block root
   });
 
   it("click on a cell dispatches a caret at that cell's source offset", () => {
@@ -227,7 +218,8 @@ describe("TableBlockWidget.toDOM", () => {
     }
     const dispatched: unknown[] = [];
     const stub = stubView(dispatched);
-    const dom = new TableBlockWidget(table, src, 0, 0).toDOM(stub);
+    const dom = new TableBlockWidget(table, src, 0).toDOM(stub);
+    stub.contentDOM.appendChild(dom);
     const bodyCells = dom.querySelectorAll("tbody td");
     const expected = Number((bodyCells[1] as HTMLElement).dataset.cellFrom); // 'd'
     (bodyCells[1] as HTMLElement).click();
@@ -241,14 +233,14 @@ describe("TableBlockWidget.toDOM", () => {
       throw new Error("fixture parse failed");
     }
     const dispatched: unknown[] = [];
-    const stub = stubView(dispatched);
-    const dom = new TableBlockWidget(table, src, 7, 7).toDOM(stub);
+    const stub = stubView(dispatched, undefined, undefined, 7);
+    const dom = new TableBlockWidget(table, src, 0).toDOM(stub);
+    stub.contentDOM.appendChild(dom);
     dom.click(); // the root div, not a cell
     expect(dispatched).toEqual([{ selection: { anchor: 7 } }]);
   });
 
-  it("keeps docFrom (margin) and nodeFrom (cell base) independent when they differ", () => {
-    // Non-line-aligned edge: block starts at docFrom=0 but the Lezer node at 2.
+  it("includes the node offset for a cell click and uses the block start for a margin click", () => {
     const src = "| a |\n| - |";
     const table = parseTable(src, 0, src.length);
     if (!table) {
@@ -256,44 +248,13 @@ describe("TableBlockWidget.toDOM", () => {
     }
     const dispatched: unknown[] = [];
     const stub = stubView(dispatched);
-    const dom = new TableBlockWidget(table, src, 0, 2).toDOM(stub); // docFrom=0, nodeFrom=2
+    const dom = new TableBlockWidget(table, src, 2).toDOM(stub);
+    stub.contentDOM.appendChild(dom);
     const th = dom.querySelector("thead th") as HTMLElement;
-    expect(th.dataset.cellFrom).toBe("4"); // nodeFrom 2 + 'a' at 2
-    dom.click(); // margin → docFrom, NOT nodeFrom
-    expect(dispatched).toEqual([{ selection: { anchor: 0 } }]);
-  });
-
-  it("re-stamps offsets on updateDOM so a click after a shift uses the new base", () => {
-    // A distant insertion shifts the table (new docFrom/nodeFrom) but its bytes
-    // (slice) are unchanged → eq() false → updateDOM reuses the DOM in place.
-    const src = "| a |\n| - |";
-    const table = parseTable(src, 0, src.length);
-    if (!table) {
-      throw new Error("fixture parse failed");
-    }
-    const dispatched: unknown[] = [];
-    const stub = stubView(dispatched);
-    const original = new TableBlockWidget(table, src, 0, 0);
-    const dom = original.toDOM(stub);
-    const reused = new TableBlockWidget(table, src, 5, 5).updateDOM(
-      dom,
-      stub as EditorViewType,
-      original
-    );
-    expect(reused).toBe(true);
-    dom.click(); // margin fallback now points at the NEW docFrom
-    expect(dispatched).toEqual([{ selection: { anchor: 5 } }]);
-    const th = dom.querySelector("thead th") as HTMLElement;
-    expect(th.dataset.cellFrom).toBe("7"); // NEW nodeFrom 5 + 'a' at 2
-  });
-
-  it("click on the widget dispatches a selection to docFrom (click → reveal trigger)", () => {
-    const src = "| A |\n| - |\n| 1 |";
-    const dispatched: unknown[] = [];
-    const stub = stubView(dispatched);
-    const dom = makeWidget(src, 42).toDOM(stub);
+    expect(th.dataset.cellFrom).toBe("4");
+    th.click();
     dom.click();
-    expect(dispatched).toEqual([{ selection: { anchor: 42 } }]);
+    expect(dispatched).toEqual([{ selection: { anchor: 4 } }, { selection: { anchor: 0 } }]);
   });
 
   // C6b smoke #5 follow-up — plain click on a widget-internal link must NOT
@@ -303,8 +264,9 @@ describe("TableBlockWidget.toDOM", () => {
   it("plain click on an <a> inside the widget DISPATCHES caret to the containing cell offset (reveal-on-caret takes over)", () => {
     const src = "| Link |\n| - |\n| [docs](https://example.com) |";
     const dispatched: Array<{ selection?: { anchor: number } }> = [];
-    const stub = stubView(dispatched as unknown[]);
-    const dom = makeWidget(src, 17).toDOM(stub);
+    const stub = stubView(dispatched, undefined, undefined, 17);
+    const dom = makeWidget(src).toDOM(stub);
+    stub.contentDOM.appendChild(dom);
     const a = dom.querySelector("a");
     expect(a).not.toBeNull();
     const event = new MouseEvent("click", { bubbles: true, cancelable: true });
@@ -312,7 +274,7 @@ describe("TableBlockWidget.toDOM", () => {
     expect(event.defaultPrevented).toBe(true);
     // The dispatch lands at the containing cell's data-cell-from offset.
     const td = a?.closest("td") as HTMLElement | null;
-    const expected = Number(td?.dataset.cellFrom);
+    const expected = 17 + Number(td?.dataset.cellFrom);
     const sel = dispatched.find((tr) => tr.selection)?.selection;
     expect(sel).toEqual({ anchor: expected });
   });
@@ -323,6 +285,7 @@ describe("TableBlockWidget.toDOM", () => {
     const opened: string[] = [];
     const stub = stubView(dispatched, undefined, opened);
     const dom = makeWidget(src).toDOM(stub);
+    stub.contentDOM.appendChild(dom);
     const a = dom.querySelector("a");
     expect(a).not.toBeNull();
     for (const modifier of [{ metaKey: true }, { ctrlKey: true }]) {
@@ -341,6 +304,7 @@ describe("TableBlockWidget.toDOM", () => {
     const opened: string[] = [];
     const stub = stubView(dispatched, undefined, opened);
     const dom = makeWidget(src).toDOM(stub);
+    stub.contentDOM.appendChild(dom);
     const a = dom.querySelector("a");
     expect(a?.getAttribute("href")).toBe("mailto:a@b.test");
     const event = new MouseEvent("click", { bubbles: true, cancelable: true, metaKey: true });
@@ -356,13 +320,14 @@ describe("TableBlockWidget.toDOM", () => {
   it("Cmd/Ctrl-click on a relative-URL <a> DISPATCHES caret to the containing cell offset (defaultPrevented → fall through)", () => {
     const src = "| Link |\n| - |\n| [doc](./readme.md) |";
     const dispatched: Array<{ selection?: { anchor: number } }> = [];
-    const stub = stubView(dispatched as unknown[]);
-    const dom = makeWidget(src, 23).toDOM(stub);
+    const stub = stubView(dispatched, undefined, undefined, 23);
+    const dom = makeWidget(src).toDOM(stub);
+    stub.contentDOM.appendChild(dom);
     const a = dom.querySelector("a");
     expect(a).not.toBeNull();
     expect(a?.getAttribute("href")).toBe("./readme.md");
     const td = a?.closest("td") as HTMLElement | null;
-    const expected = Number(td?.dataset.cellFrom);
+    const expected = 23 + Number(td?.dataset.cellFrom);
     for (const modifier of [{ metaKey: true }, { ctrlKey: true }]) {
       dispatched.length = 0;
       const event = new MouseEvent("click", { bubbles: true, cancelable: true, ...modifier });
@@ -380,6 +345,7 @@ describe("TableBlockWidget.toDOM", () => {
     const opened: string[] = [];
     const stub = stubView(dispatched, undefined, opened);
     const dom = makeWidget(src).toDOM(stub);
+    stub.contentDOM.appendChild(dom);
     const a = dom.querySelector("a");
     if (a === null) {
       throw new Error("anchor must exist");
@@ -406,6 +372,7 @@ describe("TableBlockWidget.toDOM", () => {
     const opened: string[] = [];
     const stub = stubView(dispatched, undefined, opened);
     const dom = makeWidget(src).toDOM(stub);
+    stub.contentDOM.appendChild(dom);
     const a = dom.querySelector("a");
     if (a === null) {
       throw new Error("anchor must exist");
@@ -486,5 +453,40 @@ describe("resource-base threading (relative in-cell images)", () => {
     expect(makeWidget(srcB).updateDOM(dom, view, widgetA)).toBe(true);
     const img = dom.querySelector<HTMLImageElement>("td img");
     expect(img?.getAttribute("src")).toBe("https://csp/ws/notes/img.png");
+  });
+});
+
+describe("table clicks in EditorView", () => {
+  it.each([
+    "cell",
+    "margin",
+  ])("a %s click uses the shifted block position on the same root", (target) => {
+    const doc = `Intro.\n\nSeparated prose.\n\n${SRC}\n\nTail.`;
+    const state = EditorState.create({
+      doc,
+      extensions: [quollMarkdownLanguage(), tableBlockField],
+    });
+    const view = settledMount({ state, parent: document.body });
+    const patch = vi.spyOn(
+      TableBlockWidget.prototype as unknown as { patchDOM: () => boolean },
+      "patchDOM"
+    );
+    const root = () => view.contentDOM.querySelector<HTMLElement>(".quoll-table-block")!;
+    try {
+      const before = root();
+      expect(before).not.toBeNull();
+      expect(view.posAtDOM(before)).toBe(doc.indexOf(SRC));
+      view.dispatch({ changes: { from: 1, insert: "new" } });
+      expect(root()).toBe(before);
+      expect(view.posAtDOM(before)).toBe(doc.indexOf(SRC) + 3);
+      expect(patch).not.toHaveBeenCalled();
+      (target === "cell" ? before.querySelector("td")! : before).click();
+      expect(view.state.selection.main.anchor).toBe(
+        3 + (target === "cell" ? doc.indexOf("alpha") : doc.indexOf(SRC))
+      );
+    } finally {
+      patch.mockRestore();
+      view.destroy();
+    }
   });
 });

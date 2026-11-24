@@ -12,25 +12,9 @@
 // emits the DOM, and cell-point.ts consumes it. The renderer is the mapping
 // authority; nothing re-derives it.
 
-// Two of the three offset spaces this module's header warns about, made
-// distinct at compile time. (The third — the ABSOLUTE document space — lives in
-// cell-point.ts: this module neither produces nor consumes it, and putting it
-// here would give the map a vocabulary it never speaks.) Same idiom as
-// `OpenLineOffset` (fenced-code-node.ts) and `AllowlistedUrl`
-// (src/markdown/url-allowlist.ts): a `unique symbol` brand plus a NAMED
-// constructor, so entering a space is a grep-discoverable line.
-//
-// What the brands buy: a value from one space can no longer be passed where
-// another is expected. What they deliberately do NOT do: reject `a + b`. TS
-// types arithmetic on number-assignable operands as plain `number`, so a
-// cross-space sum is caught at its CONSUMPTION (the sum is no longer branded),
-// not at the `+`. That is why cell-point.ts's one legitimate crossing has to
-// say `asAbsoluteOffset(...)` out loud, and why every other crossing fails.
-//
-// The constructors are casts, not guards — the brand is a marker (the
-// AllowlistedUrl precedent's wording). Runtime safety still comes from
-// `stampedOffset`'s digit gate and cell-point.ts's `Number.isSafeInteger`
-// re-check, both unchanged, and both sit directly beside the mint they feed.
+// The brands distinguish rendered and cell-source offsets from the block-relative
+// stamps in cell-point.ts and the document positions used by CodeMirror. Arithmetic
+// erases a brand. cellPointAt validates the map and stamps before combining them.
 
 declare const renderedOffsetBrand: unique symbol;
 /** An index into ONE cell's rendered text — what a DOM `Range` measures. */
@@ -66,10 +50,8 @@ export function asCellSourceOffset(value: number): CellSourceOffset {
  *  the rendered text still is, which is why `renderCellWithMap` keeps its
  *  tiling check) — it removes exactly the class that was pure duplication.
  *
- *  Every offset here is CELL-CONTENT-RELATIVE (`+ cellFrom` at lookup) because
- *  `TableBlockWidget.stampRow` re-points `data-cell-from`/`data-cell-to` on a
- *  pure positional shift WITHOUT re-rendering — an absolute map would go stale
- *  exactly there.
+ *  Offsets are relative to the cell's content start. cellPointAt adds the
+ *  stamped block-relative cell start after resolving a source offset.
  *
  *  `from`/`to` bracket the rendered characters themselves (`to - from` IS the
  *  run's rendered length); `outerFrom`/`outerTo` additionally cover the markup

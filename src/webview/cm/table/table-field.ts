@@ -8,15 +8,15 @@
 // Lezer's Table range usually IS line-aligned, but doc-final-no-newline edges may not be),
 // plus a POSITION-FREE payload carrying everything the widget needs, stored as offsets from
 // the block start so a shifted block keeps the same payload object: `nodeOffset` (the Lezer
-// node start, the base for per-cell offsets), the per-node LF source slice (the widget's
-// eq() key) and the parse. A `Table` node
+// node start, the base for per-cell offsets), the per-node LF source slice, and the parse.
+// The slice and node offset determine widget equality. A `Table` node
 // `parseTable` rejects — a blockquote-nested table whose continuation lines carry `>`
 // markers, or a cell-count mismatch — yields no block and stays raw source.
 //
 // Per-table sourcing: each table is parsed from `state.sliceDoc(node.from, node.to)`, never
 // `state.doc.toString()` — per-node slicing is O(table-bytes), the doc-wide string is
-// O(doc-bytes) per rebuild. Cell `from`/`to` in the parsed model are slice-relative; the
-// widget adds `nodeFrom` to stamp absolute `data-cell-from` offsets for click-to-reveal.
+// O(doc-bytes) per rebuild. The widget adds `nodeOffset` to the parsed cell offsets
+// to stamp block-relative positions for click-to-reveal.
 
 import type { EditorState } from "@codemirror/state";
 import type { SyntaxNodeRef } from "@lezer/common";
@@ -25,10 +25,9 @@ import { type BuiltBlock, structuralBlockWidgets } from "../structural-blocks.js
 import { TableBlockWidget } from "./table-widget.js";
 
 export interface TableBlock {
-  /** Lezer `Table` node start minus the block start — the widget's `nodeFrom` is
-   *  `from + nodeOffset`. */
+  /** Lezer `Table` node start relative to the whole-line block. */
   readonly nodeOffset: number;
-  /** Per-node source slice: the widget's eq() key and the input `table` was parsed from.
+  /** Per-node source slice: part of the widget's equality key and the input `table` was parsed from.
    *  LF-only, because the CM document itself is: `cm/seed.ts`'s `splitToCmText` owns that
    *  invariant at the one seam where host bytes become CM text, so no cell `raw` string
    *  carries a `\r` the DOM textNode would render as stray whitespace. */
@@ -53,7 +52,5 @@ export const tableBlockField = structuralBlockWidgets<TableBlock>({
   name: "table",
   node: "Table",
   build: buildTableBlock,
-  // `from` (block line-start) is docFrom; `from + nodeOffset` (Lezer node start) is
-  // nodeFrom, the base for per-cell offsets. All LF-internal.
-  widget: (b, from) => new TableBlockWidget(b.table, b.slice, from, from + b.nodeOffset),
+  widget: (b) => new TableBlockWidget(b.table, b.slice, b.nodeOffset),
 });

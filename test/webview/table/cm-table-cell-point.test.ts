@@ -30,7 +30,6 @@ afterEach(() => {
 function fixture(cells: Array<{ md: string; from: number; to: number }>): HTMLElement {
   const root = document.createElement("div");
   root.className = "quoll-block quoll-table-block";
-  root.dataset.docFrom = "0";
   const table = document.createElement("table");
   const tbody = document.createElement("tbody");
   const tr = document.createElement("tr");
@@ -184,9 +183,6 @@ describe("cellPointAt", () => {
     });
   });
 
-  // `stampRow` re-points the stamps on a positional shift WITHOUT re-rendering,
-  // so a map can outlive the span it describes. Length disagreement is the
-  // cheap half of the staleness check.
   it("reports offset null when the map's sourceLength disagrees with the stamps", () => {
     const root = fixture([{ md: "alpha", from: 10, to: 18 }]);
     const text = root.querySelector("td")?.firstChild as Node;

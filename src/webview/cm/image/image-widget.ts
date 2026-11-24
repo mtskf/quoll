@@ -2,7 +2,7 @@
 // source line. Atomic from CodeMirror's perspective: ignoreEvent() returns
 // true so CM does not synthesise state updates from widget DOM events. The
 // DOM event still propagates; an explicit click listener dispatches a caret
-// selection at `docFrom`, which fires imageBlockField's line-level reveal and
+// selection at the current block start, which fires imageBlockField's line-level reveal and
 // surfaces the raw `![alt](url)` source for editing (click-to-edit).
 //
 // The render-gate verdict is precomputed by imageBlockField and passed in as
@@ -17,12 +17,7 @@
 // live links). An image widget has no links, so the guard is unnecessary; the
 // "no <a>" invariant is pinned by a structural test.
 //
-// sameAs() (the base's `eq`) is keyed on (docFrom, slice): a byte change OR a
-// pure positional move (same slice, different docFrom) both return false,
-// triggering patchDOM. patchDOM re-stamps docFrom and reuses the DOM when only
-// the position moved (slice unchanged); a byte change forces a full render()
-// rebuild. `alt`/`safeUrl` are pure functions of `slice`, so they need not
-// participate in sameAs().
+// The source slice determines widget equality, including alt text and the URL verdict.
 
 import type { EditorView } from "@codemirror/view";
 import type { AllowlistedUrl } from "../../../markdown/url-allowlist.js";
@@ -37,26 +32,6 @@ import { imageDimensionCache } from "./image-dimension-cache.js";
 // with image-field.ts's `warnedUnresolvableImage` once-per-session latch.
 let warnedImageLoadError = false;
 
-// The block's CURRENT first-byte offset, keyed on the widget's root element.
-//
-// Keyed on the element rather than held in the `render` closure because
-// `patchDOM` reuses that element across widget instances: after a distant edit
-// shifts this block, CodeMirror builds a NEW widget, `sameAs()` returns false,
-// and `patchDOM` re-points the reused DOM — but it cannot re-bind the click
-// listener, whose captured `this` is the OLD instance. So the new instance
-// needs a channel to hand the current offset to the existing listener, and the
-// channel has to be updatable exactly when the position moves, which
-// `patchDOM` can do and the closure cannot. A WeakMap so a discarded root
-// takes its entry with it. Same pattern, same reason, as table-widget.ts's
-// `blockStart`.
-//
-// A `number` end to end: nothing is stringified, parsed, or read back from the
-// DOM, so there is no malformed-value state to validate against. (`checkSelection`
-// in @codemirror/state only rejects `range.to > doc.length`, so a `NaN` /
-// negative / fractional anchor would otherwise install a silently broken
-// selection that no try/catch can observe.)
-const blockStart = new WeakMap<HTMLElement, number>();
-
 export class ImageBlockWidget extends QuollWidget {
   readonly widgetName = "ImageBlockWidget";
 
@@ -68,19 +43,13 @@ export class ImageBlockWidget extends QuollWidget {
     /** Render-gate verdict: the allowlisted URL, or null when blocked. */
     readonly safeUrl: AllowlistedUrl | null,
     /** Source slice `![alt](url)` — in sameAs() so DOM tracks byte changes. */
-    readonly slice: string,
-    /** Absolute doc offset of the widget's first byte (caret target). */
-    readonly docFrom: number
+    readonly slice: string
   ) {
     super();
   }
 
   protected sameAs(other: QuollWidget): boolean {
-    return (
-      other instanceof ImageBlockWidget &&
-      other.docFrom === this.docFrom &&
-      other.slice === this.slice
-    );
+    return other instanceof ImageBlockWidget && other.slice === this.slice;
   }
 
   protected render(view: EditorView, signal: AbortSignal): HTMLElement {
@@ -90,19 +59,13 @@ export class ImageBlockWidget extends QuollWidget {
     // with the visible DOM; breathing room comes from padding on the wrapper.
     const root = document.createElement("div");
     root.className = "quoll-block quoll-image-block";
-    // The caret target travels through `blockStart`, NOT through this
-    // attribute: `data-doc-from` is written for DOM inspection (and read by
-    // tests that pin the re-stamp) and is NEVER read back — see `blockStart`
-    // above for why a position must not be parsed back out of the DOM.
-    root.dataset.docFrom = String(this.docFrom);
-    blockStart.set(root, this.docFrom);
 
     if (this.safeUrl !== null) {
       const src = this.safeUrl;
       const img = document.createElement("img");
       img.className = "quoll-image";
       // Reserve space from a prior load so a rebuild (reseed / bounded
-      // recompute that moved or rebuilt this widget) does not reflow the
+      // recompute of this block) does not reflow the
       // document while the image re-decodes. The CSS (max-width:100%;
       // height:auto) scales the intrinsic size down; the width/height attrs
       // give the browser the aspect ratio to reserve before paint.
@@ -172,34 +135,12 @@ export class ImageBlockWidget extends QuollWidget {
     root.addEventListener(
       "click",
       () => {
-        // Falling back to `this.docFrom` totalizes the `number | undefined` read;
-        // it is not the stale-closure hazard coming back. The entry is set above,
-        // in the same breath as attaching this listener, and at render time the
-        // closure value IS the current one — so a miss is unreachable by
-        // construction. Logged, not silently trusted, so a future regression of
-        // that invariant is observable instead of silently reintroducing the
-        // stale-caret bug this WeakMap exists to fix.
-        let anchor = blockStart.get(root);
-        if (anchor === undefined) {
-          // `slice` identifies WHICH widget tripped it — a document can hold many
-          // images, and `fallback` alone would not say which one. Matches the
-          // source-identifying payload of this file's other breadcrumb
-          // (`{ src }` on a failed load).
-          console.error("[quoll] image widget blockStart miss — invariant violated", {
-            slice: this.slice,
-            fallback: this.docFrom,
-          });
-          anchor = this.docFrom;
-        }
-        // A `number` anchor does not make the dispatch infallible — see
-        // table-widget.ts's `dispatchSelection` for the enumeration of what still
-        // throws (out-of-range after a shrinking edit, CodeMirror's re-entrancy
-        // error, a throwing transaction filter). The range bound is deliberately
-        // NOT re-checked against `view.state.doc.length`: CodeMirror owns that
-        // invariant and enforces it by throwing, and a second copy of the rule
-        // here could drift from it. The throw must not escape into a DOM listener
-        // unlogged — the gesture is lost, the editor keeps running.
+        let anchor: number | undefined;
         try {
+          if (!view.contentDOM.contains(root)) {
+            return;
+          }
+          anchor = view.posAtDOM(root);
           view.dispatch({ selection: { anchor } });
         } catch (err) {
           console.error("[quoll] image widget selection dispatch failed", { anchor, err });
@@ -209,35 +150,6 @@ export class ImageBlockWidget extends QuollWidget {
     );
 
     return root;
-  }
-
-  protected patchDOM(
-    dom: HTMLElement,
-    _view: EditorView,
-    from: ImageBlockWidget,
-    _signal: AbortSignal
-  ): boolean {
-    // CM calls updateDOM only when eq() returned false, passing the prior
-    // same-class widget as `from`. `sameAs()` keys on (docFrom, slice); alt/safeUrl
-    // are pure functions of the slice (and the static resource-base facet). So
-    // from.slice === this.slice means only docFrom shifted — re-stamp the caret
-    // target and reuse the <img> (avoids per-keystroke <img> recreation + reflow
-    // when typing above the image). A changed slice returns false so CM does a
-    // full toDOM rebuild, which re-gates the URL via the freshly-passed
-    // safeUrl — `patchDOM` NEVER re-gates or mutates src itself.
-    if (!dom.classList.contains("quoll-image-block")) {
-      return false;
-    }
-    if (from.slice !== this.slice) {
-      return false;
-    }
-    // Re-point the caret channel the click listener actually reads. The
-    // attribute beside it is inspection-only (see `render`) — dropping THIS line
-    // would leave the reused listener dispatching the old offset while the DOM
-    // still looked correct.
-    dom.dataset.docFrom = String(this.docFrom);
-    blockStart.set(dom, this.docFrom);
-    return true;
   }
 
   ignoreEvent(): boolean {

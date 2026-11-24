@@ -730,7 +730,7 @@ html body {
    * the cell foreground legible (the <mark> UA default is black-on-yellow).
    * No padding — matching the editor rule's look, not a geometry constraint:
    * this widget DOM is display-only (TableBlockWidget.toDOM) and click-to-reveal
-   * resolves to a fixed per-cell offset (data-cell-from), so coordsAtPos
+   * uses the widget position and a block-relative cell offset, so coordsAtPos
    * accuracy never rides on these boxes. */
   .quoll-table-block del {
     text-decoration: line-through;

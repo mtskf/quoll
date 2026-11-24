@@ -146,7 +146,7 @@ describe("tableBlockField bounded ≡ fullWalk", () => {
   // bounded update cannot be masked by self-heal.
   //
   // The contract's bounded update has two halves and one anchor reaches only one of them,
-  // so there are two. The REUSE half rebases a record whose block falls outside the span;
+  // so there are two. The REUSE half maps a record whose block falls outside the span;
   // the RE-WALK half walks the span and builds a block per matched node. An anchor whose
   // span holds no `Table` node exercises the first and leaves the second running on an
   // empty range, which is green whatever the re-walk does. The sibling below puts the span
@@ -305,7 +305,7 @@ describe("TableBlock readonly contract (type-only compile pin)", () => {
   it("keeps every field of TableBlock readonly", () => {
     // `slice` is the widget's eq() key (see the field doc in table-field.ts) — it must stay
     // readonly so a block can never be mutated after construction; the other fields carry
-    // the same never-patched-after-build contract (the contract rebases a reused block by
+    // the same never-patched-after-build contract (the contract maps a reused block by
     // keeping the same payload object and moving only its range, never by writing into it).
     //
     // `Readonly<T>` is homomorphic, so `AssertEqual<T, Readonly<T>>` holds only when EVERY

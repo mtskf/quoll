@@ -15,9 +15,7 @@
 // The click-seam contract is cm-table-widget-drag.test.ts.
 import { describe, expect, it, vi } from "vitest";
 
-import { parseTable } from "../../../src/markdown/table/index.js";
 import { quollOpenExternalSink } from "../../../src/webview/cm/open-external.js";
-import { TableBlockWidget } from "../../../src/webview/cm/table/table-widget.js";
 import { IMG_CELL, makeWidget, press, SRC, stubViewWithCaret } from "./helpers/widget-fixtures.js";
 
 /** A document position in the prose BELOW the table, as `view.posAtCoords`
@@ -325,8 +323,7 @@ describe("TableBlockWidget release outside the widget", () => {
     const otherBefore = makeWidget(SRC);
     const dom2 = v2.mount(otherBefore);
     press(dom1.querySelectorAll("td")[0] as HTMLElement, "mousedown", 30, 30);
-    // A distant edit shifts the OTHER table, so its widget is updated in place —
-    // which drops ITS pending anchor. This gesture's anchor is a different entry.
+    // Patch the other root while this gesture is armed.
     v2.update(dom2, makeWidget(SRC, 7), otherBefore);
     press(document.body, "mouseup", 30, 400);
     expect(first, "this gesture keeps the anchor it armed").toEqual([
@@ -511,17 +508,15 @@ describe("TableBlockWidget release outside the widget", () => {
     // caret still reveals this table, which is the whole point of dispatching
     // anything at all here.
     const dispatched: unknown[] = [];
-    const { mount } = stubViewWithCaret(dispatched, [null], [], () => BELOW);
-    const dom = mount(makeWidget(SRC, 7));
+    const { mount } = stubViewWithCaret(dispatched, [null], [], () => BELOW, 7);
+    const dom = mount(makeWidget(SRC));
     press(dom, "mousedown", 30, 30); // the root itself: padding, no cell
     press(document.body, "mouseup", 30, 400);
     expect(dispatched).toEqual([{ selection: { anchor: 7 } }]);
   });
 
   it("updateDOM cancels an outside release too (stale-offset guard)", () => {
-    // The click seam's counterpart of this row is in cm-table-widget-drag.test.ts.
-    // A doc edit landing mid-gesture moves every stamp, so the anchor captured
-    // under the old ones must not be paired with a head resolved under the new.
+    // Patching the relative node offset invalidates the anchor at either release seam.
     const dispatched: unknown[] = [];
     const { mount, update } = stubViewWithCaret(
       dispatched,
@@ -529,13 +524,12 @@ describe("TableBlockWidget release outside the widget", () => {
       [],
       () => BELOW
     );
-    const first = new TableBlockWidget(parseTable(SRC, 0, SRC.length)!, SRC, 0, 0);
+    const first = makeWidget(SRC);
     const dom = mount(first);
     press(dom.querySelectorAll("td")[0] as HTMLElement, "mousedown", 30, 30);
-    update(dom, new TableBlockWidget(parseTable(SRC, 0, SRC.length)!, SRC, 5, 5), first);
+    expect(update(dom, makeWidget(SRC, 5), first)).toBe(true);
     press(document.body, "mouseup", 30, 400);
-    // The caret comes from the RE-POINTED block start, not from the anchor.
-    expect(dispatched).toEqual([{ selection: { anchor: 5 } }]);
+    expect(dispatched).toEqual([{ selection: { anchor: 0 } }]);
   });
 
   it("a backwards release above the table snaps an unmappable anchor OUTWARD", () => {
@@ -545,12 +539,20 @@ describe("TableBlockWidget release outside the widget", () => {
     // the cell the pointer started in.
     const src = `| A |\n| - |\n| ${IMG_CELL} |`;
     const dispatched: unknown[] = [];
-    const { mount } = stubViewWithCaret(dispatched, [{ text: "b", offset: 0 }], [], () => 0);
+    const base = 100;
+    const head = 50; // After the relative stamp, before the absolute cell position.
+    const { mount } = stubViewWithCaret(
+      dispatched,
+      [{ text: "b", offset: 0 }],
+      [],
+      () => head,
+      base
+    );
     const dom = mount(makeWidget(src));
     press(dom.querySelector("td") as HTMLElement, "mousedown", 30, 30);
     press(document.body, "mouseup", 30, 0); // released ABOVE the table
     expect(dispatched).toEqual([
-      { selection: { anchor: src.indexOf(IMG_CELL) + IMG_CELL.length, head: 0 } },
+      { selection: { anchor: base + src.indexOf(IMG_CELL) + IMG_CELL.length, head } },
     ]);
   });
 

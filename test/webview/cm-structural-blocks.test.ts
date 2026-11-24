@@ -380,24 +380,6 @@ describe("structural blocks: frontmatter shift stays bounded (production fields)
   const FM_SHIFT_DOC = ["---", "title: x", "note: y", "---", "", ...BLOCKS_TAIL].join("\n");
   const NO_FM_DOC = ["Top.", "", "Second.", "", ...BLOCKS_TAIL].join("\n");
 
-  /** The table/image positions the widgets were given, per record. */
-  async function positions(state: EditorState) {
-    const p = await productionBlocks();
-    const t = recordsOf(state.field(p.tableBlockField).records).map(({ from, to, block }) => [
-      from,
-      to,
-      from + block.nodeOffset,
-    ]);
-    const images = state.field(p.imageBlockField).records;
-    const widgets = recordWidgetsOf(images);
-    const i = recordsOf(images).map(({ from, to }, n) => [
-      from,
-      to,
-      (widgets[n] as InstanceType<typeof p.ImageBlockWidget>).docFrom,
-    ]);
-    return { t, i };
-  }
-
   async function shiftRow(doc: string, change: { from: number; to?: number; insert?: string }) {
     const p = await productionBlocks();
     const st0 = p.create(doc);
@@ -407,28 +389,35 @@ describe("structural blocks: frontmatter shift stays bounded (production fields)
     expect(p.shape(st0)).toHaveLength(2);
     seam.log.length = 0;
 
+    const values = (state: EditorState) => [
+      state.field(p.tableBlockField).records.iter().value,
+      state.field(p.imageBlockField).records.iter().value,
+    ];
+    const before = values(st0);
     const tr = st0.update({ changes: change });
     const st1 = tr.state;
     expect(requiresFullBoundedRebuild(tr)).toBe(false); // precondition: no full reason
     expect(p.shape(st1)).toHaveLength(2);
-    // Bounded rebase: neither block was rebuilt.
     expect(seam.log).toEqual([]);
-    // Every widget-visible position equals a fresh full build's.
+    values(st1).forEach((value, index) => {
+      const original = before[index];
+      expect(value?.spec.widget).toBe(original?.spec.widget);
+      expect(value).toBe(original);
+    });
     const fresh = p.create(st1.doc.toString());
-    expect(await positions(st1)).toEqual(await positions(fresh));
     expect(p.shape(st1)).toEqual(p.shape(fresh));
   }
 
-  it("frontmatter body insert: one character inside the body rebases the blocks", async () => {
+  it("frontmatter body insert: one character inside the body maps both widget records in place", async () => {
     await shiftRow(FM_SHIFT_DOC, { from: FM_SHIFT_DOC.indexOf("x\n"), insert: "z" });
   });
 
-  it("frontmatter body delete: one character out of the body rebases the blocks", async () => {
+  it("frontmatter body delete: one character out of the body maps both widget records in place", async () => {
     const at = FM_SHIFT_DOC.indexOf("x\n");
     await shiftRow(FM_SHIFT_DOC, { from: at, to: at + 1 });
   });
 
-  it("no frontmatter offset-0 insert: a keystroke at offset 0 rebases the blocks", async () => {
+  it("no frontmatter offset-0 insert: a keystroke at offset 0 maps both widget records in place", async () => {
     await shiftRow(NO_FM_DOC, { from: 0, insert: "z" });
   });
 });
@@ -450,7 +439,6 @@ describe("structural blocks: an edit outside the viewport (production fields)", 
         ).records;
       const blocks = (): unknown[] => recordsOf(records()).map((r) => r.block);
       const widgets = (): unknown[] => recordWidgetsOf(records());
-      const beforeRecords = records();
       const beforeWidgets = widgets();
       const before = blocks();
       expect(before).toHaveLength(1); // precondition
@@ -468,8 +456,6 @@ describe("structural blocks: an edit outside the viewport (production fields)", 
       expect(after).toHaveLength(1);
       expect(after[0]).toBe(before[0]);
       expect(widgets()[0]).toBe(beforeWidgets[0]);
-      // A bounded update that reuses every record unchanged returns the previous set.
-      expect(records()).toBe(beforeRecords);
       expect(p.shape(view.state)).toEqual(p.shape(p.create(view.state.doc.toString())));
     } finally {
       view.destroy();
@@ -667,10 +653,7 @@ interface ToyBlock {
 
 class ToyWidget extends QuollWidget {
   readonly widgetName = "ToyBlockWidget";
-  constructor(
-    readonly at: number,
-    readonly text: string
-  ) {
+  constructor(readonly text: string) {
     super();
   }
   protected render(): HTMLElement {
@@ -679,25 +662,24 @@ class ToyWidget extends QuollWidget {
     return el;
   }
   protected sameAs(other: QuollWidget): boolean {
-    return other instanceof ToyWidget && other.at === this.at && other.text === this.text;
+    return other instanceof ToyWidget && other.text === this.text;
   }
 }
 
 interface ToyOptions {
   /** Runs after the default block is computed; may throw, transform or veto it. */
-  build?: (built: BuiltBlock<ToyBlock>) => BuiltBlock<ToyBlock> | null;
+  build?: (built: BuiltBlock<ToyBlock>, state: EditorState) => BuiltBlock<ToyBlock> | null;
   /** Runs before the widget is made; may throw. */
-  widget?: (block: ToyBlock, from: number) => void;
+  widget?: (block: ToyBlock) => void;
 }
 
 interface Toy {
   field: StateField<StructuralBlockState<ToyBlock>>;
-  /** The block start of every hook call, in call order. */
-  calls: { build: number[]; widget: number[] };
+  calls: { build: number[]; widget: ToyBlock[] };
 }
 
 function toy(opts: ToyOptions = {}): Toy {
-  const calls = { build: [] as number[], widget: [] as number[] };
+  const calls = { build: [] as number[], widget: [] as ToyBlock[] };
   const spec: StructuralBlockSpec<ToyBlock> = {
     name: "toy",
     node: "FencedCode",
@@ -706,12 +688,12 @@ function toy(opts: ToyOptions = {}): Toy {
       const to = state.doc.lineAt(node.to).to;
       calls.build.push(from);
       const built: BuiltBlock<ToyBlock> = { from, to, block: { text: state.sliceDoc(from, to) } };
-      return opts.build ? opts.build(built) : built;
+      return opts.build ? opts.build(built, state) : built;
     },
-    widget(block, from) {
-      calls.widget.push(from);
-      opts.widget?.(block, from);
-      return new ToyWidget(from, block.text);
+    widget(block) {
+      calls.widget.push(block);
+      opts.widget?.(block);
+      return new ToyWidget(block.text);
     },
   };
   return { field: structuralBlockWidgets(spec), calls };
@@ -872,7 +854,7 @@ describe("structural block contract (toy spec)", () => {
       errKind: "invalid-range",
     });
 
-    // A rigid shift inside the frontmatter body: bounded, the block is rebased, not rebuilt.
+    // A rigid shift inside the frontmatter body maps the block range.
     const shiftTr = state.update({ changes: { from: doc.indexOf("x\n"), insert: "z" } });
     expect(requiresFullBoundedRebuild(shiftTr)).toBe(false); // precondition
     expect(ranges(shiftTr.state, t).map((r) => r[0])).toEqual([after + 1]);
@@ -997,11 +979,11 @@ describe("structural block contract updates (toy spec)", () => {
       changes: { from: state.doc.toString().indexOf("Tail paragraph.") + 4, insert: "x" },
     });
     expect(requiresFullBoundedRebuild(clearTr)).toBe(false); // precondition: bounded path
-    // Every record reused unchanged and none added: the previous set itself.
-    expect(clearTr.state.field(t.field).records).toBe(beforeSet);
+    expect(recordWidgetsOf(clearTr.state.field(t.field).records)).toEqual(
+      recordWidgetsOf(beforeSet)
+    );
     expect(t.calls.build).toEqual([]);
 
-    // Inside the LAST block, so no other block moves (a moved block is rebased: "toy rebase").
     const gamma = before[2].from;
     const insideTr = state.update({
       changes: { from: state.doc.toString().indexOf("gamma") + 2, insert: "x" },
@@ -1020,51 +1002,60 @@ describe("structural block contract updates (toy spec)", () => {
     expect(insideWidgets[1]).toBe(beforeWidgets[1]);
   });
 
-  it("toy rebase: an insertion before a block mints a shifted record without rebuilding it", () => {
+  it("toy identity: a distant insertion maps the same decoration and widget", () => {
     const t = toy();
     const state = toyState(TOY_DOC, t);
-    const beforeSet = state.field(t.field).records;
-    const before = recordsOf(beforeSet);
+    const before = state.field(t.field).records.iter();
     const tr = state.update({ changes: { from: 4, insert: "x" } });
-    expect(requiresFullBoundedRebuild(tr)).toBe(false); // precondition: bounded path
-    const afterSet = tr.state.field(t.field).records;
-    const after = recordsOf(afterSet);
-    expect(after.map((r) => [r.from, r.to])).toEqual(before.map((r) => [r.from + 1, r.to + 1]));
-    // The shifted record keeps the SAME payload object; only its widget is re-minted.
-    after.forEach((r, i) => {
-      expect(r.block).toBe(before[i].block);
-    });
-    const beforeWidgets = recordWidgetsOf(beforeSet);
-    recordWidgetsOf(afterSet).forEach((w, i) => {
-      expect(w).not.toBe(beforeWidgets[i]);
-    });
+    expect(requiresFullBoundedRebuild(tr)).toBe(false);
+    const after = tr.state.field(t.field).records.iter();
+    expect(before.value?.spec.widget).toBeInstanceOf(ToyWidget);
+    while (before.value !== null) {
+      expect(after.value?.spec.widget).toBe(before.value.spec.widget);
+      expect(after.value).toBe(before.value);
+      before.next();
+      after.next();
+    }
+    expect(after.value).toBeNull();
     expect(t.calls.build).toEqual([]);
-    expect(t.calls.widget).toEqual(before.map((r) => r.from + 1));
-    expect(widgetSlots(tr.state, ToyWidget).map((s) => (s.widget as ToyWidget).at)).toEqual(
-      before.map((r) => r.from + 1)
-    );
+    expect(t.calls.widget).toEqual([]);
+    const fresh = toyState(tr.state.doc.toString(), toy());
+    expect(ranges(tr.state, t)).toEqual(fencedRanges(fresh));
   });
 
-  it("toy widget throws on rebase: the dispatch succeeds and the rebased block is absent", () => {
+  it("toy below last block: an edit after every block keeps the records set itself", () => {
+    const t = toy();
+    const doc = `${TOY_DOC}\n\nTrailing prose.\n\nMore prose.`;
+    const state = toyState(doc, t);
+    const records = state.field(t.field).records;
+    expect(records.size).toBeGreaterThan(0);
+    const tr = state.update({ changes: { from: doc.length, insert: "x" } });
+    expect(requiresFullBoundedRebuild(tr)).toBe(false);
+    expect(tr.state.field(t.field).records).toBe(records);
+  });
+
+  it("toy bounded overlap: a walked block reaches an untouched block", () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const gamma = TOY_DOC.indexOf("```\ngamma");
-    const t = toy({
-      widget: (_b, from) => {
-        if (from === gamma + 1) {
-          throw new Error("toy widget on rebase");
-        }
-      },
-    });
-    const state = toyState(TOY_DOC, t);
-    expect(ranges(state, t).map((r) => r[0])).toContain(gamma); // precondition: first build ok
-    const tr = state.update({ changes: { from: 4, insert: "x" } });
-    expect(requiresFullBoundedRebuild(tr)).toBe(false); // precondition: bounded path
-    expect(t.calls.build).toEqual([]);
-    expect(t.calls.widget).toContain(gamma + 1);
-    const after = ranges(tr.state, t).map((r) => r[0]);
-    expect(after).toHaveLength(2);
-    expect(after).not.toContain(gamma + 1);
-    expect(hookLogCount(spy)).toBe(1);
+    const doc = ["Intro.", "", ...fence(["alpha"]), "", "Between.", "", ...fence(["beta"])].join(
+      "\n"
+    );
+    const options: ToyOptions = {
+      build: (b, state) => (b.block.text.includes("alphax") ? { ...b, to: state.doc.length } : b),
+    };
+    const t = toy(options);
+    const state = toyState(doc, t);
+    expect(ranges(state, t)).toEqual(fencedRanges(state));
+    expect(ranges(state, t)).toHaveLength(2);
+    const tr = state.update({ changes: { from: doc.indexOf("alpha") + 5, insert: "x" } });
+    expect(requiresFullBoundedRebuild(tr)).toBe(false);
+    const updated = ranges(tr.state, t);
+    expect(updated).toEqual([[doc.indexOf("```"), tr.state.doc.length]]);
+    expect(spy).toHaveBeenCalledExactlyOnceWith(
+      "[quoll] structural blocks overlap; dropping the later one",
+      { name: "toy", arm: "overlap" }
+    );
+    const oracle = toy(options);
+    expect(updated).toEqual(ranges(toyState(tr.state.doc.toString(), oracle), oracle));
   });
 
   it("toy dedupe: two distant edits inside one long block call each hook once for it", () => {
@@ -1082,7 +1073,7 @@ describe("structural block contract updates (toy spec)", () => {
     });
     expect(requiresFullBoundedRebuild(tr)).toBe(false); // precondition: bounded path
     expect(t.calls.build).toEqual([blockFrom]);
-    expect(t.calls.widget).toEqual([blockFrom]);
+    expect(t.calls.widget).toHaveLength(1);
     expect(ranges(tr.state, t)).toEqual(fencedRanges(tr.state));
   });
 
@@ -1116,7 +1107,6 @@ describe("structural block contract updates (toy spec)", () => {
     rb.forEach((r, i) => {
       expect(r.block).toBe(baseList[i].block);
     });
-    expect(b.field(t.field).records).toBe(base);
     expect(ra[2].block.text).toContain("gxamma");
     expect(rb[2].block.text).not.toContain("gxamma");
     expect(recordsOf(state.field(t.field).records)[2].block.text).not.toContain("gxamma");

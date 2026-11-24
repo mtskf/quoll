@@ -4,7 +4,7 @@
 // on). Not a test file itself (no .browser.test.ts suffix), mirroring
 // helpers/handoff-window.ts.
 //
-// Why a real browser at all: every drag test in test/webview/table/ builds the
+// Why a real browser at all: the layout-free drag tests in test/webview/table/ builds the
 // widget by hand — `widget.toDOM(stubView)` on a detached-then-appended <div>,
 // with a SCRIPTED CaretResolver — so nothing there observes the facts the
 // design actually rests on. happy-dom has no layout engine, so the production
@@ -30,13 +30,13 @@ import { quollTheme } from "../../../src/webview/cm/theme.js";
 // them.
 const DOC =
   "# Doc\n\npara\n\n| Alpha | Beta |\n| ----- | ---- |\n| gamma | delta |\n| **bo** | plain |\n\ntail\n";
-/** Content-start source offsets — what the widget stamps as `data-cell-from`. */
+/** Absolute content starts, resolved from the block start and the relative stamps. */
 export const GAMMA = DOC.indexOf("gamma");
 export const DELTA = DOC.indexOf("delta");
 export const BOLD_FROM = DOC.indexOf("**bo**");
 export const PLAIN = DOC.indexOf("plain");
 /** Source offset of the table block's first byte — the caret the widget falls
- *  back to when a gesture maps to no cell at all (`blockStartCaret`). */
+ *  back to when a gesture maps to no cell at all. */
 export const TABLE_BLOCK_START = DOC.indexOf("| Alpha");
 /** Source offset of the paragraph AFTER the table — the release point for the
  *  gesture "select the table plus the paragraph below". */

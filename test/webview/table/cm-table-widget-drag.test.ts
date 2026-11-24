@@ -5,11 +5,17 @@
 // The collapsed-caret path is cm-table-widget-caret.test.ts. Fixtures — the
 // scripted caret resolver in particular, whose private mount-scoped root is
 // what keeps these tests from passing vacuously — are helpers/widget-fixtures.ts.
-import { describe, expect, it } from "vitest";
+import { EditorState } from "@codemirror/state";
+import { Decoration, EditorView } from "@codemirror/view";
+import { describe, expect, it, vi } from "vitest";
 
 import { parseTable } from "../../../src/markdown/table/index.js";
+import { quollMarkdownLanguage } from "../../../src/webview/cm/markdown.js";
 import { quollOpenExternalSink } from "../../../src/webview/cm/open-external.js";
+import { quollTableCaretResolver } from "../../../src/webview/cm/table/cell-point.js";
+import { tableBlockField } from "../../../src/webview/cm/table/table-field.js";
 import { TableBlockWidget } from "../../../src/webview/cm/table/table-widget.js";
+import { settledMount } from "../helpers/settled-view.js";
 import {
   IMG_CELL,
   MIXED_IMG_CELL,
@@ -261,7 +267,7 @@ describe("TableBlockWidget drag-selection", () => {
     ]);
   });
 
-  // error-handler 92: a doc edit landing mid-gesture moves the stamps.
+  // Patching the cell layout invalidates the armed anchor.
   it("updateDOM cancels an in-flight drag (stale-offset guard)", () => {
     // Control arm FIRST. The real assertion below is a NEGATIVE one (expects a
     // caret), so anything that quietly stops the resolver from resolving —
@@ -287,47 +293,17 @@ describe("TableBlockWidget drag-selection", () => {
       { text: "alpha", offset: 2 },
       { text: "alpha", offset: 5 },
     ]);
-    const first = new TableBlockWidget(parseTable(SRC, 0, SRC.length)!, SRC, 0, 0);
+    const first = new TableBlockWidget(parseTable(SRC, 0, SRC.length)!, SRC, 0);
     const dom = mount(first);
     const td = dom.querySelectorAll("td")[0] as HTMLElement;
     press(td, "mousedown", 10, 10);
-    // A distant edit shifts this table while the button is still down.
-    const shifted = new TableBlockWidget(parseTable(SRC, 0, SRC.length)!, SRC, 5, 5);
-    update(dom, shifted, first);
+    // Patch the relative node offset while the button is still down.
+    const shifted = new TableBlockWidget(parseTable(SRC, 0, SRC.length)!, SRC, 5);
+    expect(update(dom, shifted, first)).toBe(true);
     press(td, "click", 60, 10);
     // The anchor was invalidated → collapsed caret at the NEW stamp, not a
     // range built from two different coordinate systems.
     expect(dispatched).toEqual([{ selection: { anchor: 5 + SRC.indexOf("alpha") } }]);
-  });
-
-  // The counterpart of the row above: the shift lands BEFORE the gesture, not
-  // during it, and the drag must still map exactly. This is the ONE reason the
-  // source map holds CELL-RELATIVE offsets (see the CELL-CONTENT-RELATIVE
-  // paragraph on `CellSourceRun`, cell-source-map.ts) — `stampRow` re-points
-  // the stamps on a pure positional shift WITHOUT re-rendering, so an absolute
-  // map would go stale exactly here and every marked-up cell would silently
-  // degrade to the whole-cell snap after the first keystroke above a table.
-  // The other shift rows (cm-table-widget-update.test.ts's re-stamp pair, and
-  // the click-after-shift row in cm-table-widget-render.test.ts) assert stamps
-  // on a PLAIN-TEXT cell and never drag afterwards, so they cannot see it.
-  it("a drag in a marked-up cell still maps exactly after a pure positional shift", () => {
-    const src = "| Name |\n| - |\n| **bold** |";
-    const dispatched: unknown[] = [];
-    const { mount, update } = stubViewWithCaret(dispatched, [
-      { text: "bold", offset: 1 },
-      { text: "bold", offset: 3 },
-    ]);
-    const first = new TableBlockWidget(parseTable(src, 0, src.length)!, src, 0, 0);
-    const dom = mount(first);
-    // Distant insertion above the table: same bytes, new base → stampRow path.
-    const shifted = new TableBlockWidget(parseTable(src, 0, src.length)!, src, 5, 5);
-    expect(update(dom, shifted, first)).toBe(true);
-
-    const td = dom.querySelector("td") as HTMLElement;
-    press(td, "mousedown", 10, 10);
-    press(td, "click", 60, 10);
-    const from = 5 + src.indexOf("**bold**");
-    expect(dispatched).toEqual([{ selection: { anchor: from + 3, head: from + 5 } }]);
   });
 
   // The native mousedown default is what moves focus into CodeMirror's
@@ -568,5 +544,93 @@ describe("TableBlockWidget drag-selection", () => {
     expect(event.defaultPrevented).toBe(true);
     expect(opened).toEqual(["https://example.com"]);
     expect(dispatched).toEqual([]);
+  });
+});
+
+describe("TableBlockWidget drag owner in EditorView", () => {
+  const prefix = "Introduction far enough above the table to test absolute positions.\n\n";
+  const tail = "\n\nTrailing prose.";
+  const first = prefix.length;
+
+  describe.each(["inside", "outside"] as const)("%s release", (seam) => {
+    it.each([
+      "doc change",
+      "reveal swap",
+      "unchanged owner",
+    ] as const)("resolves a drag after %s", (scenario) => {
+      const swap = scenario === "reveal swap";
+      const doc = prefix + SRC + (swap ? `\n\n${SRC}` : "") + tail;
+      const second = first + SRC.length + 2;
+      let text: Node | null = null;
+      const state = EditorState.create({
+        doc,
+        selection: { anchor: swap ? first : 0 },
+        extensions: [
+          quollMarkdownLanguage(),
+          tableBlockField,
+          // Change the decoration across the separator with the reveal so both
+          // tables are redrawn together and CodeMirror can reuse the later tile.
+          EditorView.decorations.compute(["selection"], (state) =>
+            swap && state.selection.main.head === second
+              ? Decoration.set([Decoration.mark({ class: "swap" }).range(second - 2, second)])
+              : Decoration.none
+          ),
+          quollTableCaretResolver.of((x) =>
+            text === null ? null : { node: text, offset: x === 10 ? 2 : 5 }
+          ),
+        ],
+      });
+      const view = settledMount({ state, parent: document.body });
+      const patch = vi.spyOn(
+        TableBlockWidget.prototype as unknown as { patchDOM: () => boolean },
+        "patchDOM"
+      );
+      const lookup = vi.spyOn(view, "posAtCoords").mockReturnValue(doc.indexOf("Trailing"));
+      const root = () => view.contentDOM.querySelector<HTMLElement>(".quoll-table-block")!;
+      try {
+        const armedRoot = root();
+        expect(armedRoot).not.toBeNull();
+        expect(view.posAtDOM(armedRoot)).toBe(swap ? second : first);
+        const cell = armedRoot.querySelector("td")!;
+        text = cell.firstChild;
+        expect(text?.textContent).toBe("alpha");
+        const pressedDoc = view.state.doc;
+        press(cell, "mousedown", 10, 10);
+
+        if (scenario === "doc change") {
+          view.dispatch({ changes: { from: view.state.doc.length, insert: " More prose." } });
+          expect(view.state.doc).not.toBe(pressedDoc);
+        } else if (swap) {
+          view.dispatch({ selection: { anchor: second } });
+          expect(view.state.doc).toBe(pressedDoc);
+        }
+
+        expect(root()).toBe(armedRoot);
+        expect(view.posAtDOM(armedRoot)).toBe(first);
+        expect(patch).not.toHaveBeenCalled();
+        const cellStart = first + SRC.indexOf("alpha");
+        const anchor = view.state.selection.main.anchor;
+        if (seam === "inside") {
+          press(cell, "mouseup", 60, 10);
+          expect(view.state.selection.main.anchor).toBe(anchor);
+          press(cell, "click", 60, 10);
+        } else {
+          press(document.body, "mouseup", 60, 10);
+        }
+
+        const selection = view.state.selection.main;
+        if (scenario === "unchanged owner") {
+          expect(selection.anchor).toBe(cellStart + 2);
+          expect(selection.head).toBe(seam === "inside" ? cellStart + 5 : doc.indexOf("Trailing"));
+        } else {
+          expect(selection.empty).toBe(true);
+          expect(selection.anchor).toBe(seam === "inside" ? cellStart : first);
+        }
+      } finally {
+        lookup.mockRestore();
+        patch.mockRestore();
+        view.destroy();
+      }
+    });
   });
 });
