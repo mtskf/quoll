@@ -394,9 +394,10 @@ export function toggleCollapse<X>(
 
 /** The keyboard path to `toggleCollapse`: a Command that collapses (`expand === false`) or
  *  expands the block of `field` whose extent [blockFrom, blockTo] holds the MAIN head, but
- *  only when that block is in the other state. Returns false otherwise (no block there, or
- *  already in the target state) so the binding falls through to the next command bound to
- *  the same key. Reads the records, not the decorations: a fold-suppressed record has none.
+ *  only when that block is in the other state and its bar is not hidden by an outer fold.
+ *  Returns false otherwise (no block there, already in the target state, or folded away) so
+ *  the binding falls through to the next command bound to the same key. Reads the records,
+ *  not the decorations: a fold-suppressed record has none.
  *  No readOnly guard — the toggle is an effect, never a document change. */
 export function collapseAtCaretCommand<X>(
   field: StateField<CollapseState<X>>,
@@ -408,7 +409,13 @@ export function collapseAtCaretCommand<X>(
     const block = view.state
       .field(field, false)
       ?.blocks.find((b) => b.blockFrom <= head && head <= b.blockTo);
-    if (block === undefined || block.expanded === expand) {
+    // A bar an outer fold hides (assemble's rule) is not there to toggle: the key belongs
+    // to the fold, and toggling would park the caret inside it, which unfolds it.
+    if (
+      block === undefined ||
+      block.expanded === expand ||
+      hiddenByFold(foldedRanges(view.state), block.decoFrom)
+    ) {
       return false;
     }
     toggleCollapse(view, target, block.key, expand);

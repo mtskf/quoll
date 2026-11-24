@@ -165,4 +165,40 @@ describe("collapse bars — keyboard path (real Chromium, production bundle)", (
     await expect.poll(shown).toBe(false);
     expect(f.win.document.querySelectorAll(".quoll-fenced-collapse-toggle").length).toBe(0);
   });
+
+  // A folded section that ENDS with a long block leaves the caret allowed at the fold's
+  // `to`, i.e. at the block's end — inside the block's extent, yet the block's bar is folded
+  // away. The fold keys must act on the fold there, as if the block were short.
+  for (const c of CASES) {
+    const block = c.doc.slice(0, c.doc.indexOf("\n\npara"));
+    const doc = `# H\n\n${block}\n\n# H2\n\ntail\n`;
+    const blockEnd = doc.indexOf(block) + block.length;
+    const shown = (f: Fixture) => f.view.contentDOM.textContent?.includes("line2") ?? false;
+    const foldSection = async () => {
+      fixture = await productionPasteFixture(doc);
+      const f = fixture;
+      await f.select(1);
+      await userEvent.keyboard(chord(f, "["));
+      await expect.poll(() => shown(f)).toBe(false);
+      f.view.dispatch({ selection: { anchor: blockEnd } });
+      f.view.contentDOM.focus();
+      await frames(f, 3);
+      expect(shown(f)).toBe(false);
+      return f;
+    };
+
+    it(`editable ${c.name} in a folded section: the fold key leaves the section folded`, async () => {
+      const f = await foldSection();
+      await userEvent.keyboard(chord(f, "["));
+      await frames(f, 5);
+      expect(shown(f)).toBe(false);
+      expect(f.view.state.selection.main.head).toBe(blockEnd);
+    });
+
+    it(`editable ${c.name} in a folded section: the unfold key opens the section`, async () => {
+      const f = await foldSection();
+      await userEvent.keyboard(chord(f, "]"));
+      await expect.poll(() => shown(f)).toBe(true);
+    });
+  }
 });
