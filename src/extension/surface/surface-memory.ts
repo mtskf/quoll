@@ -1,24 +1,18 @@
 // Session-only memory of which editor surface each `.md` was last shown in —
 // the Quoll rich editor (`"quoll"`) or the built-in text editor (`"text"`).
 //
-// DELIBERATELY in-memory only: a plain module-level Map, NO Memento /
+// DELIBERATELY in-memory only: plain module-level Maps, NO Memento /
 // workspaceState / globalState / disk (user decision). A full VS Code host
 // restart forgets everything, which is acceptable — the value is remembering
 // within one working session. Bounded by the number of `.md` files touched in
 // a session; entries are never evicted (a session-lifetime cache), mirroring
 // the module-level store pattern of editor-switch-caret.ts.
 //
-// Two writers feed it (see surface-restore-watcher.ts + the switch handlers):
-//   - noteSurface: the deliberate switch sites. A REVERSE swap (text → Quoll)
-//     records INTENT once the open SUCCEEDS and before the source tab is closed,
-//     so the tab watcher adopts rather than bounces it. A FORWARD swap
-//     (Quoll → text) records the OUTCOME after finalize settles, via
-//     finalizeForwardSwap ("text" only if the source closed, else "quoll"; its
-//     post-open rejection arm writes "quoll"), overriding the watcher's
-//     sibling-adopt "text" from when the target tab opened.
-//   - reconcileOpen: ENFORCEMENT — the tab watcher calls this for every newly
-//     opened `.md` tab; it records the shown surface (adopt) or asks the caller
-//     to reopen in the remembered surface (restore) without overwriting memory.
+// Reverse swaps use noteSurface after the target opens and before closing the
+// source. Forward swaps claim the URI before opening text and record the outcome
+// after finalize settles if the claim is still current. The tab watcher records
+// deliberate Quoll opens through reconcileOpen. Text opens beside a Quoll tab
+// stay in place and leave memory to the deliberate selection sites.
 
 export type EditorSurface = "quoll" | "text";
 
@@ -30,6 +24,28 @@ export interface OpenReconcile {
 }
 
 const surfaces = new Map<string, EditorSurface>();
+const generations = new Map<string, number>();
+
+export interface SurfaceClaim {
+  /** False once a newer deliberate selection for the same URI was recorded. */
+  isCurrent(): boolean;
+  /** Record the surface only while the claim is current. */
+  record(surface: EditorSurface): void;
+}
+
+export function claimSurface(uriKey: string): SurfaceClaim {
+  const generation = (generations.get(uriKey) ?? 0) + 1;
+  generations.set(uriKey, generation);
+  const isCurrent = () => generations.get(uriKey) === generation;
+  return {
+    isCurrent,
+    record(surface) {
+      if (isCurrent()) {
+        surfaces.set(uriKey, surface);
+      }
+    },
+  };
+}
 
 /** Pure reconcile decision for a just-opened tab.
  *  - `remembered`: the stored surface for the doc, or undefined if none.
@@ -43,16 +59,19 @@ const surfaces = new Map<string, EditorSurface>();
  *  therefore always an intentional choice (native Open With, our swap) and must
  *  be adopted, never bounced. Only a default TEXT open can be a fresh reopen that
  *  should be upgraded back to a remembered Quoll surface — and only when no
- *  sibling Quoll tab already exists (a sibling ⇒ a deliberate side-by-side or a
- *  toggle mid-swap ⇒ adopt the shown surface instead). Every other case adopts
- *  `shown` (a `"text"` memory is load-bearing: it says "do NOT re-upgrade to
- *  Quoll", so a file the user toggled to text stays text on reopen). */
+ *  sibling Quoll tab already exists. A text tab with a Quoll sibling stays
+ *  open without changing memory, including when a stale swap's text-open event
+ *  arrives after a deliberate Quoll open. A remembered `"text"` keeps a fresh
+ *  text open in the text editor. */
 export function decideOpenReconcile(
   remembered: EditorSurface | undefined,
   shown: EditorSurface,
   hasSibling: boolean
 ): OpenReconcile {
-  if (shown === "text" && remembered === "quoll" && !hasSibling) {
+  if (shown === "text" && hasSibling) {
+    return { record: null, reopen: null };
+  }
+  if (shown === "text" && remembered === "quoll") {
     return { record: null, reopen: "quoll" };
   }
   return { record: shown, reopen: null };
@@ -66,31 +85,30 @@ export function reconcileOpen(
   hasSibling: boolean
 ): EditorSurface | null {
   const { record, reopen } = decideOpenReconcile(surfaces.get(uriKey), shown, hasSibling);
-  if (record !== null) {
+  if (record === "quoll") {
+    noteSurface(uriKey, record);
+  } else if (record === "text") {
     surfaces.set(uriKey, record);
   }
   return reopen;
 }
 
-/** Record `surface` as the remembered surface for `uriKey` (a `Uri.toString()`),
- *  overwriting any prior. Called by the deliberate switch sites: the reverse swap
- *  once it has opened the target surface (and before it closes the source), so
- *  the tab watcher sees a match and adopts it; forward swaps record the OUTCOME
- *  after finalize via finalizeForwardSwap (and "quoll" from the post-open
- *  rejection arm), overriding the watcher's sibling-adopt. */
+/** Record a deliberate selection for `uriKey` (a `Uri.toString()`) and
+ *  supersede any outstanding claim for that URI. */
 export function noteSurface(uriKey: string, surface: EditorSurface): void {
-  surfaces.set(uriKey, surface);
+  claimSurface(uriKey).record(surface);
 }
 
 /** Test-only: read the remembered surface for `uriKey`, or undefined if none.
  *  Named with the `__…ForTest` convention because no production code reads
  *  memory directly — the watcher goes through `reconcileOpen`, the switch sites
- *  through `noteSurface`. */
+ *  through `noteSurface` or `claimSurface`. */
 export function __getRememberedSurfaceForTest(uriKey: string): EditorSurface | undefined {
   return surfaces.get(uriKey);
 }
 
-/** Test-only: clear the whole map (the host-restart analogue). */
+/** Test-only: clear both maps (the host-restart analogue). */
 export function __clearSurfaceMemoryForTest(): void {
   surfaces.clear();
+  generations.clear();
 }

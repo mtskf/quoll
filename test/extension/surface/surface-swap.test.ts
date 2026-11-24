@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Tab, TextDocument, Uri } from "vscode";
+import { type Tab, type TextDocument, type Uri, window } from "vscode";
 import {
   __clearSurfaceMemoryForTest,
   __getRememberedSurfaceForTest,
+  claimSurface,
   noteSurface,
 } from "../../../src/extension/surface/surface-memory.js";
 import {
@@ -75,8 +76,11 @@ describe("shouldCloseSourceTab", () => {
 // orchestration) via the injectable seam — pins the data-loss guard and the
 // defensive close arms that the E2E happy-paths never exercise.
 const fileUri = { scheme: "file", toString: () => "file:///a.md" } as unknown as Uri;
+const KEY = fileUri.toString();
 const SENTINEL_TAB = { id: "captured" } as unknown as Tab;
 const LIVE_TAB = { id: "live" } as unknown as Tab;
+
+beforeEach(() => __clearSurfaceMemoryForTest());
 
 /** A minimal TextDocument fake whose `isDirty` reflects a `save()` that flips it
  *  clean on success (mirrors VS Code) and stays dirty on failure. */
@@ -186,25 +190,16 @@ describe("finalizeSurfaceSwap", () => {
   });
 });
 
+/** A promise plus its resolver for pausing the operation at an await boundary. */
+function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
 describe("finalizeForwardSwap (forward outcome → surface memory)", () => {
-  // The wrapper records the swap OUTCOME after finalize settles: "text" only
-  // when the swap completed, "quoll" otherwise — overriding the restore
-  // watcher's sibling-adopt "text" written when the target tab opened.
-  const KEY = fileUri.toString();
-
-  beforeEach(() => __clearSurfaceMemoryForTest());
-
-  /** A promise plus its resolver. The cases below use one as an "entered"
-   *  signal (resolved when the fake dep is first called) so mid-flight asserts
-   *  wait on a real event, never on a fixed microtask count. */
-  function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
-    let resolve!: (v: T) => void;
-    const promise = new Promise<T>((r) => {
-      resolve = r;
-    });
-    return { promise, resolve };
-  }
-
   it.each([
     ["a clean close", fakeDoc(false, false), {}],
     ["a saved-then-closed dirty doc", fakeDoc(true, true), {}],
@@ -215,31 +210,35 @@ describe("finalizeForwardSwap (forward outcome → surface memory)", () => {
     ],
   ] as const)('records "text" after %s', async (_label, doc, overrides) => {
     const { deps } = makeDeps(doc, overrides);
-    await expect(finalizeForwardSwap(fileUri, SENTINEL_TAB, deps)).resolves.toBe(true);
+    await expect(finalizeForwardSwap(fileUri, SENTINEL_TAB, claimSurface(KEY), deps)).resolves.toBe(
+      true
+    );
     expect(__getRememberedSurfaceForTest(KEY)).toBe("text");
   });
 
   it('records "quoll" when a dirty doc\'s save() returns false', async () => {
     const { deps } = makeDeps(fakeDoc(true, false));
-    await expect(finalizeForwardSwap(fileUri, SENTINEL_TAB, deps)).resolves.toBe(false);
+    await expect(finalizeForwardSwap(fileUri, SENTINEL_TAB, claimSurface(KEY), deps)).resolves.toBe(
+      false
+    );
     expect(__getRememberedSurfaceForTest(KEY)).toBe("quoll");
   });
 
   it('records "quoll" when save() throws', async () => {
     const { deps } = makeDeps(fakeDoc(true, "throw"));
-    await finalizeForwardSwap(fileUri, SENTINEL_TAB, deps);
+    await finalizeForwardSwap(fileUri, SENTINEL_TAB, claimSurface(KEY), deps);
     expect(__getRememberedSurfaceForTest(KEY)).toBe("quoll");
   });
 
   it('records "quoll" when the close is cancelled', async () => {
     const { deps } = makeDeps(fakeDoc(false, false), { closeTab: vi.fn(async () => false) });
-    await finalizeForwardSwap(fileUri, SENTINEL_TAB, deps);
+    await finalizeForwardSwap(fileUri, SENTINEL_TAB, claimSurface(KEY), deps);
     expect(__getRememberedSurfaceForTest(KEY)).toBe("quoll");
   });
 
   it('records "quoll" when there is no captured source tab', async () => {
     const { deps } = makeDeps(fakeDoc(false, false));
-    await finalizeForwardSwap(fileUri, undefined, deps);
+    await finalizeForwardSwap(fileUri, undefined, claimSurface(KEY), deps);
     expect(__getRememberedSurfaceForTest(KEY)).toBe("quoll");
   });
 
@@ -249,15 +248,58 @@ describe("finalizeForwardSwap (forward outcome → surface memory)", () => {
         throw new Error("cannot open");
       },
     });
-    await finalizeForwardSwap(fileUri, SENTINEL_TAB, deps);
+    await finalizeForwardSwap(fileUri, SENTINEL_TAB, claimSurface(KEY), deps);
     expect(__getRememberedSurfaceForTest(KEY)).toBe("quoll");
   });
 
-  it('overwrites an earlier "text" (the watcher\'s sibling-adopt) with "quoll" on save false', async () => {
-    noteSurface(KEY, "text");
-    const { deps } = makeDeps(fakeDoc(true, false));
-    await finalizeForwardSwap(fileUri, SENTINEL_TAB, deps);
+  it("skips save and close when superseded before save", async () => {
+    const doc = fakeDoc(true, true);
+    const open = deferred<TextDocument>();
+    const { deps, closeTab } = makeDeps(doc, { openDoc: () => open.promise });
+    const run = finalizeForwardSwap(fileUri, SENTINEL_TAB, claimSurface(KEY), deps);
+    noteSurface(KEY, "quoll");
+    open.resolve(doc);
+
+    expect.soft(await run).toBe(false);
+    expect.soft(doc.save).not.toHaveBeenCalled();
+    expect.soft(closeTab).not.toHaveBeenCalled();
     expect(__getRememberedSurfaceForTest(KEY)).toBe("quoll");
+  });
+
+  it.each([
+    true,
+    false,
+  ])("skips warning and close and preserves newer memory when superseded during save (save returns %s)", async (saved) => {
+    const warning = vi.spyOn(window, "showWarningMessage");
+    try {
+      const entered = deferred<void>();
+      const save = deferred<boolean>();
+      let dirty = true;
+      const doc = {
+        uri: fileUri,
+        get isDirty() {
+          return dirty;
+        },
+        save: () => {
+          entered.resolve();
+          return save.promise;
+        },
+      } as unknown as TextDocument;
+      const { deps, closeTab } = makeDeps(doc);
+      const run = finalizeForwardSwap(fileUri, SENTINEL_TAB, claimSurface(KEY), deps);
+      await entered.promise;
+      const newerSurface = saved ? "quoll" : "text";
+      noteSurface(KEY, newerSurface);
+      dirty = !saved;
+      save.resolve(saved);
+
+      expect.soft(await run).toBe(false);
+      expect.soft(warning).not.toHaveBeenCalled();
+      expect.soft(closeTab).not.toHaveBeenCalled();
+      expect(__getRememberedSurfaceForTest(KEY)).toBe(newerSurface);
+    } finally {
+      warning.mockRestore();
+    }
   });
 
   describe("writes only after finalize fully settles", () => {
@@ -271,7 +313,7 @@ describe("finalizeForwardSwap (forward outcome → surface memory)", () => {
           return open.promise;
         },
       });
-      const run = finalizeForwardSwap(fileUri, SENTINEL_TAB, deps);
+      const run = finalizeForwardSwap(fileUri, SENTINEL_TAB, claimSurface(KEY), deps);
       await entered.promise;
       expect(__getRememberedSurfaceForTest(KEY)).toBe("text");
       open.resolve(fakeDoc(true, false));
@@ -289,7 +331,7 @@ describe("finalizeForwardSwap (forward outcome → surface memory)", () => {
           return close.promise;
         },
       });
-      const run = finalizeForwardSwap(fileUri, SENTINEL_TAB, deps);
+      const run = finalizeForwardSwap(fileUri, SENTINEL_TAB, claimSurface(KEY), deps);
       await entered.promise;
       expect(__getRememberedSurfaceForTest(KEY)).toBe("quoll");
       close.resolve(true);
@@ -307,7 +349,7 @@ describe("finalizeForwardSwap (forward outcome → surface memory)", () => {
           return close.promise;
         },
       });
-      const run = finalizeForwardSwap(fileUri, SENTINEL_TAB, deps);
+      const run = finalizeForwardSwap(fileUri, SENTINEL_TAB, claimSurface(KEY), deps);
       await entered.promise;
       expect(__getRememberedSurfaceForTest(KEY)).toBe("text");
       close.resolve(false);
@@ -329,6 +371,7 @@ describe("runForwardSwitch", () => {
     };
     const deps = {
       barrier,
+      claim: vi.fn(() => claimSurface(KEY)),
       open: vi.fn<() => Promise<unknown>>(async () => undefined),
       restoreCaret: vi.fn(),
       finalize: vi.fn(async () => true),
@@ -365,6 +408,28 @@ describe("runForwardSwitch", () => {
     runForwardSwitch(test.deps);
     test.run();
     await vi.waitFor(() => expect(test.deps.postAborted).toHaveBeenCalledOnce());
+    expect(test.deps.open).toHaveBeenCalledOnce();
+    expect(test.deps.restoreCaret).toHaveBeenCalledTimes(
+      failure === "caret" || failure === "finalize" ? 1 : 0
+    );
+    expect(test.deps.finalize).toHaveBeenCalledTimes(failure === "finalize" ? 1 : 0);
+  });
+
+  it("aborts without restoring the caret or finalizing when superseded during open", async () => {
+    const test = setup();
+    const open = deferred<void>();
+    test.deps.open.mockReturnValue(open.promise);
+    runForwardSwitch(test.deps);
+    expect(test.deps.claim).not.toHaveBeenCalled();
+    test.run();
+    expect(test.deps.claim).toHaveBeenCalledBefore(test.deps.open);
+    expect(test.deps.open).toHaveBeenCalledOnce();
+    noteSurface(KEY, "quoll");
+    open.resolve();
+    await open.promise;
+    expect.soft(test.deps.postAborted).toHaveBeenCalledOnce();
+    expect.soft(test.deps.restoreCaret).not.toHaveBeenCalled();
+    expect(test.deps.finalize).not.toHaveBeenCalled();
   });
 
   it("posts an abort when the barrier drops the operation", () => {
@@ -372,7 +437,10 @@ describe("runForwardSwitch", () => {
     runForwardSwitch(test.deps);
     test.drop();
     expect(test.deps.postAborted).toHaveBeenCalledOnce();
+    expect(test.deps.claim).not.toHaveBeenCalled();
     expect(test.deps.open).not.toHaveBeenCalled();
+    expect(test.deps.restoreCaret).not.toHaveBeenCalled();
+    expect(test.deps.finalize).not.toHaveBeenCalled();
   });
 
   it("can run successfully after a synchronous open throw", async () => {

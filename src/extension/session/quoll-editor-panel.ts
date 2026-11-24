@@ -38,12 +38,10 @@ import {
   ConfigurationTarget,
   Disposable,
   languages,
-  Range,
   StatusBarAlignment,
   TabInputText,
   TabInputTextDiff,
   Uri,
-  WorkspaceEdit,
   window,
   workspace,
 } from "vscode";
@@ -60,6 +58,7 @@ import { isRelevantConfigChange, readEditorPrefs } from "../config/editor-prefs-
 import { handleUpdateConfig } from "../config/handle-update-config.js";
 import { createThemeSyncWiring } from "../config/theme-sync-wiring.js";
 import { createDiskConflictWiring } from "../conflict/disk-conflict-wiring.js";
+import { createDocumentWriteAdapter } from "../document-write/vscode-write-adapter.js";
 import { getNonce } from "../get-nonce.js";
 import { createCaretHandoffWiring } from "../handoff/caret-handoff-wiring.js";
 import { createContextHandoffWiring } from "../handoff/context-handoff-wiring.js";
@@ -81,6 +80,7 @@ import {
 } from "../surface/reveal-code-reference.js";
 import { createRevertRescueWiring } from "../surface/revert-rescue-wiring.js";
 import { showSafely } from "../surface/show-safely.js";
+import { claimSurface } from "../surface/surface-memory.js";
 import { finalizeForwardSwap, findSourceTab, runForwardSwitch } from "../surface/surface-swap.js";
 import {
   clearActiveSwitchPoster,
@@ -96,11 +96,7 @@ import {
 } from "../webview-assets.js";
 import { buildWebviewHtml } from "../webview-html.js";
 import { canHostWrite } from "./can-host-write.js";
-import {
-  buildDocumentMessageFromDocument,
-  canonicalDocumentText,
-  canonicalizeText,
-} from "./document-canonical.js";
+import { buildDocumentMessageFromDocument, canonicalDocumentText } from "./document-canonical.js";
 import {
   buildCaretApplyMessage,
   buildEditorConfigMessage,
@@ -479,37 +475,17 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         return message;
       },
       buildTheme: (themeKind) => buildThemeMessage(themeKind),
-      applyEditSeam: {
-        // OLD text = the live buffer (applyEdit has not run yet, and the write
-        // lock — set by the accept transition — blocks any other inbound edit on
-        // the synchronous dispatch chain).
-        readText: () => document.getText(),
-        readVersion: () => document.version,
-        readCanonical: () => canonicalDocumentText(document),
-        canonicalize: (text) => canonicalizeText(text, document.eol),
-        build: (span) => {
-          // positionAt clamps out-of-range offsets (never throws) and
-          // minimalEditSpan is pure — so a build throw stays unreachable in
-          // practice; the seam's constructThrew arm is preserved for parity.
-          const edit = new WorkspaceEdit();
-          edit.replace(
-            document.uri,
-            new Range(document.positionAt(span.from), document.positionAt(span.to)),
-            span.insert
-          );
-          return edit;
-        },
-        apply: (edit) => {
-          // The document is about to carry the webview's own text, which it was
-          // never handed: an external undo back to the lineage text must not make
-          // an Edit on an old label look current. The ack (or the next Document)
-          // re-anchors.
-          lineage.reset();
-          return this.harness?.applyEditOverride
-            ? this.harness.applyEditOverride(edit)
-            : workspace.applyEdit(edit);
-        },
-      },
+      applyEditSeam: createDocumentWriteAdapter(document, (edit) => {
+        // The document is about to carry the webview's own text, which it was
+        // never handed: an external undo back to the lineage text must not make
+        // an Edit on an old label look current. The ack (or the next Document)
+        // re-anchors.
+        lineage.reset();
+        // Tests can install or change the override after the panel opens.
+        return this.harness?.applyEditOverride
+          ? this.harness.applyEditOverride(edit)
+          : workspace.applyEdit(edit);
+      }),
       openExternal: (href) => handleOpenExternal(href, { showError }),
     });
 
@@ -962,6 +938,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           );
           runForwardSwitch({
             barrier: editSettledBarrier,
+            claim: () => claimSurface(document.uri.toString()),
             open: async () => await openInTextEditor(document.uri),
             restoreCaret: () => {
               const caret = caretWiring.getCaret();
@@ -974,7 +951,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
                 }
               }
             },
-            finalize: () => finalizeForwardSwap(document.uri, sourceTab),
+            finalize: (claim) => finalizeForwardSwap(document.uri, sourceTab, claim),
             postAborted: () =>
               post(buildSwitchAbortedMessage(), () =>
                 showError(

@@ -3,6 +3,7 @@ import type { Tab, TextDocument, Uri } from "vscode";
 import { TabInputCustom, TabInputText, window } from "vscode";
 import {
   __clearSurfaceMemoryForTest,
+  __getRememberedSurfaceForTest,
   noteSurface,
 } from "../../../src/extension/surface/surface-memory.js";
 import {
@@ -361,10 +362,8 @@ describe("registerSurfaceRestoreWatcher in-flight guard", () => {
   it("suppresses an overlapping restore of the SAME uri while one is in flight", async () => {
     // Several `opened` events for one URI can arrive close together (the
     // watcher's fire-and-forget restore spans them). Without the guard the
-    // second text open starts a duplicate restore — and if restore #1 has
-    // already opened the Quoll tab, `hasSibling` makes reconcileOpen ADOPT the
-    // shown text surface, silently overwriting the remembered "quoll". Hold
-    // openDoc pending to keep restore #1 in flight across the second event.
+    // second text open starts a duplicate restore before the Quoll tab exists.
+    // Hold openDoc pending to keep restore #1 in flight across the second event.
     noteSurface(uriKey, "quoll");
     let releaseDoc: (doc: TextDocument) => void = () => {};
     const docReady = new Promise<TextDocument>((resolve) => {
@@ -468,7 +467,8 @@ describe("registerSurfaceRestoreWatcher in-flight guard", () => {
     try {
       fireTextOpen();
       await flushTasks();
-      expect(calls).toEqual([]); // sibling ⇒ adopt the shown surface, never bounce
+      expect(calls).toEqual([]);
+      expect(__getRememberedSurfaceForTest(uriKey)).toBe("quoll");
     } finally {
       sub.dispose();
     }

@@ -5,9 +5,8 @@
 // shared `applyRestoreEdit` (a direct WorkspaceEdit, OUTSIDE the host-session
 // reducer — like image-write), the alive-panel (text-tab-close) rescue, the
 // onDidChangeTextDocument + tabGroups.onDidChangeTabs handler bodies, and the
-// dispose-time rescue. It imports vscode for the restore-edit mechanics
-// (mirroring disk-conflict-wiring.ts / image-write-wiring.ts) because that
-// wiring IS this slice's substance.
+// dispose-time rescue. The restore-edit mechanics use the shared VS Code
+// write adapter.
 //
 // The VS Code event SOURCES are injected as `subscribe` closures (the
 // theme-sync / editor-config / disk-conflict pattern): the panel owns the raw
@@ -27,10 +26,8 @@
 // which this only re-wires.
 
 import type { TextDocument } from "vscode";
-import { Range, WorkspaceEdit, workspace } from "vscode";
-import type { DocumentWriteAdapter } from "../document-write/execute-write.js";
 import { executeDocumentWrite } from "../document-write/execute-write.js";
-import { canonicalDocumentText, canonicalizeText } from "../session/document-canonical.js";
+import { createDocumentWriteAdapter } from "../document-write/vscode-write-adapter.js";
 import { createTrailingDebounce } from "../session/document-change-debounce.js";
 import { createRevertRescueTracker } from "./revert-rescue.js";
 
@@ -136,22 +133,7 @@ export function createRevertRescueWiring(deps: RevertRescueWiringDeps): RevertRe
   // direct WorkspaceEdit OUTSIDE the reducer (like image-write), but now routes
   // through the shared post-apply-verifying executor so a stale-offset splice
   // (#8) is DETECTED at settlement instead of masquerading as a silent success.
-  const writeAdapter: DocumentWriteAdapter<WorkspaceEdit> = {
-    readText: () => document.getText(),
-    readVersion: () => document.version,
-    readCanonical: () => canonicalDocumentText(document),
-    canonicalize: (text) => canonicalizeText(text, document.eol),
-    build: (span) => {
-      const edit = new WorkspaceEdit();
-      edit.replace(
-        document.uri,
-        new Range(document.positionAt(span.from), document.positionAt(span.to)),
-        span.insert
-      );
-      return edit;
-    },
-    apply: (edit) => workspace.applyEdit(edit),
-  };
+  const writeAdapter = createDocumentWriteAdapter(document);
 
   // Every dep the restore settlement invokes is itself a candidate throw source
   // (showError → a window API, dispatchDocumentChanged → the reducer, onFailure →
