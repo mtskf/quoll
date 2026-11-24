@@ -502,9 +502,33 @@ export function defineLineCollapseField<X>(
           });
           return hit;
         };
+        // A replacement that starts at (or spans) a surviving key maps it to the start of the
+        // inserted text, which may be a different block (a quote pasted over the head). The
+        // block that owns the key is the one holding the first surviving byte after the
+        // change; resolve it in the new tree, falling back to the position when the tree has
+        // not reached it.
+        const tree = syntaxTree(tr.state);
+        const remap = (k: number): number => {
+          let survivor = -1;
+          tr.changes.iterChanges((fromA, toA, _fromB, toB) => {
+            if (survivor < 0 && fromA <= k && k < toA) {
+              survivor = toB;
+            }
+          });
+          if (survivor >= 0) {
+            const node = tree.topNode.childAfter(survivor);
+            if (node !== null && node.name === spec.nodeName) {
+              const line = tr.state.doc.lineAt(node.from).from;
+              if (line <= survivor) {
+                return line;
+              }
+            }
+          }
+          return tr.changes.mapPos(k, 1);
+        };
         for (const k of prev.expanded) {
           if (!consumed(k)) {
-            mapped.add(tr.changes.mapPos(k, 1));
+            mapped.add(remap(k));
           }
         }
         working = mapped;

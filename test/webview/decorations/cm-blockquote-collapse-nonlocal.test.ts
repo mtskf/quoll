@@ -422,6 +422,26 @@ describe("blockquoteCollapseField — non-local structure changes", () => {
     expect(now[0].expanded).toBe(false);
   });
 
+  it("5i. pasting a different quote over the head keeps the expanded key on the surviving quote", () => {
+    // The opening line plus its break is replaced by another 14-line quote and a blank line.
+    // A replacement that starts at the key maps it to the start of the inserted text, i.e. onto
+    // the pasted quote: the key must instead follow the surviving 13-line original quote.
+    const base = stateWith(proseAround);
+    const key = base.doc.line(3).from;
+    const start = base.update({
+      effects: setBlockquoteCollapseEffect.of({ key, expanded: true }),
+    }).state;
+    expect(expectMatchesFresh(start)[0].expanded).toBe(true);
+
+    const next = edit(start, key, start.doc.line(4).from, `${quote(14)}\n\n`);
+    expect(next.doc.line(18).text).toBe("> line 2");
+    const now = expectMatchesFresh(next);
+    expect(now.map((b) => [b.key, b.expanded])).toEqual([
+      [key, false],
+      [next.doc.line(18).from, true],
+    ]);
+  });
+
   it("6. policy pin: a plain prose insertion plans a FULL rebuild (Decision 3)", () => {
     // Tripwire for swapping in a bounded policy. Plan Decision 3 lists three parser-verified
     // counterexamples where a distant edit changes whether a top-level Blockquote exists
