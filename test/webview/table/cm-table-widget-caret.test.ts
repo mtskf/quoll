@@ -46,16 +46,45 @@ describe("TableBlockWidget caret dispatch hardening", () => {
     expect(dispatched).toEqual([{ selection: { anchor: 7 } }]);
   });
 
-  it("a foreign table root dispatches nothing", () => {
+  // The two null arms of the block-start lookup drop the gesture, so the log is
+  // the only trace a dead click leaves — pinned so neither arm goes silent.
+  it("a foreign table root dispatches nothing and logs why", () => {
     const dispatched: unknown[] = [];
     const view = stubView(dispatched, undefined, undefined, 7);
     const dom = makeWidget(SRC).toDOM(view);
     document.body.appendChild(dom);
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
     try {
       press(dom.querySelector("td")!, "click", 10, 10);
       expect(dispatched).toEqual([]);
+      expect(consoleError).toHaveBeenCalledWith("[quoll] table widget root not in contentDOM", {
+        slice: SRC,
+      });
     } finally {
+      consoleError.mockRestore();
       dom.remove();
+    }
+  });
+
+  it("a throwing block-position lookup dispatches nothing and logs the error", () => {
+    const dispatched: unknown[] = [];
+    const boom = new Error("posAtDOM boom");
+    const view = stubView(dispatched);
+    (view as unknown as { posAtDOM: () => number }).posAtDOM = () => {
+      throw boom;
+    };
+    const dom = makeWidget(SRC).toDOM(view);
+    view.contentDOM.appendChild(dom);
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      press(dom.querySelector("td")!, "click", 10, 10);
+      expect(dispatched).toEqual([]);
+      expect(consoleError).toHaveBeenCalledWith(
+        "[quoll] table widget block position lookup failed",
+        { slice: SRC, err: boom }
+      );
+    } finally {
+      consoleError.mockRestore();
     }
   });
 

@@ -156,14 +156,19 @@ describe("ImageBlockWidget identity + events", () => {
     expect(dispatched).toEqual([{ anchor: 5 }]);
   });
 
-  it("a foreign image root dispatches nothing", () => {
+  it("a foreign image root dispatches nothing and logs why", () => {
     const { view, dispatched } = recordingView(7);
     const dom = new ImageBlockWidget("a", null, "![a](javascript:alert(1))").toDOM(view);
     document.body.appendChild(dom);
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       dom.click();
       expect(dispatched).toEqual([]);
+      expect(errSpy).toHaveBeenCalledWith("[quoll] image widget root not in contentDOM", {
+        slice: "![a](javascript:alert(1))",
+      });
     } finally {
+      errSpy.mockRestore();
       dom.remove();
     }
   });

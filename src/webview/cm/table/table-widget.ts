@@ -91,34 +91,42 @@ interface ContentPoint {
  *  the gestures the outside-release seam exists for.
  *
  *  Keyed on the widget's root ELEMENT rather than held in the `render` closure
- *  because `patchDOM` reuses that element across widget instances: the entry
- *  has to be invalidated exactly when the cell stamps move, which is something
- *  `patchDOM` can do and the closure cannot. A WeakMap so a discarded widget
- *  root takes its entry with it. */
+ *  because CodeMirror reuses that element across widget instances and block
+ *  positions. Two things invalidate an entry: `patchDOM` deletes it when the
+ *  cell layout changes, and `dragForBlock` refuses it when the document or the
+ *  block start captured at press time no longer match — the shift case, where
+ *  no patch runs at all. A WeakMap so a discarded widget root takes its entry
+ *  with it. */
 interface PendingDrag extends ContentPoint {
   readonly point: CellPoint | null;
+  /** The document at press time; any edit since makes the entry stale. */
   readonly doc: Text;
+  /** The block start at press time; `point`'s block offsets are relative to it. */
   readonly base: AbsoluteOffset;
 }
 const pendingDrag = new WeakMap<HTMLElement, PendingDrag>();
 
 /** Aborts the document-level listeners armed for the gesture in flight on this
  *  root. Kept OUT of `PendingDrag` because the two have different lifetimes:
- *  `patchDOM` drops the pending anchor when a doc edit invalidates it while the
- *  gesture is still physically in progress, and that release must still be heard
- *  (it dispatches the block-start caret). A WeakMap so a discarded root takes its
- *  controller with it — though the listeners are removed by the gesture's own end
- *  and by `dispose`, not left to garbage collection. */
+ *  `patchDOM` / `dragForBlock` drop the pending anchor when an edit invalidates
+ *  it while the gesture is still physically in progress, and that release must
+ *  still be heard (it dispatches the block-start caret). A WeakMap so a
+ *  discarded root takes its controller with it — though the listeners are
+ *  removed by the gesture's own end and by `dispose`, not left to garbage
+ *  collection. */
 const armedRelease = new WeakMap<HTMLElement, AbortController>();
 
-/** The current block start, or null if this root cannot be located in the view. */
-function blockBase(view: EditorView, root: HTMLElement): AbsoluteOffset | null {
+/** The current block start, or null (logged) if this root cannot be located in
+ *  the view — every caller then drops the gesture, so the log is its only trace. */
+function blockBase(view: EditorView, root: HTMLElement, slice: string): AbsoluteOffset | null {
   try {
     if (!view.contentDOM.contains(root)) {
+      console.error("[quoll] table widget root not in contentDOM", { slice });
       return null;
     }
     return asAbsoluteOffset(view.posAtDOM(root));
-  } catch {
+  } catch (err) {
+    console.error("[quoll] table widget block position lookup failed", { slice, err });
     return null;
   }
 }
@@ -465,7 +473,7 @@ export class TableBlockWidget extends QuollWidget {
         }
         // No dispatch here: dispatching would fire the reveal mid-drag and pull
         // the widget out from under the pointer.
-        const base = blockBase(view, root);
+        const base = blockBase(view, root, this.slice);
         if (base === null) {
           return;
         }
@@ -536,7 +544,7 @@ export class TableBlockWidget extends QuollWidget {
             }
             const pending = pendingDrag.get(root) ?? null;
             pendingDrag.delete(root);
-            const base = blockBase(view, root);
+            const base = blockBase(view, root, this.slice);
             if (base === null) {
               return;
             }
@@ -653,7 +661,7 @@ export class TableBlockWidget extends QuollWidget {
           view.state.facet(quollOpenExternalSink)(anchor.getAttribute("href") ?? "");
           return;
         }
-        const base = blockBase(view, root);
+        const base = blockBase(view, root, this.slice);
         if (base === null) {
           return;
         }
