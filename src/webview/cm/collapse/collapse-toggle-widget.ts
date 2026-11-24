@@ -8,6 +8,8 @@
 // `lucide` package for two static glyphs (and createElementNS avoids innerHTML, so there is
 // no CSP/inline-style concern). Same approach as fenced-code-copy-button-widget.ts.
 
+import type { EditorView } from "@codemirror/view";
+
 const SVG_NS = "http://www.w3.org/2000/svg";
 
 // Lucide chevron-down / chevron-up path data (exported so widget tests can assert which
@@ -46,13 +48,16 @@ export interface CollapseBarClasses {
 }
 
 export function renderCollapseBar(args: {
+  view: EditorView;
   classes: CollapseBarClasses;
+  /** The owning block's key; tags the button so focus can follow the toggle. */
+  blockKey: number;
   expanded: boolean;
   hiddenCount: number;
   signal: AbortSignal;
   onToggle: () => void;
 }): HTMLElement {
-  const { classes, expanded, hiddenCount, signal, onToggle } = args;
+  const { view, classes, blockKey, expanded, hiddenCount, signal, onToggle } = args;
   const root = document.createElement("div");
   root.className = classes.bar;
   root.classList.toggle(classes.barCollapsed, !expanded);
@@ -61,6 +66,7 @@ export function renderCollapseBar(args: {
   button.type = "button";
   button.className = classes.toggle;
   button.setAttribute("aria-expanded", expanded ? "true" : "false");
+  button.dataset.collapseKey = String(blockKey);
 
   button.appendChild(makeChevron(expanded ? CHEVRON_UP_PATH : CHEVRON_DOWN_PATH));
   const label = document.createElement("span");
@@ -92,7 +98,20 @@ export function renderCollapseBar(args: {
       }
       event.preventDefault();
       event.stopPropagation();
+      // Toggling swaps this widget for the other state's (a different decoration at a
+      // different offset), so a focused button — reached with Tab in read-only mode — would
+      // drop focus to <body> and the next Tab would restart at the top of the page. Hand
+      // focus to the replacement button (CodeMirror redraws synchronously in dispatch).
+      // preventScroll: an expanded block's "Show less" can sit far below; focus must not
+      // yank the reader there. Not rendered (beyond the viewport) → focus is not moved.
+      // A mouse click never focuses the button (mousedown above), so this is keyboard-only.
+      const hadFocus = button.ownerDocument.activeElement === button;
       onToggle();
+      if (hadFocus) {
+        view.contentDOM
+          .querySelector<HTMLElement>(`.${classes.toggle}[data-collapse-key="${blockKey}"]`)
+          ?.focus({ preventScroll: true });
+      }
     },
     { signal }
   );

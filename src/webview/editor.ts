@@ -30,6 +30,7 @@ import {
 } from "../shared/protocol.js";
 import { applyCaret, type Caret, selectionCharCount, selectionToCaret } from "./cm/caret.js";
 import { quollCodeRefClickHandler, quollCodeRefKeymap } from "./cm/code-ref/code-ref-handlers.js";
+import { quollCollapseKeymap } from "./cm/collapse/collapse-keymap.js";
 import { quollContextHandoffKeymap } from "./cm/context-handoff.js";
 import { blockStyle } from "./cm/decorations/block-style.js";
 import { blockZoneArrowKeymap } from "./cm/decorations/block-zone-arrow-keymap.js";
@@ -833,6 +834,9 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // invalidation policy (always a top-level re-walk — see the field header).
         // Display-only. Publishes to neither zone facet, for the reason given above.
         blockquoteCollapseField,
+        // Keyboard path for both collapse bars: the fold keys collapse / expand the long
+        // block at the caret first, then fall through to heading fold (Prec.high).
+        quollCollapseKeymap,
         // C6b: block widget for GFM tables. Publishes its range to
         // quollBlockReplaceZones so quollSyntaxReveal above drops inline
         // marks inside the widget; CodeMirror requires block widgets

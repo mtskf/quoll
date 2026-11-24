@@ -39,6 +39,8 @@ export class BlockquoteCollapseToggleWidget extends QuollWidget {
 
   protected render(view: EditorView, signal: AbortSignal): HTMLElement {
     const root = renderCollapseBar({
+      view,
+      blockKey: this.key,
       classes: {
         bar: "quoll-blockquote-collapse-bar",
         barCollapsed: "quoll-blockquote-collapse-bar-collapsed",

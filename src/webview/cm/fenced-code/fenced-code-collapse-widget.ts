@@ -55,6 +55,8 @@ export class FencedCollapseToggleWidget extends QuollWidget {
     // needs to flag the collapsed state. Toggling a class (not a :has([aria-expanded])
     // selector) keeps that flag happy-dom-assertable.
     return renderCollapseBar({
+      view,
+      blockKey: this.key,
       classes: {
         bar: "quoll-fenced-collapse-bar",
         barCollapsed: "quoll-fenced-collapse-bar-collapsed",

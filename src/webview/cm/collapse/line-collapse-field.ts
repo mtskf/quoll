@@ -40,7 +40,7 @@ import {
   StateField,
   type Transaction,
 } from "@codemirror/state";
-import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
+import { type Command, Decoration, type DecorationSet, EditorView } from "@codemirror/view";
 import { type Interval, intersects } from "../bounded-recompute.js";
 import { hostDocumentReseed } from "../host-reseed.js";
 import type { QuollWidget } from "../widget-base.js";
@@ -380,6 +380,30 @@ export function toggleCollapse<X>(
           block.safeCaret
         );
   view.dispatch(parked !== null ? { effects, selection: parked } : { effects });
+}
+
+/** The keyboard path to `toggleCollapse`: a Command that collapses (`expand === false`) or
+ *  expands the block of `field` whose extent [blockFrom, blockTo] holds the MAIN head, but
+ *  only when that block is in the other state. Returns false otherwise (no block there, or
+ *  already in the target state) so the binding falls through to the next command bound to
+ *  the same key. Reads the records, not the decorations: a fold-suppressed record has none.
+ *  No readOnly guard — the toggle is an effect, never a document change. */
+export function collapseAtCaretCommand<X>(
+  field: StateField<CollapseState<X>>,
+  target: CollapseTarget<X>,
+  expand: boolean
+): Command {
+  return (view) => {
+    const head = view.state.selection.main.head;
+    const block = view.state
+      .field(field, false)
+      ?.blocks.find((b) => b.blockFrom <= head && head <= b.blockTo);
+    if (block === undefined || block.expanded === expand) {
+      return false;
+    }
+    toggleCollapse(view, target, block.key, expand);
+    return true;
+  };
 }
 
 /** One reducer, two configs. `bounded` (production) asks the client's `docChangePlan` on a
