@@ -63,6 +63,22 @@ const toggleOf = (f: Fixture, bar: string, i = 0, of = 1) => {
 };
 const expanded = (f: Fixture, bar: string, i = 0, of = 1) =>
   toggleOf(f, bar, i, of).getAttribute("aria-expanded");
+/** The drawn bar of this kind in `state` ("true" = Show less), or null when none is drawn. */
+const barIn = (f: Fixture, bar: string, state: "true" | "false") =>
+  f.win.document.querySelector<HTMLButtonElement>(
+    `.quoll-${bar}-collapse-toggle[aria-expanded="${state}"]`
+  );
+/** The drawn `.cm-line` whose text contains `text`. */
+const lineWith = (f: Fixture, text: string) =>
+  [...f.view.contentDOM.querySelectorAll<HTMLElement>(".cm-line")].find((l) =>
+    l.textContent?.includes(text)
+  ) as HTMLElement;
+const expectInScrollport = (f: Fixture, el: HTMLElement) => {
+  const box = el.getBoundingClientRect();
+  const port = f.view.scrollDOM.getBoundingClientRect();
+  expect(box.top).toBeGreaterThanOrEqual(port.top);
+  expect(box.bottom).toBeLessThanOrEqual(port.bottom);
+};
 
 // CodeMirror resolves `mac:` bindings from the platform, so drive the chord it will match.
 const chord = (f: Fixture, bracket: "[" | "]") => {
@@ -96,12 +112,9 @@ describe("collapse bars — keyboard path (real Chromium, production bundle)", (
     it(`read-only ${c.name}: Tab reaches the bar; Enter expands and collapses, focus follows`, async () => {
       fixture = await productionPasteFixture(c.doc, "\n", false);
       const f = fixture;
-      const line = [...f.view.contentDOM.querySelectorAll<HTMLElement>(".cm-line")].find((l) =>
-        l.textContent?.includes("line2")
-      );
       // Read-only content is not a focus target: a click leaves focus on the page, with
       // the sequential-navigation starting point at the clicked line.
-      await userEvent.click(line as HTMLElement);
+      await userEvent.click(lineWith(f, "line2"));
       await userEvent.keyboard("{Tab}");
       expect(f.win.document.activeElement).toBe(toggleOf(f, c.bar));
 
@@ -140,10 +153,7 @@ describe("collapse bars — keyboard path (real Chromium, production bundle)", (
     it(`read-only ${c.name}, two blocks: focus follows the toggled bar, not the first one`, async () => {
       fixture = await productionPasteFixture(c.doc, "\n", false);
       const f = fixture;
-      const line = [...f.view.contentDOM.querySelectorAll<HTMLElement>(".cm-line")].find((l) =>
-        l.textContent?.includes("aline2")
-      );
-      await userEvent.click(line as HTMLElement);
+      await userEvent.click(lineWith(f, "aline2"));
       // Tab past the first bar (and anything else focusable) onto the second.
       for (let i = 0; i < 4 && f.win.document.activeElement !== toggleOf(f, c.bar, 1, 2); i++) {
         await userEvent.keyboard("{Tab}");
@@ -170,14 +180,8 @@ describe("collapse bars — keyboard path (real Chromium, production bundle)", (
       const f = fixture;
       const scroller = f.view.scrollDOM;
       const active = () => f.win.document.activeElement;
-      const bar = (state: "true" | "false") =>
-        f.win.document.querySelector<HTMLButtonElement>(
-          `.quoll-${c.bar}-collapse-toggle[aria-expanded="${state}"]`
-        );
-      const line = [...f.view.contentDOM.querySelectorAll<HTMLElement>(".cm-line")].find((l) =>
-        l.textContent?.includes("row2x")
-      );
-      await userEvent.click(line as HTMLElement);
+      const bar = (state: "true" | "false") => barIn(f, c.bar, state);
+      await userEvent.click(lineWith(f, "row2x"));
       await userEvent.keyboard("{Tab}");
       expect(active()).toBe(bar("false"));
 
@@ -207,10 +211,7 @@ describe("collapse bars — keyboard path (real Chromium, production bundle)", (
       expect(more).not.toBeNull();
       expect(active()).toBe(more);
       await frames(f, 5);
-      const box = (more as HTMLElement).getBoundingClientRect();
-      const port = scroller.getBoundingClientRect();
-      expect(box.top).toBeGreaterThanOrEqual(port.top);
-      expect(box.bottom).toBeLessThanOrEqual(port.bottom);
+      expectInScrollport(f, more as HTMLElement);
       expect(f.changes()).toBe(0);
     });
   }
@@ -221,10 +222,7 @@ describe("collapse bars — keyboard path (real Chromium, production bundle)", (
   const tail = Array.from({ length: 60 }, (_, i) => `tail${i + 1}`).join("\n\n");
   const tallTail = (c: (typeof LONG_CASES)[number]) => c.doc.replace("para\n", `${tail}\n`);
   const scrollToShowLess = async (f: Fixture, bar: string) => {
-    const less = () =>
-      f.win.document.querySelector<HTMLButtonElement>(
-        `.quoll-${bar}-collapse-toggle[aria-expanded="true"]`
-      );
+    const less = () => barIn(f, bar, "true");
     for (let i = 0; i < 80 && less() === null; i++) {
       f.view.scrollDOM.scrollTop += 300;
       await frames(f, 3);
@@ -241,23 +239,17 @@ describe("collapse bars — keyboard path (real Chromium, production bundle)", (
     it(`read-only long ${c.name} with a tall tail: a keyboard collapse focuses Show more and scrolls to it`, async () => {
       fixture = await productionPasteFixture(tallTail(c), "\n", false);
       const f = fixture;
-      const scroller = f.view.scrollDOM;
       await userEvent.click(toggleOf(f, c.bar));
       const less = await scrollToShowLess(f, c.bar);
       less.focus({ preventScroll: true });
       expect(f.win.document.activeElement).toBe(less);
 
       await userEvent.keyboard("{Enter}");
-      const more = f.win.document.querySelector<HTMLButtonElement>(
-        `.quoll-${c.bar}-collapse-toggle[aria-expanded="false"]`
-      );
+      const more = barIn(f, c.bar, "false");
       expect(more).not.toBeNull();
       expect(f.win.document.activeElement).toBe(more);
       await frames(f, 5);
-      const box = (more as HTMLElement).getBoundingClientRect();
-      const port = scroller.getBoundingClientRect();
-      expect(box.top).toBeGreaterThanOrEqual(port.top);
-      expect(box.bottom).toBeLessThanOrEqual(port.bottom);
+      expectInScrollport(f, more as HTMLElement);
       expect(f.changes()).toBe(0);
     });
   }
@@ -269,10 +261,7 @@ describe("collapse bars — keyboard path (real Chromium, production bundle)", (
       fixture = await productionPasteFixture(tallTail(c), "\n", false);
       const f = fixture;
       const scroller = f.view.scrollDOM;
-      const bar = (state: "true" | "false") =>
-        f.win.document.querySelector<HTMLButtonElement>(
-          `.quoll-${c.bar}-collapse-toggle[aria-expanded="${state}"]`
-        );
+      const bar = (state: "true" | "false") => barIn(f, c.bar, state);
       await userEvent.click(bar("false") as HTMLElement);
       await userEvent.click(await scrollToShowLess(f, c.bar));
       await expect.poll(() => bar("true")).toBeNull();
