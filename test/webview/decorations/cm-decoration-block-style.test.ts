@@ -62,9 +62,9 @@ describe("theme.ts — quollHighlightSpec navy+green token contract (palette ref
     // A11Y-13: the mix PERCENTAGE is a custom property, not a literal. Custom
     // properties inherit, so a nested `> >` line declaring its own
     // `--quoll-quote-ink-mix` makes THIS one string resolve darker inside that line
-    // without a second colour constant — that is the whole depth mechanism. The
-    // `, 90%` fallback is therefore load-bearing rather than defensive: a depth-1
-    // quote line declares no variable at all and must land on 90%.
+    // without a second colour constant — that is the whole depth mechanism. Depth-1
+    // DECLARES its 90% on the base rule (A11Y-15: the completed-task ink steps with the
+    // same property and falls back to 100%), and the `, 90%` fallback here restates it.
     expect(String(byTag(t.quote)?.color)).toBe(
       "color-mix(in srgb, var(--vscode-descriptionForeground, #616161) var(--quoll-quote-ink-mix, 90%), var(--vscode-editor-foreground, #000))"
     );
@@ -100,6 +100,7 @@ describe("theme.ts — quollHighlightSpec navy+green token contract (palette ref
     // pinning it would turn a harmless reordering red.
     expect(Object.keys(d2 ?? {}).sort()).toEqual(["--quoll-quote-ink-mix", "backgroundColor"]);
     expect(Object.keys(d3 ?? {}).sort()).toEqual(["--quoll-quote-ink-mix", "backgroundColor"]);
+    expect(spec[".cm-line.quoll-blockquote"]?.["--quoll-quote-ink-mix"]).toBe("90%");
     // color-mix over the surface fill toward the foreground; -3 is the deeper mix.
     expect(d2?.backgroundColor).toMatch(/color-mix.*--quoll-surface-fill.*7%/);
     expect(d3?.backgroundColor).toMatch(/color-mix.*--quoll-surface-fill.*14%/);

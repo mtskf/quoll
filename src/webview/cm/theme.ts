@@ -175,8 +175,8 @@ export const quollCmLinePaddingTheme = EditorView.theme(cmLinePaddingThemeSpec);
 // visibly quieter than body prose. Measured via `pnpm a11y:probe`: 4.44 → 5.24
 // (light), 5.70 → 6.16 (dark), 5.47 → 6.06 (hc-light), 9.96 → 10.89 (hc-dark).
 //
-// SCOPE of those ratios: they are the depth-1 BASE panel, which is what the `90%`
-// FALLBACK below encodes. A nested `> >` / `> > >` line mixes the fill a further
+// SCOPE of those ratios: they are the depth-1 BASE panel, which is the `90%` the base
+// `.cm-line.quoll-blockquote` rule declares (and the formula's fallback restates). A nested `> >` / `> > >` line mixes the fill a further
 // 7% / 14% toward the editor foreground (the -depth-2/-3 rules below), and against
 // those darker fills the shared depth-1 ink measured 4.49 (depth-2) and 3.81
 // (depth-3) in light — both under AA.
@@ -224,7 +224,7 @@ export const quollCmLinePaddingTheme = EditorView.theme(cmLinePaddingThemeSpec);
 // line never carries either class and the base panel is untouched by that lever —
 // the cost of retuning the mixes is a weaker nesting cue (the deeper bands would
 // read closer to the base panel), not a moved base panel. What DOES move the base
-// panel is retuning the `90%` fallback itself, since depth-1 falls back to it.
+// panel is retuning the base rule's `90%` — and the formula's matching fallback with it.
 //
 // CONCRETE FALLBACKS (not a nested `var()` chain) because color-mix cannot take
 // `inherit`, and a nested fallback is invisible to happy-dom's CSSOM. They keep the
@@ -617,6 +617,10 @@ export const blockStyleThemeSpec = {
     paddingLeft: "var(--quoll-block-pad-x, 16px)",
     paddingRight: "var(--quoll-block-pad-x, 16px)",
     color: QUOTE_INK,
+    // Declared (not left to QUOTE_INK's `90%` fallback) so OTHER inks inside the panel
+    // can step with it: the completed-task ink (taskCompletedContentThemeSpec) reads this
+    // same property and defaults to 100% outside a quote (A11Y-15).
+    "--quoll-quote-ink-mix": "90%",
   },
   // Round the top corners on the opening quote line, mirroring the fenced-code panel
   // — same shared elliptical corner spec (blockEdgeCorner). Real-pixel geometry is
@@ -857,9 +861,20 @@ export const quollHeadingRhythmTheme = EditorView.theme(headingRhythmThemeSpec);
 // it. DELIBERATELY colour-only — NO line-through: the approved design mutes, it does not
 // strike. Ink is the Quoll-owned --quoll-completed-ink token (styles.css theme blocks; HC
 // keeps full foreground).
+//
+// INSIDE A QUOTE / CALLOUT PANEL (A11Y-15) this rule outranks the `t.quote` highlight class
+// (EditorView.theme scoping adds a class), so the bare token would land on the darker panel
+// fills at 4.44 / 3.80 / 3.22 in light (depth 1-3) — sub-AA. The ink therefore steps through
+// the SAME inherited `--quoll-quote-ink-mix` as QUOTE_INK (90 / 83 / 76%, declared on the
+// panel line rules), and outside a panel the property is unset so the `100%` fallback leaves
+// the token untouched. Inside a panel a completed item thus reads at quote-ink level — the
+// filled checkbox, not a lighter ink, carries "done" there. HC is unchanged by construction
+// (its token IS editor-foreground). Concrete fallbacks only, as for QUOTE_INK (color-mix
+// cannot take `inherit`). Swept over all four palettes by cm-quote-ink-contrast.test.ts.
 export const taskCompletedContentThemeSpec = {
   ".quoll-task-completed-content": {
-    color: "var(--quoll-completed-ink, var(--vscode-descriptionForeground, inherit))",
+    color:
+      "color-mix(in srgb, var(--quoll-completed-ink, #8b909a) var(--quoll-quote-ink-mix, 100%), var(--vscode-editor-foreground, #000))",
   },
 };
 
