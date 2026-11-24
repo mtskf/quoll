@@ -43,7 +43,7 @@ describe("C8 a11y roll-up — table grid (C6d)", () => {
     if (table === null) {
       throw new Error("fixture must parse");
     }
-    const dom = new TableBlockWidget(table, src, 0, 0).toDOM(mockView);
+    const dom = new TableBlockWidget(table, src, 0).toDOM(mockView);
     expect(dom.querySelector("table")).not.toBeNull();
     const ths = dom.querySelectorAll("thead th");
     expect(ths.length).toBe(2);
@@ -58,13 +58,12 @@ describe("C8 a11y roll-up — image (C7)", () => {
     const dom = new ImageBlockWidget(
       "my alt",
       url("https://x.test/a.png"),
-      "![my alt](https://x.test/a.png)",
-      0
+      "![my alt](https://x.test/a.png)"
     ).toDOM(mockView);
     expect(dom.querySelector("img")?.alt).toBe("my alt");
   });
   it("labels a blocked image placeholder (role=img + aria-label)", () => {
-    const dom = new ImageBlockWidget("diagram", null, "![diagram](javascript:alert(1))", 0).toDOM(
+    const dom = new ImageBlockWidget("diagram", null, "![diagram](javascript:alert(1))").toDOM(
       mockView
     );
     const ph = dom.querySelector(".quoll-image-blocked");

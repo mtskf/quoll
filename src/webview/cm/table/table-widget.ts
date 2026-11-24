@@ -1,9 +1,7 @@
 // Display-only block widget that renders a GFM Table as a non-editable
 // <table> in place of its source. Click-to-reveal: a click on any cell
-// dispatches a caret selection to the cell's absolute LF-internal source
-// offset (data-cell-from = nodeFrom + cell.from); a click on the widget
-// padding/margin (no cell) falls back to the block line-start, carried in the
-// module-private `blockStart` WeakMap (NOT read back out of the DOM).
+// dispatches a caret at its block-relative content start (data-cell-from)
+// resolved against the current DOM block position. Padding clicks use the block start.
 // A mousedown followed by a click that actually moved (see DRAG_THRESHOLD_PX)
 // instead dispatches a RANGE selection between the two RESOLVED source offsets;
 // an endpoint the cell's source map cannot place exactly (a boundary beside a
@@ -32,19 +30,8 @@
 // `dispose` — each with its own comment at the site.
 // The dispatched selection — caret or range — is what fires tableBlockField's
 // line-level reveal-on-caret, surfacing the source for editing.
-//
-// sameAs() (the base's `eq`) is keyed on (docFrom, slice, nodeFrom). docFrom is
-// the absolute LF-internal doc offset of the widget's first byte (block
-// line-start, NOT table.from, which is always 0 under per-node slicing — see
-// Codex re-review Conf 82). nodeFrom is the Lezer Table node start — the base
-// for each cell's caret offset (nodeFrom + cell.from). Both are LF-internal
-// (seed.ts splitToCmText strips \r). Two tables at different doc positions or
-// with different Lezer node starts are NOT the same widget; same (docFrom,
-// slice, nodeFrom) on a rebuild reuses the existing DOM. patchDOM re-points both
-// channels on reuse (cell stamps on the DOM, block start in `blockStart`) so a
-// margin/cell click after a shift uses the new offsets, not a stale
-// render()-time closure.
 
+import type { Text } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 
 import { type Align, type Cell, type Table, tableAlign } from "../../../markdown/table/index.js";
@@ -54,6 +41,7 @@ import { QuollWidget } from "../widget-base.js";
 import {
   type AbsoluteOffset,
   asAbsoluteOffset,
+  type BlockOffset,
   type CellPoint,
   cellPointAt,
   quollTableCaretResolver,
@@ -103,103 +91,65 @@ interface ContentPoint {
  *  the gestures the outside-release seam exists for.
  *
  *  Keyed on the widget's root ELEMENT rather than held in the `render` closure
- *  because `patchDOM` reuses that element across widget instances: the entry
- *  has to be invalidated exactly when the cell stamps move, which is something
- *  `patchDOM` can do and the closure cannot. A WeakMap so a discarded widget
- *  root takes its entry with it. */
+ *  because CodeMirror reuses that element across widget instances and block
+ *  positions. Two things invalidate an entry: `patchDOM` deletes it on every
+ *  patch it accepts (any content change that keeps the grid shape; a shape
+ *  change is a full rebuild instead), and `dragForBlock` refuses it when the document or the
+ *  block start captured at press time no longer match — the shift case, where
+ *  no patch runs at all. A WeakMap so a discarded widget root takes its entry
+ *  with it. */
 interface PendingDrag extends ContentPoint {
   readonly point: CellPoint | null;
+  /** The document at press time; any edit since makes the entry stale. */
+  readonly doc: Text;
+  /** The block start at press time; `point`'s block offsets are relative to it. */
+  readonly base: AbsoluteOffset;
 }
 const pendingDrag = new WeakMap<HTMLElement, PendingDrag>();
 
-/** The block's CURRENT first-byte offset (margin-click caret target), keyed on
- *  the widget's root element for the same reason `pendingDrag` is: `patchDOM`
- *  reuses that element across widget instances and cannot re-bind the click
- *  listener, whose captured `this` stays the OLD instance — so the new instance
- *  needs a channel to the existing listener that moves exactly when the block
- *  moves, which `patchDOM` can write and the closure cannot.
- *
- *  No RUNTIME gate: unlike the per-CELL offsets this one is never stringified,
- *  parsed, or read back from the DOM, so there is no malformed-value state for a
- *  `stampedOffset`-style check to reject (that docblock has what CodeMirror does
- *  NOT catch). Same channel, same rationale, as image-widget.ts's `blockStart`.
- *
- *  It is nonetheless typed `AbsoluteOffset`, which is a TYPE gate rather than a
- *  runtime one and buys something the shape check could not: `this.table.from`
- *  is a plain `number` that sits in scope at both write sites and is named
- *  `from` — but on this path it is always 0 under per-node slicing (see this
- *  module's header re: `sameAs()`, and src/markdown/table/model.ts /
- *  src/markdown/table/parse.ts for what a `Table` span is actually an offset
- *  INTO: the `source` string passed to `parseTable`, not the document).
- *  Writing it here is a compile error now instead of a margin click that
- *  jumps to the document start. Entering the space goes through `blockStartOf`
- *  and nowhere else. */
-const blockStart = new WeakMap<HTMLElement, AbsoluteOffset>();
-
 /** Aborts the document-level listeners armed for the gesture in flight on this
  *  root. Kept OUT of `PendingDrag` because the two have different lifetimes:
- *  `patchDOM` drops the pending anchor when a doc edit invalidates it while the
- *  gesture is still physically in progress, and that release must still be heard
- *  (it dispatches the block-start caret). A WeakMap so a discarded root takes its
- *  controller with it — though the listeners are removed by the gesture's own end
- *  and by `dispose`, not left to garbage collection. */
+ *  `patchDOM` / `dragForBlock` drop the pending anchor when an edit invalidates
+ *  it while the gesture is still physically in progress, and that release must
+ *  still be heard (it dispatches the block-start caret). A WeakMap so a
+ *  discarded root takes its controller with it — though the listeners are
+ *  removed by the gesture's own end and by `dispose`, not left to garbage
+ *  collection. */
 const armedRelease = new WeakMap<HTMLElement, AbortController>();
 
-/** THE crossing from a widget's constructor-supplied block start into the
- *  absolute space the editor is dispatched in — the block-start counterpart of
- *  `releaseRange`'s `view.posAtCoords` mint, and the ONLY mint this path has.
- *  Named rather than inlined at its three call sites so the `asAbsoluteOffset`
- *  grep cell-point.ts describes finds one claim to audit instead of three.
- *
- *  A cast, not a check, and what it asserts is traceable: `docFrom` reaches the
- *  constructor from the block's `from` (`BuiltBlock.from`, returned by table-field.ts
- *  `buildTableBlock`), which is
- *  `state.doc.lineAt(nodeFrom).from` or that value remapped through
- *  `tr.changes.mapPos` (structural-blocks.ts) — CodeMirror document positions, so
- *  there is nothing further to validate, only to name.
- *
- *  ⚠️ Read `widget.docFrom` here, NEVER `widget.nodeFrom` — same-typed,
- *  similarly-named, adjacent constructor field, and nothing at the type level
- *  tells them apart. `nodeFrom` is the Lezer `Table` node start (the CELL
- *  caret base), not the block line-start; the two differ whenever the node
- *  START is not a line start — any 1-3-space-indented or list-nested table
- *  (table-field.ts's block `from` snaps to `doc.lineAt(nodeFrom).from`,
- *  which is earlier than `nodeFrom` there) — and reading `nodeFrom` here
- *  would land a margin click inside the table instead of at its first byte.
- *  Pinned by "keeps docFrom (margin) and nodeFrom (cell base) independent
- *  when they differ" in cm-table-widget-render.test.ts. */
-function blockStartOf(widget: TableBlockWidget): AbsoluteOffset {
-  return asAbsoluteOffset(widget.docFrom);
+/** The current block start, or null (logged) if this root cannot be located in
+ *  the view — every caller then drops the gesture, so the log is its only trace.
+ *  The log carries no document content: the console is not a place for the
+ *  user's text, and the listeners calling this are bound once per root, so any
+ *  instance field read here could belong to an earlier, patched-over widget. */
+function blockBase(view: EditorView, root: HTMLElement): AbsoluteOffset | null {
+  try {
+    if (!view.contentDOM.contains(root)) {
+      console.error("[quoll] table widget root not in contentDOM");
+      return null;
+    }
+    return asAbsoluteOffset(view.posAtDOM(root));
+  } catch (err) {
+    console.error("[quoll] table widget block position lookup failed", { err });
+    return null;
+  }
 }
 
-/** Margin-click caret: the block start this root currently points at.
- *
- *  Falling back to the render()-time `widget.docFrom` totalizes the
- *  `AbsoluteOffset | undefined` read; it is not the stale-closure hazard coming
- *  back. The entry is written in `render` in the same breath as attaching the
- *  listener, and at that moment the closure value IS the current one — so a miss
- *  is unreachable by construction. Logged rather than trusted, so a future
- *  regression of that invariant is observable instead of quietly reintroducing
- *  the stale-caret bug this WeakMap exists to prevent.
- *
- *  ⚠️ The `AbsoluteOffset` return says which SPACE this offset lives in, not
- *  that it is CURRENT. Freshness is still the WeakMap's job (`patchDOM`
- *  re-points it), which is the whole reason this function exists. */
-function blockStartCaret(root: HTMLElement, widget: TableBlockWidget): AbsoluteOffset {
-  const current = blockStart.get(root);
-  if (current === undefined) {
-    // Unreachable from the public widget surface (see the docblock above); the
-    // WeakMap is module-private, so no test can drive this without reaching into
-    // it. Treat a sighting of this line in production as the invariant actually
-    // having broken. `slice` identifies WHICH widget tripped it — a document can
-    // hold many tables, and `fallback` alone would not say which.
-    console.error("[quoll] table widget blockStart miss — invariant violated", {
-      slice: widget.slice,
-      fallback: widget.docFrom,
-    });
-    return blockStartOf(widget);
-  }
-  return current;
+function toAbsolute(base: AbsoluteOffset, offset: BlockOffset): AbsoluteOffset {
+  return asAbsoluteOffset(base + offset);
+}
+
+/** `pending` when it was armed against this same document and block start, else
+ *  `null`. An equal widget can reuse this root at a different block, so an anchor
+ *  captured at the old position must not be paired with the current one. */
+function dragForBlock(
+  view: EditorView,
+  base: AbsoluteOffset,
+  pending: PendingDrag | null
+): PendingDrag | null {
+  return pending !== null && view.state.doc === pending.doc && base === pending.base
+    ? pending
+    : null;
 }
 
 /** Every selection dispatch out of this widget's DOM listeners goes through
@@ -220,8 +170,7 @@ function blockStartCaret(root: HTMLElement, widget: TableBlockWidget): AbsoluteO
  *  gesture is lost, the editor keeps running.
  *
  *  ⚠️ This is also the BRAND choke point. Both ends are `AbsoluteOffset`, so a
- *  value from either of the cell spaces (`RenderedOffset` / `CellSourceOffset`,
- *  cell-source-map.ts) is a compile error here rather than a silently wrong
+ *  relative offset is a compile error here rather than a silently wrong
  *  selection — CodeMirror's own `checkSelection` tests only `range.to >
  *  doc.length` and would accept any of them. That guard holds only while EVERY
  *  selection dispatch in this widget comes through this function: `view.dispatch`
@@ -363,6 +312,7 @@ function dragRange(
     return null;
   }
   const start = armed.point;
+  const base = armed.base;
   if (start.cellFrom === head.cellFrom) {
     // ONE cell. An unmappable end carries no direction here: a rendered offset
     // beside a construct that renders no text measures the SAME on both sides
@@ -380,12 +330,14 @@ function dragRange(
       // have to fake a resolver answer no browser produces.
       return start.cellFrom === start.cellTo
         ? null
-        : { anchor: start.cellFrom, head: start.cellTo };
+        : { anchor: toAbsolute(base, start.cellFrom), head: toAbsolute(base, start.cellTo) };
     }
     // Both ends exact: the offsets ARE the range, in the order they were made.
     // Zero-width — the caller's caret keeps the historical semantics (cell
     // CONTENT START, not the character under the pointer).
-    return start.offset === head.offset ? null : { anchor: start.offset, head: head.offset };
+    return start.offset === head.offset
+      ? null
+      : { anchor: toAbsolute(base, start.offset), head: toAbsolute(base, head.offset) };
   }
   // Across cells the direction comes from CELL ORDER, not from the offsets: an
   // unmappable endpoint has no offset to compare, and defaulting it to 0 would
@@ -397,7 +349,7 @@ function dragRange(
   const from = start.offset ?? (forward ? start.cellFrom : start.cellTo);
   const to = head.offset ?? (forward ? head.cellTo : head.cellFrom);
   // Zero-width after snapping (adjacent cells, both ends on the same boundary).
-  return from === to ? null : { anchor: from, head: to };
+  return from === to ? null : { anchor: toAbsolute(base, from), head: toAbsolute(base, to) };
 }
 
 /** The RANGE a gesture RELEASED OUTSIDE this widget describes, or `null` when it
@@ -433,17 +385,9 @@ function releaseRange(
     // Same contract as `dispatchSelection`'s catch: a failed coordinate lookup
     // must cost the gesture, not the editor.
     //
-    // The payload carries what it takes to REPRODUCE the degrade, for the reason
-    // `blockStartCaret` logs `slice` — a document can hold many tables, and the
-    // error alone would not say which one, nor where the pointer was. It matters
-    // more here than at either sibling site because `posAtCoords` has a
-    // SYSTEMATIC throw mode, not only a teardown one: it calls `readMeasured()`,
-    // which throws "Reading the editor layout isn't allowed during an update"
-    // whenever `updateState === Updating` (@codemirror/view 6.43.0) — and a DOM
-    // mouseup is exactly the thing an in-progress update can deliver. Every such
-    // drag silently collapses to a caret, so the log is the only trace.
+    // posAtCoords can throw when a DOM mouseup arrives during a view update.
     console.error("[quoll] table widget release lookup failed", {
-      cellFrom: armed.point.cellFrom,
+      cellFrom: toAbsolute(armed.base, armed.point.cellFrom),
       x: event.clientX,
       y: event.clientY,
       err,
@@ -453,26 +397,11 @@ function releaseRange(
   if (raw === null) {
     return null;
   }
-  // The crossing into absolute document space, minted here for the reason
-  // cell-point.ts mints at its own legal crossings: an entry into this space is
-  // said out loud rather than inferred. CodeMirror answers a real document
-  // position — clamped to `[0, doc.length]`, never a fraction — so there is
-  // nothing further to validate, only to name.
-  //
-  // One of the module's TWO mints, and the grep for `asAbsoluteOffset` finds
-  // exactly them: this one, and `blockStartOf` for the caret path. Both paths
-  // are now branded to the shared sink — `DragSelection` carries minted ends
-  // from either producer, `blockStart` / `blockStartCaret` carry the block
-  // start, and `dispatchSelection` accepts nothing else.
-  //
-  // What that does NOT buy: `view.dispatch` still takes plain `number`, so the
-  // guarantee is only as good as everything going through the sink (see its
-  // docblock); and a brand names a SPACE, never freshness — a stale value of the
-  // right space passes. Freshness stays with `patchDOM`'s re-point and the
-  // `pendingDrag` invalidation.
   const head = asAbsoluteOffset(raw);
   const start = armed.point;
-  const anchor = start.offset ?? (head > start.cellFrom ? start.cellFrom : start.cellTo);
+  const cellFrom = toAbsolute(armed.base, start.cellFrom);
+  const relative = start.offset ?? (head > cellFrom ? start.cellFrom : start.cellTo);
+  const anchor = toAbsolute(armed.base, relative);
   return anchor === head ? null : { anchor, head };
 }
 
@@ -481,44 +410,10 @@ export class TableBlockWidget extends QuollWidget {
 
   constructor(
     readonly table: Table,
-    /** LF-normalised source slice (the table block's `slice`) — sameAs() key.
-     *  A byte change rebuilds; matches the pre-existing widget identity. */
+    /** LF-normalized source slice for widget equality. */
     readonly slice: string,
-    /** Absolute LF-internal doc offset of the widget's first byte (block
-     *  line-start). Margin-click caret fallback + part of sameAs().
-     *
-     *  ⚠️ Deliberately a plain `number` and NOT `AbsoluteOffset`, even though
-     *  the sentence above describes exactly that space. Both `blockStart.set`
-     *  call sites (`render`, `patchDOM`) run on a live instance — `this` is
-     *  never stale there — so leaving this field unbranded is NOT a staleness
-     *  guard. What it buys is a single grep-visible mint site: branding
-     *  `docFrom` here would not compile silently — every `new
-     *  TableBlockWidget(...)` call site passing a plain number
-     *  (table-field.ts, widget-fixtures.ts and the other fixtures) would go
-     *  TS2345, forcing an explicit `asAbsoluteOffset` cast at each caller.
-     *  Leaving it unbranded keeps that crossing inside this module, at one
-     *  site (`blockStartOf`), instead of spreading it to every constructor
-     *  caller.
-     *
-     *  The actual staleness hazard is upstream of the type system, at the
-     *  two READ sites (the document `mouseup` seam, the root `click`
-     *  handler): substituting
-     *  `blockStartOf(this)` for `blockStartCaret(root, this)` there
-     *  type-checks cleanly and reintroduces the stale-caret bug the
-     *  `blockStart` WeakMap exists to prevent, because `blockStartCaret`
-     *  reads the WeakMap FIRST and only falls back to the constructor value
-     *  on a miss. Freshness is `blockStartCaret`'s job, not this field's type.
-     *  The block start enters the branded space through `blockStartOf`, at
-     *  one site, on purpose. */
-    readonly docFrom: number,
-    /** Absolute LF-internal doc offset of the Lezer `Table` node start — base
-     *  for each cell's caret offset (`nodeFrom + cell.from`). CodeMirror is
-     *  LF-internal (seed.ts splitToCmText strips \r), so cell.from — an offset
-     *  into the LF-normalised parse slice — is already a valid CM position and
-     *  needs NO CRLF correction. Differs from `docFrom` whenever the node
-     *  START is not a line start — any 1-3-space-indented or list-nested
-     *  table (see `blockStartOf`'s docblock above for the mechanism). */
-    readonly nodeFrom: number
+    /** Offset of the Lezer Table node within the whole-line block. */
+    readonly nodeOffset: number
   ) {
     super();
   }
@@ -526,9 +421,8 @@ export class TableBlockWidget extends QuollWidget {
   protected sameAs(other: QuollWidget): boolean {
     return (
       other instanceof TableBlockWidget &&
-      other.docFrom === this.docFrom &&
       other.slice === this.slice &&
-      other.nodeFrom === this.nodeFrom
+      other.nodeOffset === this.nodeOffset
     );
   }
 
@@ -539,12 +433,6 @@ export class TableBlockWidget extends QuollWidget {
     // block-widget height measurement stays in lockstep with the visible DOM.
     const root = document.createElement("div");
     root.className = "quoll-block quoll-table-block";
-    // The margin-click caret travels through `blockStart`, NOT through this
-    // attribute: `data-doc-from` is written for DOM inspection (and read by the
-    // tests that pin the re-stamp) and is NEVER read back — see `blockStart`
-    // above for why this position must not be parsed back out of the DOM.
-    root.dataset.docFrom = String(this.docFrom);
-    blockStart.set(root, blockStartOf(this));
 
     // Resource base for relative in-cell image srcs. Static per editor
     // (resource-base.ts), so it is NOT part of sameAs() — reading it at
@@ -589,7 +477,13 @@ export class TableBlockWidget extends QuollWidget {
         }
         // No dispatch here: dispatching would fire the reveal mid-drag and pull
         // the widget out from under the pointer.
+        const base = blockBase(view, root);
+        if (base === null) {
+          return;
+        }
         pendingDrag.set(root, {
+          doc: view.state.doc,
+          base,
           ...contentPoint(view, event),
           // `cellPointAt` keeps taking VIEWPORT coordinates — it feeds
           // `caretPositionFromPoint`, which is a viewport API. Only the travel
@@ -642,10 +536,7 @@ export class TableBlockWidget extends QuollWidget {
               return;
             }
             release.abort(); // one-shot: this gesture is over either way
-            // The root left the document mid-gesture — CodeMirror rebuilds a
-            // widget by REPLACING its root, and a detached root's stamps have
-            // stopped tracking the document. The click seam never had to check
-            // (a detached root receives no clicks); a document-level one does.
+            // A detached root can still have a document listener armed.
             if (!root.isConnected) {
               return;
             }
@@ -657,10 +548,16 @@ export class TableBlockWidget extends QuollWidget {
             }
             const pending = pendingDrag.get(root) ?? null;
             pendingDrag.delete(root);
+            const base = blockBase(view, root);
+            if (base === null) {
+              return;
+            }
+            const owned = dragForBlock(view, base, pending);
+            const point = owned?.point ?? null;
             dispatchSelection(
               view,
-              releaseRange(view, up, pending) ?? {
-                anchor: pending?.point?.cellFrom ?? blockStartCaret(root, this),
+              releaseRange(view, up, owned) ?? {
+                anchor: point === null ? base : toAbsolute(base, point.cellFrom),
               }
             );
           },
@@ -768,26 +665,16 @@ export class TableBlockWidget extends QuollWidget {
           view.state.facet(quollOpenExternalSink)(anchor.getAttribute("href") ?? "");
           return;
         }
+        const base = blockBase(view, root);
+        if (base === null) {
+          return;
+        }
         const cell = (event.target as Element | null)?.closest?.("th, td") ?? null;
-        // The CELL offset must stay on the DOM — `cellPointAt` resolves an
-        // arbitrary descendant under the pointer, so no closure knows which cell
-        // was clicked. That makes it a trust boundary, read through the SAME gate
-        // the drag path uses (`stampedOffset`) rather than a bare `Number(...)`;
-        // its docblock has the why — CodeMirror accepts a `NaN` anchor and
-        // installs a broken selection `dispatchSelection`'s catch never sees.
-        //
-        // A stamp that fails the gate degrades one step rather than dispatching
-        // nothing: reveal-on-caret is LINE-level, so the block start reveals the
-        // same table the cell offset would — only the intra-table caret precision
-        // is lost, and a dead click (no reveal at all) is a worse answer for a
-        // failure mode that only arises when something outside this widget wrote
-        // its DOM. That "same table" guarantee is unconditional now that the block
-        // start comes from `blockStart`, which `patchDOM` re-points: it can no
-        // longer be a stale closure value pointing at a DIFFERENT block.
-        const caret =
-          (cell === null ? null : stampedOffset(cell, "data-cell-from")) ??
-          blockStartCaret(root, this);
-        dispatchSelection(view, dragRange(view, root, event, pending) ?? { anchor: caret });
+        const cellFrom = cell === null ? null : stampedOffset(cell, "data-cell-from");
+        const caret = cellFrom === null ? base : toAbsolute(base, cellFrom);
+        const owned = dragForBlock(view, base, pending);
+        const range = dragRange(view, root, event, owned);
+        dispatchSelection(view, range ?? { anchor: caret });
       },
       { signal }
     );
@@ -814,15 +701,9 @@ export class TableBlockWidget extends QuollWidget {
       }
       const a = align[col];
       el.style.textAlign = a !== null && a !== undefined ? a : "";
-      // LF-internal absolute source offsets of this cell's content span. They
-      // are ALSO where a drag across cells snaps OUTWARD when the pointer lands
-      // on a boundary the cell's source map cannot resolve exactly — `to` when
-      // this cell is the LATER end of the drag, `from` when it is the earlier
-      // one, so the range still covers what the pointer crossed. Both stamps
-      // together are the whole-cell range a same-cell drag falls back to (see
-      // dragRange / cell-point.ts).
-      el.dataset.cellFrom = String(this.nodeFrom + cell.from);
-      el.dataset.cellTo = String(this.nodeFrom + cell.to);
+      // Block-relative content bounds, also used to snap unmappable drag endpoints.
+      el.dataset.cellFrom = String(this.nodeOffset + cell.from);
+      el.dataset.cellTo = String(this.nodeOffset + cell.to);
       // `cell.raw` VERBATIM, never `.trim()`: the parser's cell trimming is
       // ASCII space/tab only, while JS `trim()` also strips NBSP, U+FEFF and
       // every other Unicode space — so for `| <NBSP>x |` the stamps would
@@ -841,7 +722,7 @@ export class TableBlockWidget extends QuollWidget {
   protected patchDOM(
     dom: HTMLElement,
     view: EditorView,
-    from: TableBlockWidget,
+    _from: TableBlockWidget,
     signal: AbortSignal
   ): boolean {
     // CM calls updateDOM only when eq() returned false. Validate the grid shape;
@@ -869,38 +750,8 @@ export class TableBlockWidget extends QuollWidget {
         return false;
       }
     }
-    // A document edit landed while a drag was in flight. Every offset on this
-    // reused element is about to move, so an anchor captured under the OLD
-    // stamps must not be paired with a head resolved under the new ones — that
-    // would dispatch a selection over an unrelated span. Drop it; the gesture
-    // degrades to the collapsed caret.
+    // A range cannot pair an anchor from the previous cell layout with a new head.
     pendingDrag.delete(dom);
-    // Re-point the margin-click caret channel the click listener actually reads,
-    // so a reused element tracks the new docFrom after a distant edit shifted
-    // this table without changing its bytes. The attribute beside it is
-    // inspection-only (see `render`) — dropping THIS line would leave the reused
-    // listener dispatching the old offset while the DOM still looked correct.
-    dom.dataset.docFrom = String(this.docFrom);
-    blockStart.set(dom, blockStartOf(this));
-    // Pure positional shift: the bytes are identical (from.slice === this.slice)
-    // and only the absolute offsets moved. Re-stamp data-cell-from on each cell
-    // and reuse the rendered inline children verbatim — skip `patchRow`'s
-    // `renderCellInto` call, which clears the cell and re-tokenizes it
-    // (cell-render.ts's header: `renderCellInto` is the only supported way to
-    // fill a cell, so clearing is ITS job, not `patchRow`'s). This is the hot
-    // path when typing in a paragraph ABOVE the table.
-    if (from.slice === this.slice) {
-      this.stampRow(headerRows[0], this.table.header.cells);
-      for (let rowIdx = 0; rowIdx < this.table.rows.length; rowIdx++) {
-        this.stampRow(bodyRows[rowIdx] as Element, this.table.rows[rowIdx].cells);
-      }
-      return true;
-    }
-    // Content edit (slice changed): full re-render. `patchRow` re-stamps
-    // `data-cell-from` / `data-cell-to` itself before each `renderCellInto`, so
-    // offsets stay correct on this path too. (Named by symbol rather than by
-    // line: bare `:NNN` refs in this file rotted twice as the gesture seams
-    // grew above them.)
     const resourceBase = view.state.facet(quollResourceBaseUri);
     const align = tableAlign(this.table);
     this.patchRow(headerRows[0], this.table.header.cells, align, resourceBase, signal);
@@ -914,21 +765,6 @@ export class TableBlockWidget extends QuollWidget {
       );
     }
     return true;
-  }
-
-  /** Re-stamp absolute cell offsets on a reused row WITHOUT touching content.
-   *  Safe only when the slice is unchanged: the DOM grid then matches this.table
-   *  1:1 (same cell.from values; only nodeFrom shifted). Alignment is unchanged
-   *  too, so textAlign is left as-is. */
-  private stampRow(tr: Element, cells: readonly Cell[]): void {
-    const domCells = tr.querySelectorAll("th, td");
-    for (let col = 0; col < cells.length; col++) {
-      const el = domCells[col] as HTMLElement | undefined;
-      if (el) {
-        el.dataset.cellFrom = String(this.nodeFrom + cells[col].from);
-        el.dataset.cellTo = String(this.nodeFrom + cells[col].to);
-      }
-    }
   }
 
   private patchRow(
@@ -947,8 +783,8 @@ export class TableBlockWidget extends QuollWidget {
       const cell = cells[col];
       const a = align[col];
       el.style.textAlign = a !== null && a !== undefined ? a : "";
-      el.dataset.cellFrom = String(this.nodeFrom + cell.from);
-      el.dataset.cellTo = String(this.nodeFrom + cell.to);
+      el.dataset.cellFrom = String(this.nodeOffset + cell.from);
+      el.dataset.cellTo = String(this.nodeOffset + cell.to);
       // Verbatim `cell.raw` and the map-registering renderer, for the reasons
       // in buildRow: `renderCellInto` clears the cell itself, so a reused cell
       // can never keep the previous render's source map.

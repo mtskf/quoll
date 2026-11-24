@@ -53,9 +53,7 @@ function serializeGutter(set: RangeSet<GutterMarker>) {
   return out.join("|");
 }
 
-/** Image widgets are compared by the widget's OWN identity fields, not merely by range —
- *  `ImageBlockWidget.eq` keys on (docFrom, slice), and a stale alt / safeUrl at an unchanged
- *  range is exactly the silent staleness this fuzz is for (Codex finding 3). */
+/** Compare each record's range and rendered image payload. */
 function serializeImages(set: ReturnType<typeof Decoration.set>) {
   const out: string[] = [];
   const c = set.iter();
@@ -63,7 +61,7 @@ function serializeImages(set: ReturnType<typeof Decoration.set>) {
     const w = (c.value.spec as { widget?: unknown }).widget;
     out.push(
       w instanceof ImageBlockWidget
-        ? `${c.from}-${c.to}:${w.docFrom}:${w.alt}:${String(w.safeUrl)}:${w.slice}`
+        ? `${c.from}-${c.to}:${w.alt}:${String(w.safeUrl)}:${w.slice}`
         : `${c.from}-${c.to}:?`
     );
     c.next();

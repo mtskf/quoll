@@ -144,12 +144,12 @@ afterEach(() => {
   drainResolverFailures();
 });
 
-export function makeWidget(src: string, docFrom = 0): TableBlockWidget {
+export function makeWidget(src: string, nodeOffset = 0): TableBlockWidget {
   const table = parseTable(src, 0, src.length);
   if (table === null) {
     throw new Error("fixture must parse");
   }
-  return new TableBlockWidget(table, src, docFrom, 0);
+  return new TableBlockWidget(table, src, nodeOffset);
 }
 
 /** Minimal view stub — display-only toDOM reads `view.dispatch` and
@@ -174,7 +174,8 @@ export function makeWidget(src: string, docFrom = 0): TableBlockWidget {
 export function stubView(
   dispatched: unknown[],
   resourceBase?: string,
-  opened?: string[]
+  opened?: string[],
+  base = 0
 ): EditorViewType {
   const extensions = [];
   if (resourceBase !== undefined) {
@@ -192,9 +193,10 @@ export function stubView(
     // than an error. happy-dom reports an all-zero rect, which is exactly right
     // for the suites using this stub: content that never moves.
     contentDOM: document.createElement("div"),
+    posAtDOM: () => base,
   } satisfies Pick<
     EditorViewType,
-    "state" | "dispatch" | "contentDOM"
+    "state" | "dispatch" | "contentDOM" | "posAtDOM"
   > as unknown as EditorViewType;
 }
 
@@ -241,7 +243,8 @@ export function stubViewWithCaret(
    *  caret, which is the expected value of several rows in the release suite, so
    *  an unscripted call would pass vacuously. It records misuse through the same
    *  channel the caret resolver uses, so an unscripted call is audible instead. */
-  posAtCoords?: (x: number, y: number) => number | null
+  posAtCoords?: (x: number, y: number) => number | null,
+  base = 0
 ) {
   let root: HTMLElement | null = null;
   let i = 0;
@@ -310,6 +313,7 @@ export function stubViewWithCaret(
     state: EditorState.create({ extensions: [quollTableCaretResolver.of(resolve), ...extensions] }),
     dispatch: (tr: unknown) => dispatched.push(tr),
     contentDOM,
+    posAtDOM: () => base,
     // ⚠️ `EditorView.posAtCoords` is OVERLOADED — `(coords, precise: false):
     // number` and `(coords): number | null` — and a single-signature stub is not
     // assignable to the FIRST overload, so `satisfies` rejects it with TS2322
@@ -331,7 +335,7 @@ export function stubViewWithCaret(
     }) as EditorViewType["posAtCoords"],
   } satisfies Pick<
     EditorViewType,
-    "state" | "dispatch" | "contentDOM" | "posAtCoords"
+    "state" | "dispatch" | "contentDOM" | "posAtDOM" | "posAtCoords"
   > as unknown as EditorViewType;
 
   /** Mount a widget the way every drag test needs it: rendered, resolver root
@@ -356,8 +360,12 @@ export function stubViewWithCaret(
     }
     const dom = widget.toDOM(view);
     root = dom;
-    document.body.appendChild(dom);
-    mountedWidgets.push(() => widget.destroy(dom));
+    document.body.appendChild(contentDOM);
+    contentDOM.appendChild(dom);
+    mountedWidgets.push(() => {
+      widget.destroy(dom);
+      contentDOM.remove();
+    });
     return dom;
   };
 

@@ -330,7 +330,7 @@ describe("imageBlockField — reveal-on-caret", () => {
     try {
       const w = widgetsOf(view.state.field(imageBlockField).decorations);
       expect(w).toHaveLength(1);
-      expect(w[0].docFrom).toBe(0); // first image stays; second is revealed
+      expect(view.state.field(imageBlockField).decorations.iter().from).toBe(0);
     } finally {
       view.destroy();
     }
@@ -450,4 +450,24 @@ describe("imageBlockField — relative resolution", () => {
       view.destroy();
     }
   });
+});
+
+it("an image click uses the shifted block start on the same EditorView root", () => {
+  const doc = `Intro.\n\nSeparated prose.\n\n${SAFE}\n\nTail.`;
+  const view = mount(doc);
+  const root = () => view.contentDOM.querySelector<HTMLElement>(".quoll-image-block")!;
+  try {
+    const before = root();
+    expect(before).not.toBeNull();
+    expect(view.posAtDOM(before)).toBe(doc.indexOf(SAFE));
+    view.dispatch({ changes: { from: 1, insert: "new" } });
+    expect(root()).toBe(before);
+    const start = doc.indexOf(SAFE) + 3;
+    expect(view.posAtDOM(before)).toBe(start);
+    before.click();
+    expect(view.state.selection.main.anchor).toBe(start);
+    expect(root()).toBeNull();
+  } finally {
+    view.destroy();
+  }
 });

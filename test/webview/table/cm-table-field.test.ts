@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { EditorSelection, EditorState, type SelectionRange } from "@codemirror/state";
+import { EditorSelection, EditorState, type SelectionRange, type Text } from "@codemirror/state";
 import { type DecorationSet, EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 import {
@@ -10,7 +10,6 @@ import {
 import { inlineMarkReveal } from "../../../src/webview/cm/decorations/inline-mark-reveal.js";
 import { splitToCmText } from "../../../src/webview/cm/seed.js";
 import { tableBlockField } from "../../../src/webview/cm/table/index.js";
-import type { TableBlockWidget } from "../../../src/webview/cm/table/table-widget.js";
 import { fullTree } from "../helpers/full-tree.js";
 import { settledMount } from "../helpers/settled-view.js";
 
@@ -25,7 +24,7 @@ function rangesOf(set: DecorationSet): Array<{ from: number; to: number }> {
 }
 
 function mount(
-  doc: string,
+  doc: string | Text,
   selection?: EditorSelection | SelectionRange,
   extraExtensions: Array<unknown> = []
 ): EditorView {
@@ -437,47 +436,17 @@ describe("tableBlockField — reveal and offset pins", () => {
     }
   });
 
-  it("stamps LF-internal offsets for a CRLF-seeded document (no \\r re-addition)", () => {
-    // Production seeds via splitToCmText which strips \r → CM is LF-internal.
-    // Trailing \r\n ensures the cursor at doc.length lands after the table.
-    const raw = "| a | b |\r\n| - | - |\r\n| c | d |\r\n";
+  it("stamps block-relative LF offsets for a CRLF-seeded document", () => {
+    const raw = "Intro.\r\n\r\n| a | b |\r\n| - | - |\r\n| c | d |\r\n";
     const lfText = splitToCmText(raw);
-    const parent = document.createElement("div");
-    document.body.appendChild(parent);
-    // Settle: same syntaxTree(state) read as mount() above.
-    const view = settledMount({
-      parent,
-      state: EditorState.create({
-        doc: lfText,
-        selection: EditorSelection.cursor(lfText.length),
-        extensions: [
-          EditorState.allowMultipleSelections.of(true),
-          markdown({ base: markdownLanguage }),
-          tableBlockField,
-        ],
-      }),
-    });
+    const view = mount(lfText);
     try {
-      const set = view.state.field(tableBlockField).decorations;
-      let widget: TableBlockWidget | null = null;
-      set.between(0, view.state.doc.length, (_f, _t, deco) => {
-        if (widget === null) {
-          widget = (deco.spec.widget as TableBlockWidget) ?? null;
-        }
-      });
-      if (!widget) {
-        throw new Error("no table widget");
-      }
-      // toDOM reads the quollResourceBaseUri facet from view.state, so the
-      // stub needs a real (empty) EditorState (no facet value → base "").
-      const dom = (widget as TableBlockWidget).toDOM({
-        state: EditorState.create({}),
-        dispatch() {},
-      } as unknown as EditorView);
-      // LF doc "| a | b |\n| - | - |\n| c | d |\n": first body cell 'c' content
-      // is at offset 22 (row-3 '|'=20, ' '=21, 'c'=22), NOT 24 (adding \r back)
-      // and NOT 20 (the line start).
-      expect((dom.querySelector("tbody td") as HTMLElement).dataset.cellFrom).toBe("22");
+      const root = view.contentDOM.querySelector<HTMLElement>(".quoll-table-block")!;
+      expect(root).not.toBeNull();
+      const cell = root.querySelector<HTMLTableCellElement>("tbody td")!;
+      expect(cell.dataset.cellFrom).toBe("22");
+      cell.click();
+      expect(view.state.selection.main.anchor).toBe(lfText.toString().indexOf("c | d"));
     } finally {
       view.destroy();
     }

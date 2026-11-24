@@ -40,7 +40,7 @@ function assertEquivalent(actual: Slot[], oracle: Slot[], expectedSlots: number)
     oracle.map((s) => ({ from: s.from, to: s.to }))
   );
   for (let i = 0; i < oracle.length; i++) {
-    expect(actual[i].widget.eq(oracle[i].widget)).toBe(true); // pins docFrom/slice
+    expect(actual[i].widget.eq(oracle[i].widget)).toBe(true); // pins widget payload equality
   }
 }
 const exts = (): Extension[] => [

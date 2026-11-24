@@ -7,7 +7,7 @@ import { EditorState } from "@codemirror/state";
 import type { EditorView as EditorViewType } from "@codemirror/view";
 import { describe, expect, it, vi } from "vitest";
 
-import { asAbsoluteOffset } from "../../../src/webview/cm/table/cell-point.js";
+import { asAbsoluteOffset, stampedOffset } from "../../../src/webview/cm/table/cell-point.js";
 import {
   asCellSourceOffset,
   asRenderedOffset,
@@ -35,8 +35,9 @@ describe("TableBlockWidget caret dispatch hardening", () => {
     ["precision-losing", "9007199254740993"],
   ])("falls back to the block start for a %s cell stamp", (_label, raw) => {
     const dispatched: unknown[] = [];
-    const dom = makeWidget(SRC, 7).toDOM(stubView(dispatched));
-    document.body.appendChild(dom);
+    const view = stubView(dispatched, undefined, undefined, 7);
+    const dom = makeWidget(SRC).toDOM(view);
+    view.contentDOM.appendChild(dom);
     const td = dom.querySelectorAll("td")[0] as HTMLElement;
     td.setAttribute("data-cell-from", raw);
     press(td, "click", 10, 10);
@@ -45,35 +46,45 @@ describe("TableBlockWidget caret dispatch hardening", () => {
     expect(dispatched).toEqual([{ selection: { anchor: 7 } }]);
   });
 
-  // The ROOT position, unlike the cell stamps, is NOT an input from the DOM.
-  // `data-doc-from` is still written (DOM inspection, plus the re-stamp
-  // assertions in cm-table-widget-update.test.ts), but the block-start fallback
-  // reads the module-private WeakMap, so a value written onto the element
-  // cannot steer the dispatch.
-  //
-  // "999" alone kills both reverts — it dispatches 999 (≠ 7, this fixture's
-  // expected anchor) whether read BARE (`Number(root.dataset.docFrom)`) or
-  // via the pre-refactor GATED read (`stampedOffset(root, "data-doc-from")
-  // ?? this.docFrom`), since "999" also passes the gate's `/^\d+$/`. "abc"
-  // is redundant against the gated read — it fails the gate and falls
-  // through to `this.docFrom`, leaving that revert green — but earns its
-  // place against the bare read: it dispatches `NaN`, silently accepted by
-  // `checkSelection` (rejects only `range.to > doc.length`), breaking the
-  // selection silently. (Each revert applied; red rows observed.)
-  it.each([
-    ["malformed", "abc"],
-    ["well-formed but wrong", "999"],
-  ])("ignores a %s data-doc-from written onto the widget root", (_label, raw) => {
+  // The two null arms of the block-start lookup drop the gesture, so the log is
+  // the only trace a dead click leaves — pinned so neither arm goes silent.
+  it("a foreign table root dispatches nothing and logs why", () => {
     const dispatched: unknown[] = [];
-    const dom = makeWidget(SRC, 7).toDOM(stubView(dispatched));
+    const view = stubView(dispatched, undefined, undefined, 7);
+    const dom = makeWidget(SRC).toDOM(view);
     document.body.appendChild(dom);
-    const td = dom.querySelectorAll("td")[0] as HTMLElement;
-    td.setAttribute("data-cell-from", "abc"); // force the block-start fallback
-    dom.setAttribute("data-doc-from", raw);
-    press(td, "click", 10, 10);
-    // 7 is the constructor argument, carried in the WeakMap — it never
-    // travelled through the DOM.
-    expect(dispatched).toEqual([{ selection: { anchor: 7 } }]);
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      press(dom.querySelector("td")!, "click", 10, 10);
+      expect(dispatched).toEqual([]);
+      // Exact arguments: the log names the failure and carries no document text.
+      expect(consoleError).toHaveBeenCalledWith("[quoll] table widget root not in contentDOM");
+    } finally {
+      consoleError.mockRestore();
+      dom.remove();
+    }
+  });
+
+  it("a throwing block-position lookup dispatches nothing and logs the error", () => {
+    const dispatched: unknown[] = [];
+    const boom = new Error("posAtDOM boom");
+    const view = stubView(dispatched);
+    (view as unknown as { posAtDOM: () => number }).posAtDOM = () => {
+      throw boom;
+    };
+    const dom = makeWidget(SRC).toDOM(view);
+    view.contentDOM.appendChild(dom);
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      press(dom.querySelector("td")!, "click", 10, 10);
+      expect(dispatched).toEqual([]);
+      expect(consoleError).toHaveBeenCalledWith(
+        "[quoll] table widget block position lookup failed",
+        { err: boom }
+      );
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   // `dispatchSelection` is the single window through which every dispatch in
@@ -86,47 +97,22 @@ describe("TableBlockWidget caret dispatch hardening", () => {
   it("logs and swallows a throwing dispatch instead of letting it escape the DOM listener", () => {
     const view = {
       state: EditorState.create({}),
+      contentDOM: document.createElement("div"),
+      posAtDOM: () => 7,
       dispatch: () => {
         throw new Error("dispatch boom");
       },
     } as unknown as EditorViewType;
-    const dom = makeWidget(SRC, 7).toDOM(view);
-    document.body.appendChild(dom);
+    const dom = makeWidget(SRC).toDOM(view);
+    view.contentDOM.appendChild(dom);
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
     try {
       const td = dom.querySelectorAll("td")[0] as HTMLElement;
       expect(() => press(td, "click", 10, 10)).not.toThrow();
       expect(consoleError).toHaveBeenCalledWith("[quoll] table widget selection dispatch failed", {
-        selection: { anchor: SRC.indexOf("alpha") },
+        selection: { anchor: 7 + SRC.indexOf("alpha") },
         err: expect.any(Error),
       });
-    } finally {
-      consoleError.mockRestore();
-    }
-  });
-
-  // A fresh toDOM'd widget's margin click must hit the `blockStart` entry
-  // written in toDOM, not `blockStartCaret`'s miss fallback — the absent
-  // `console.error` is the only observable difference. The anchor VALUE cannot
-  // distinguish them here (nor in any other fixture across these widget suites
-  // that clicks right after toDOM): both trace back to the same `docFrom`
-  // constructor argument, so deleting `blockStart.set(root, this.docFrom)` in
-  // `toDOM` leaves every such anchor assertion green. (The one MARGIN click
-  // that lands after updateDOM — "re-stamps offsets on updateDOM so a click
-  // after a shift uses the new base", in cm-table-widget-render.test.ts —
-  // stays green for an unrelated reason: updateDOM's OWN `blockStart.set`
-  // write re-fills the entry with the new docFrom. The drag suite's two
-  // post-updateDOM rows click a CELL, so they never reach `blockStart` at
-  // all.)
-  it("does not log a blockStart miss when a fresh toDOM'd widget's margin is clicked", () => {
-    const dispatched: unknown[] = [];
-    const dom = makeWidget(SRC, 7).toDOM(stubView(dispatched));
-    document.body.appendChild(dom);
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    try {
-      dom.click(); // the root div, not a cell
-      expect(dispatched).toEqual([{ selection: { anchor: 7 } }]);
-      expect(consoleError).not.toHaveBeenCalled();
     } finally {
       consoleError.mockRestore();
     }
@@ -160,6 +146,17 @@ describe("dispatchSelection offset-space brand", () => {
     // @ts-expect-error — a CellSourceOffset is not an AbsoluteOffset.
     const headCell: TableSelection = { anchor: abs, head: asCellSourceOffset(3) };
     expect([anchorCell.anchor, headCell.head]).toEqual([3, 3]);
+  });
+
+  it("refuses a block-relative stamp as either end", () => {
+    const cell = document.createElement("td");
+    cell.dataset.cellFrom = "4";
+    const stamp = stampedOffset(cell, "data-cell-from")!;
+    // @ts-expect-error — a BlockOffset is not an AbsoluteOffset.
+    const anchorBlock: TableSelection = { anchor: stamp };
+    // @ts-expect-error — a BlockOffset is not an AbsoluteOffset.
+    const headBlock: TableSelection = { anchor: abs, head: stamp };
+    expect([anchorBlock.anchor, headBlock.head]).toEqual([4, 4]);
   });
 
   it("refuses a rendered-text offset as either end", () => {

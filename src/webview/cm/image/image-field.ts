@@ -107,5 +107,5 @@ export const imageBlockField = structuralBlockWidgets<ImageBlock>({
   name: "image",
   node: "Image",
   build: buildImageBlock,
-  widget: (b, from) => new ImageBlockWidget(b.alt, b.safeUrl, b.imgText, from),
+  widget: (b) => new ImageBlockWidget(b.alt, b.safeUrl, b.imgText),
 });

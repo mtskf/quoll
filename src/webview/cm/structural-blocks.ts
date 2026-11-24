@@ -10,10 +10,8 @@
 // The field value is `{ records, decorations }`. `records` is the canonical,
 // selection-independent state: a DecorationSet holding one block decoration per block that
 // HAS a widget, whose range is the block range and whose `spec.structural` is the
-// consumer's POSITION-FREE payload. The set is the only place a block position lives, so a
-// shifted block keeps its payload object and only its range moves — a shift allocates one
-// widget + one decoration (the widget only because `spec.widget` still takes `from`), and
-// never re-runs `build`.
+// consumer's position-free payload. Mapping a shifted block moves its range and
+// preserves both its decoration value and widget object.
 // `decorations` is the selection-filtered view of it: the SAME set object whenever no
 // record meets a selection line. Updates derive exclusively from the previous field value;
 // the field closure holds only the diagnostic latch. EditorState is persistent — two
@@ -25,27 +23,17 @@
 //    `invalid-range` (the `Decoration.replace({ block: true })`, line-alignment and
 //    containment preconditions live at this one call site; reveal relies on alignment).
 //    fmEnd "moved" → full rebuild; see `frontmatterMoved`.
-// 2. Change range / tree identity / determinacy. On a doc change,
-//    `requiresFullBoundedRebuild` (../structural-guard.ts — the home of the structural
-//    and frontier full-rebuild reasons; the frontmatter (Contract 1) and tree-identity
-//    reasons live in this file) → full; otherwise every prev record whose block is untouched
-//    and outside the span (changed ranges ±1 line) is reused — the SAME decoration when unmoved,
-//    else rebased through `makeRecord` with the SAME payload — and only the span is
-//    re-walked, each matched node processed at most once per rebuild (`visited`). Reused
-//    records and walked nodes are disjoint by construction: the reuse guard drops every
-//    record whose mapped range meets the span, every walked node meets the span, and a
-//    block contains its node. An update that reuses every record unmoved and adds none
-//    returns the previous set itself. No doc change but a new tree (the parser reached
-//    further) → full. Else prev.
-// 3. Failure → raw. `spec.build` is called only in the walk and `spec.widget` only in
-//    `makeRecord`, each inside one try/catch. A throw → no record: the raw source stays
-//    editable, sibling blocks, the transaction and edit-sync proceed. A dropped block is
-//    retried only when a changed span touches it or a full rebuild happens. The report is
-//    latched once per `${name}:${arm}` and reads NO property of `err` (a throwing getter
-//    inside the catch would escape `StateField.update` — the failure this arm contains;
-//    same rule as widget-base.ts `reportOnce`). Overlapping blocks (the `sortedDisjoint`
-//    backstop) report under their own `overlap` arm. DOM lifecycle failures stay owned by
-//    widget-base.ts.
+// 2. Change range / tree identity / determinacy. On a doc change, the structural guard,
+//    parse frontier and frontmatter checks determine whether to rebuild in full. Otherwise,
+//    map the records and filter out those meeting the changed span (changed ranges ±1 line).
+//    Walk only that span, processing each matched node at most once. If a walked block
+//    overlaps another walked or kept block, rebuild in full to resolve the overlap in
+//    document order. A new tree without a doc change also triggers a full rebuild.
+// 3. Failure → raw. The walk calls `spec.build` and `makeRecord` calls `spec.widget`,
+//    each inside one try/catch. A throw leaves the block editable as raw source and
+//    allows sibling blocks and the transaction to proceed. The report is latched per
+//    `${name}:${arm}` and reads no properties of the thrown value. Full rebuilds drop and
+//    report overlapping blocks. widget-base.ts contains DOM lifecycle failures.
 // 4. Reveal. `decorations` = the records whose block does not line-overlap any selection
 //    range. Records are whole lines, so the raw selection ranges suffice. Recomputed only
 //    when the records or the selection line spans change; when neither did, the field
@@ -90,11 +78,8 @@ export interface StructuralBlockSpec<B> {
    *  block range, so a block narrower than its node would reuse a record an in-node edit
    *  invalidated. May throw: that block stays raw. */
   build(state: EditorState, node: SyntaxNodeRef): BuiltBlock<B> | null;
-  /** Widget for a payload at document position `from`. The `from` argument is TEMPORARY:
-   *  it exists only because the table and image widgets still carry absolute positions
-   *  (follow-up TODO: position-free widgets, then `widget(block)`). May throw: that block
-   *  stays raw. */
-  widget(block: B, from: number): QuollWidget;
+  /** Widget for a position-free payload. May throw: that block stays raw. */
+  widget(block: B): QuollWidget;
 }
 
 declare const payload: unique symbol;
@@ -131,7 +116,7 @@ export function recordAt<B>(
 /** Did the leading frontmatter's end move? `0` is the no-frontmatter sentinel, not a
  *  position, so it is never mapped — mapping it would send every offset-0 insertion in a
  *  frontmatter-less doc to a full rebuild. A rigid shift inside the frontmatter body maps
- *  onto the new end and stays bounded (blocks rebase uniformly); a closer that appears,
+ *  onto the new end and stays bounded (block ranges shift uniformly); a closer that appears,
  *  vanishes or moves edits a `---` line, which the structural guard sends to full anyway. */
 function frontmatterMoved(tr: Transaction, oldEnd: number, newEnd: number): boolean {
   return oldEnd === 0 || newEnd === 0 ? oldEnd !== newEnd : tr.changes.mapPos(oldEnd, 1) !== newEnd;
@@ -207,7 +192,7 @@ export function structuralBlockWidgets<B>(
   const makeRecord = (block: B, from: number, to: number): Range<Decoration> | null => {
     let widget: QuollWidget;
     try {
-      widget = spec.widget(block, from);
+      widget = spec.widget(block);
     } catch (err) {
       report("widget", typeof err);
       return null;
@@ -215,11 +200,7 @@ export function structuralBlockWidgets<B>(
     return Decoration.replace({ widget, block: true, structural: block }).range(from, to);
   };
 
-  /** Ranges in `from` order with any range that overlaps an earlier one dropped (and
-   *  reported). Reused and walked records are disjoint by construction (header, Contract 2),
-   *  so the drop is a backstop for a spec whose blocks overlap each other: overlapping block
-   *  replaces would otherwise reach `Decoration.set`. One sort over the whole merged list,
-   *  one O(N) pass, then `Decoration.set` without its sort flag. */
+  /** Sort a full build and drop and report each range that overlaps a kept range. */
   const sortedDisjoint = (ranges: Range<Decoration>[]): DecorationSet => {
     ranges.sort((a, b) => a.from - b.from);
     const out: Range<Decoration>[] = [];
@@ -305,33 +286,38 @@ export function structuralBlockWidgets<B>(
       raw.push(lineExpandWithNeighbours(tr.state, fromB, toB));
     });
     const span = mergeIntervals(raw);
-    let changed = false;
-    const next: Range<Decoration>[] = [];
-    for (const it = prev.iter(); it.value !== null; it.next()) {
-      const { from, to, value } = it;
-      const nf = tr.changes.mapPos(from, 1);
-      const nt = tr.changes.mapPos(to, -1);
-      if (nf >= nt || tr.changes.touchesRange(from, to) !== false || intersects(span, nf, nt)) {
-        changed = true;
-      } else if (nf === from && nt === to) {
-        next.push(value.range(from, to));
-      } else {
-        changed = true;
-        const rebased = makeRecord(value.spec.structural as B, nf, nt);
-        if (rebased !== null) {
-          next.push(rebased);
-        }
-      }
-    }
-    const reused = next.length;
+    const added: Range<Decoration>[] = [];
     const visited = new Set<number>();
     for (const iv of span) {
-      walk(tr.state, iv.from, iv.to, fmEnd, visited, next);
+      walk(tr.state, iv.from, iv.to, fmEnd, visited, added);
     }
-    if (!changed && next.length === reused) {
+    // Every record ends before the span (so before the first change, where A and B positions
+    // agree): none moves, none is filtered. Returning `prev` keeps the set — and everything
+    // derived from it — shared instead of re-allocating it on each keystroke below the last block.
+    if (added.length === 0 && prev.iter(span[0].from).value === null) {
       return prev;
     }
-    return sortedDisjoint(next);
+    const kept = prev.map(tr.changes).update({
+      filter: (from, to) => from < to && !intersects(span, from, to),
+      filterFrom: span[0].from,
+      filterTo: span[span.length - 1].to,
+    });
+    // A walked block can extend beyond the span into a kept block.
+    added.sort((a, b) => a.from - b.from);
+    for (const [index, record] of added.entries()) {
+      if (index > 0 && record.from <= added[index - 1].to) {
+        return full(tr.state);
+      }
+      let overlaps = false;
+      kept.between(record.from, record.to, () => {
+        overlaps = true;
+        return false;
+      });
+      if (overlaps) {
+        return full(tr.state);
+      }
+    }
+    return added.length === 0 ? kept : kept.update({ add: added, sort: true });
   };
 
   const nextRecords = (prev: DecorationSet, tr: Transaction): DecorationSet => {

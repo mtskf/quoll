@@ -15,9 +15,13 @@ const mockView = { dispatch: () => {} } as unknown as EditorView;
 
 // View stub that records every dispatched selection, for the click tests that
 // assert WHICH caret offset the widget aimed at.
-const recordingView = (): { view: EditorView; dispatched: Array<{ anchor: number }> } => {
+const recordingView = (
+  base: number
+): { view: EditorView; dispatched: Array<{ anchor: number }> } => {
   const dispatched: Array<{ anchor: number }> = [];
   const view = {
+    contentDOM: document.createElement("div"),
+    posAtDOM: () => base,
     dispatch: (tr: { selection?: { anchor: number } }) => {
       if (tr.selection) {
         dispatched.push(tr.selection);
@@ -32,8 +36,7 @@ describe("ImageBlockWidget.toDOM (allowlisted)", () => {
     const dom = new ImageBlockWidget(
       "logo",
       url("https://x.test/a.png"),
-      "![logo](https://x.test/a.png)",
-      0
+      "![logo](https://x.test/a.png)"
     ).toDOM(mockView);
     expect(dom.tagName).toBe("DIV");
     expect(dom.classList.contains("quoll-block")).toBe(true);
@@ -47,8 +50,7 @@ describe("ImageBlockWidget.toDOM (allowlisted)", () => {
     const dom = new ImageBlockWidget(
       "my alt",
       url("https://x.test/a.png"),
-      "![my alt](https://x.test/a.png)",
-      0
+      "![my alt](https://x.test/a.png)"
     ).toDOM(mockView);
     expect(dom.querySelector("img")?.alt).toBe("my alt");
   });
@@ -57,8 +59,7 @@ describe("ImageBlockWidget.toDOM (allowlisted)", () => {
     const dom = new ImageBlockWidget(
       "",
       url("https://x.test/a.png"),
-      "![](https://x.test/a.png)",
-      0
+      "![](https://x.test/a.png)"
     ).toDOM(mockView);
     const img = dom.querySelector("img");
     expect(img).not.toBeNull();
@@ -69,8 +70,7 @@ describe("ImageBlockWidget.toDOM (allowlisted)", () => {
     const dom = new ImageBlockWidget(
       "a",
       url("https://x.test/a.png"),
-      "![a](https://x.test/a.png)",
-      0
+      "![a](https://x.test/a.png)"
     ).toDOM(mockView);
     expect(dom.querySelector("a")).toBeNull();
   });
@@ -78,7 +78,7 @@ describe("ImageBlockWidget.toDOM (allowlisted)", () => {
 
 describe("ImageBlockWidget.toDOM (blocked)", () => {
   it("renders an inert placeholder with NO <img> and NO src for a blocked url", () => {
-    const dom = new ImageBlockWidget("x", null, "![x](javascript:alert(1))", 0).toDOM(mockView);
+    const dom = new ImageBlockWidget("x", null, "![x](javascript:alert(1))").toDOM(mockView);
     expect(dom.querySelector("img")).toBeNull();
     expect(dom.querySelector("[src]")).toBeNull(); // no element anywhere carries src → no request
     expect(dom.querySelector("a")).toBeNull();
@@ -86,7 +86,7 @@ describe("ImageBlockWidget.toDOM (blocked)", () => {
   });
 
   it("gives the blocked placeholder an accessible label (role=img + aria-label)", () => {
-    const dom = new ImageBlockWidget("diagram", null, "![diagram](data:text/html,x)", 0).toDOM(
+    const dom = new ImageBlockWidget("diagram", null, "![diagram](data:text/html,x)").toDOM(
       mockView
     );
     const ph = dom.querySelector(".quoll-image-blocked");
@@ -96,7 +96,7 @@ describe("ImageBlockWidget.toDOM (blocked)", () => {
   });
 
   it("labels a blocked image with empty alt generically", () => {
-    const dom = new ImageBlockWidget("", null, "![](//evil.test/x.png)", 0).toDOM(mockView);
+    const dom = new ImageBlockWidget("", null, "![](//evil.test/x.png)").toDOM(mockView);
     expect(dom.querySelector(".quoll-image-blocked")?.getAttribute("aria-label")).toBe(
       "Blocked image"
     );
@@ -104,51 +104,15 @@ describe("ImageBlockWidget.toDOM (blocked)", () => {
 });
 
 describe("ImageBlockWidget identity + events", () => {
-  it("eq() is true for same (docFrom, slice)", () => {
-    const a = new ImageBlockWidget(
-      "a",
-      url("https://x.test/a.png"),
-      "![a](https://x.test/a.png)",
-      7
-    );
-    const b = new ImageBlockWidget(
-      "a",
-      url("https://x.test/a.png"),
-      "![a](https://x.test/a.png)",
-      7
-    );
+  it("eq() is true for the same slice", () => {
+    const a = new ImageBlockWidget("a", url("https://x.test/a.png"), "![a](https://x.test/a.png)");
+    const b = new ImageBlockWidget("a", url("https://x.test/a.png"), "![a](https://x.test/a.png)");
     expect(a.eq(b)).toBe(true);
   });
 
-  it("eq() is false when docFrom differs (no DOM reuse at wrong position)", () => {
-    const a = new ImageBlockWidget(
-      "a",
-      url("https://x.test/a.png"),
-      "![a](https://x.test/a.png)",
-      0
-    );
-    const b = new ImageBlockWidget(
-      "a",
-      url("https://x.test/a.png"),
-      "![a](https://x.test/a.png)",
-      100
-    );
-    expect(a.eq(b)).toBe(false);
-  });
-
   it("eq() is false when slice differs", () => {
-    const a = new ImageBlockWidget(
-      "a",
-      url("https://x.test/a.png"),
-      "![a](https://x.test/a.png)",
-      0
-    );
-    const b = new ImageBlockWidget(
-      "a",
-      url("https://x.test/b.png"),
-      "![a](https://x.test/b.png)",
-      0
-    );
+    const a = new ImageBlockWidget("a", url("https://x.test/a.png"), "![a](https://x.test/a.png)");
+    const b = new ImageBlockWidget("a", url("https://x.test/b.png"), "![a](https://x.test/b.png)");
     expect(a.eq(b)).toBe(false);
   });
 
@@ -158,12 +122,7 @@ describe("ImageBlockWidget identity + events", () => {
         return document.createElement("div");
       }
     }
-    const a = new ImageBlockWidget(
-      "a",
-      url("https://x.test/a.png"),
-      "![a](https://x.test/a.png)",
-      0
-    );
+    const a = new ImageBlockWidget("a", url("https://x.test/a.png"), "![a](https://x.test/a.png)");
     expect(a.eq(new Other())).toBe(false);
   });
 
@@ -172,76 +131,54 @@ describe("ImageBlockWidget identity + events", () => {
       new ImageBlockWidget(
         "a",
         url("https://x.test/a.png"),
-        "![a](https://x.test/a.png)",
-        0
+        "![a](https://x.test/a.png)"
       ).ignoreEvent()
     ).toBe(true);
   });
 
-  it("click on the widget dispatches a selection to docFrom (reveal trigger)", () => {
-    const { view, dispatched } = recordingView();
+  it("click on the widget dispatches a selection to the current block start (reveal trigger)", () => {
+    const { view, dispatched } = recordingView(42);
     const dom = new ImageBlockWidget(
       "a",
       url("https://x.test/a.png"),
-      "![a](https://x.test/a.png)",
-      42
+      "![a](https://x.test/a.png)"
     ).toDOM(view);
+    view.contentDOM.appendChild(dom);
     dom.click();
     expect(dispatched).toEqual([{ anchor: 42 }]);
   });
 
-  it("click on the blocked placeholder also dispatches caret to docFrom", () => {
-    const { view, dispatched } = recordingView();
-    const dom = new ImageBlockWidget("a", null, "![a](javascript:alert(1))", 5).toDOM(view);
+  it("click on the blocked placeholder also dispatches caret to the current block start", () => {
+    const { view, dispatched } = recordingView(5);
+    const dom = new ImageBlockWidget("a", null, "![a](javascript:alert(1))").toDOM(view);
+    view.contentDOM.appendChild(dom);
     dom.click();
     expect(dispatched).toEqual([{ anchor: 5 }]);
   });
 
-  // The DOM is NOT an input to the caret. `data-doc-from` is still written (DOM
-  // inspection, plus the re-stamp assertions in the updateDOM block below), but
-  // the listener reads the module-private WeakMap, so a value written onto the
-  // element cannot steer the dispatch.
-  //
-  // Both rows go red if the listener reverts to `Number(root.dataset.docFrom)`:
-  // "abc" would dispatch `NaN`, which CodeMirror ACCEPTS — `checkSelection`
-  // only rejects `range.to > doc.length` — installing a silently broken
-  // selection that no try/catch can observe; "999" is the case a format gate
-  // would also have missed, dispatching a caret into an unrelated block.
-  it.each([
-    ["malformed", "abc"],
-    ["well-formed but wrong", "999"],
-  ])("ignores a %s data-doc-from written onto the widget root", (_label, raw) => {
-    const { view, dispatched } = recordingView();
-    const dom = new ImageBlockWidget(
-      "a",
-      url("https://x.test/a.png"),
-      "![a](https://x.test/a.png)",
-      42
-    ).toDOM(view);
-    dom.dataset.docFrom = raw;
-    dom.click();
-    expect(dispatched).toEqual([{ anchor: 42 }]);
+  it("a foreign image root dispatches nothing and logs why", () => {
+    const { view, dispatched } = recordingView(7);
+    const dom = new ImageBlockWidget("a", null, "![a](javascript:alert(1))").toDOM(view);
+    document.body.appendChild(dom);
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      dom.click();
+      expect(dispatched).toEqual([]);
+      // Exact arguments: the log names the failure and carries no document text.
+      expect(errSpy).toHaveBeenCalledWith("[quoll] image widget root not in contentDOM");
+    } finally {
+      errSpy.mockRestore();
+      dom.remove();
+    }
   });
 
-  // `view.dispatch` can still throw with the anchor a `number` by construction:
-  // an offset that outlived a shrinking edit (RangeError from checkSelection),
-  // CodeMirror's "update in progress" re-entrancy error — this listener runs on
-  // a DOM event, which an in-progress update can deliver — or a throwing
-  // transaction filter. None can be staged from a display-only widget fixture,
-  // so the pin uses a throwing stub; without it the try/catch could be deleted
-  // and the suite would stay green.
-  //
-  // Only console.error is asserted, not a `dom.click()` "did not throw"
-  // wrapper: in this vitest+happy-dom suite an uncaught throw from a DOM
-  // listener propagates synchronously out of click() (real browsers instead
-  // report it via window.onerror), so that wrapper would be non-vacuous here
-  // too — asserting console.error is still the stronger pin, since it also
-  // catches a mutation that empties the catch body.
   it("logs and swallows a throwing dispatch instead of letting it escape the listener", () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const boom = new RangeError("Selection points outside of document");
       const stub = {
+        contentDOM: document.createElement("div"),
+        posAtDOM: () => 7,
         dispatch: () => {
           throw boom;
         },
@@ -249,42 +186,14 @@ describe("ImageBlockWidget identity + events", () => {
       const dom = new ImageBlockWidget(
         "a",
         url("https://x.test/a.png"),
-        "![a](https://x.test/a.png)",
-        7
+        "![a](https://x.test/a.png)"
       ).toDOM(stub);
+      stub.contentDOM.appendChild(dom);
       dom.click();
       expect(errSpy).toHaveBeenCalledWith("[quoll] image widget selection dispatch failed", {
         anchor: 7,
         err: boom,
       });
-    } finally {
-      errSpy.mockRestore();
-    }
-  });
-
-  // A fresh toDOM'd widget's click must hit the `blockStart` entry written in
-  // toDOM, not the listener's miss fallback — the absent `console.error` is the
-  // only observable difference. The anchor VALUE cannot distinguish them here
-  // (nor in any other fixture in this file, which all click in the same breath
-  // as toDOM): both trace back to the same `docFrom` constructor argument, so
-  // deleting `blockStart.set(root, this.docFrom)` in `toDOM` leaves every such
-  // anchor assertion green. (The updateDOM re-stamp fixtures below stay green
-  // for an unrelated reason: their OWN `blockStart.set` write re-fills the
-  // entry with the new docFrom.) Mirrors the table widget's pin of the same
-  // gap.
-  it("does not log a blockStart miss when a fresh toDOM'd widget is clicked", () => {
-    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      const { view, dispatched } = recordingView();
-      const dom = new ImageBlockWidget(
-        "a",
-        url("https://x.test/a.png"),
-        "![a](https://x.test/a.png)",
-        42
-      ).toDOM(view);
-      dom.click();
-      expect(dispatched).toEqual([{ anchor: 42 }]);
-      expect(errSpy).not.toHaveBeenCalled();
     } finally {
       errSpy.mockRestore();
     }
@@ -301,8 +210,7 @@ describe("ImageBlockWidget.toDOM — dimension cache", () => {
     const dom = new ImageBlockWidget(
       "c",
       url("https://x.test/cached.png"),
-      "![c](https://x.test/cached.png)",
-      0
+      "![c](https://x.test/cached.png)"
     ).toDOM(mockView);
     const img = dom.querySelector("img");
     expect(img?.getAttribute("width")).toBe("640");
@@ -313,8 +221,7 @@ describe("ImageBlockWidget.toDOM — dimension cache", () => {
     const dom = new ImageBlockWidget(
       "u",
       url("https://x.test/uncached.png"),
-      "![u](https://x.test/uncached.png)",
-      0
+      "![u](https://x.test/uncached.png)"
     ).toDOM(mockView);
     const img = dom.querySelector("img");
     expect(img?.hasAttribute("width")).toBe(false);
@@ -323,7 +230,7 @@ describe("ImageBlockWidget.toDOM — dimension cache", () => {
 
   it("populates the cache from naturalWidth/Height on the img load event", () => {
     const key = "https://x.test/load.png";
-    const dom = new ImageBlockWidget("l", url(key), `![l](${key})`, 0).toDOM(mockView);
+    const dom = new ImageBlockWidget("l", url(key), `![l](${key})`).toDOM(mockView);
     const img = dom.querySelector("img");
     expect(img).not.toBeNull();
     // happy-dom does not lay out images, so stub the natural dimensions.
@@ -335,7 +242,7 @@ describe("ImageBlockWidget.toDOM — dimension cache", () => {
 
   it("does not cache a zero-dimension (failed) load", () => {
     const key = "https://x.test/broken.png";
-    const dom = new ImageBlockWidget("b", url(key), `![b](${key})`, 0).toDOM(mockView);
+    const dom = new ImageBlockWidget("b", url(key), `![b](${key})`).toDOM(mockView);
     const img = dom.querySelector("img");
     Object.defineProperty(img, "naturalWidth", { value: 0, configurable: true });
     Object.defineProperty(img, "naturalHeight", { value: 0, configurable: true });
@@ -345,74 +252,20 @@ describe("ImageBlockWidget.toDOM — dimension cache", () => {
 });
 
 describe("ImageBlockWidget.updateDOM", () => {
-  it("reuses the <img> and re-stamps docFrom on a pure positional shift", () => {
-    const dispatched: number[] = [];
-    const view = {
-      dispatch: (t: { selection: { anchor: number } }) => dispatched.push(t.selection.anchor),
-    } as unknown as EditorView;
-    const slice = "![logo](https://x.test/a.png)";
-    const a = new ImageBlockWidget("logo", url("https://x.test/a.png"), slice, 0);
-    const dom = a.toDOM(view);
-    const img = dom.querySelector("img");
-    expect(img).not.toBeNull();
-
-    const b = new ImageBlockWidget("logo", url("https://x.test/a.png"), slice, 12);
-    const reused = b.updateDOM(dom, view, a);
-
-    expect(reused).toBe(true);
-    expect(dom.querySelector("img")).toBe(img); // same element, not recreated
-    expect(dom.dataset.docFrom).toBe("12");
-    dom.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(dispatched).toEqual([12]); // caret targets the NEW offset
-  });
-
-  it("returns false (forcing a rebuild) when the slice changes", () => {
-    const view = { dispatch: () => {} } as unknown as EditorView;
-    const a = new ImageBlockWidget(
-      "logo",
+  it("returns false when the slice changes", () => {
+    const first = new ImageBlockWidget(
+      "a",
       url("https://x.test/a.png"),
-      "![logo](https://x.test/a.png)",
-      0
+      "![a](https://x.test/a.png)"
     );
-    const dom = a.toDOM(view);
-    // Give the new widget BOTH a different slice AND a different docFrom so a
-    // vacuous implementation that only checks the class and re-stamps would still
-    // be caught: if updateDOM incorrectly accepted this call, docFrom would
-    // advance to 99.
-    const b = new ImageBlockWidget(
-      "other",
+    const next = new ImageBlockWidget(
+      "b",
       url("https://x.test/b.png"),
-      "![other](https://x.test/b.png)",
-      99
+      "![b](https://x.test/b.png)"
     );
-    expect(b.updateDOM(dom, view, a)).toBe(false);
-    // Prove updateDOM rejected BEFORE re-stamping — docFrom must stay at "0".
-    expect(dom.dataset.docFrom).toBe("0");
-  });
-
-  it("reuses a blocked placeholder and re-stamps docFrom on a pure positional shift", () => {
-    const dispatched: number[] = [];
-    const view = {
-      dispatch: (t: { selection: { anchor: number } }) => dispatched.push(t.selection.anchor),
-    } as unknown as EditorView;
-    // Blocked image (safeUrl = null): renders a <span class="quoll-image-blocked"> placeholder.
-    const slice = "![blocked](javascript:alert(1))";
-    const a = new ImageBlockWidget("blocked", null, slice, 0);
-    const dom = a.toDOM(view);
-    const placeholder = dom.querySelector(".quoll-image-blocked");
-    expect(placeholder).not.toBeNull();
-
-    const b = new ImageBlockWidget("blocked", null, slice, 20);
-    const reused = b.updateDOM(dom, view, a);
-
-    expect(reused).toBe(true);
-    // The same placeholder element must be preserved — not recreated.
-    expect(dom.querySelector(".quoll-image-blocked")).toBe(placeholder);
-    // docFrom was re-stamped to the new offset.
-    expect(dom.dataset.docFrom).toBe("20");
-    // A click now dispatches the caret to the NEW docFrom.
-    dom.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(dispatched).toEqual([20]);
+    const root = first.toDOM(mockView);
+    expect(next.updateDOM(root, mockView, first)).toBe(false);
+    expect(root.querySelector("img")?.alt).toBe("a");
   });
 });
 
@@ -424,7 +277,7 @@ describe("ImageBlockWidget.toDOM — load-error breadcrumb", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       const key = "https://x.test/err.png";
-      const dom = new ImageBlockWidget("e", url(key), `![e](${key})`, 0).toDOM(mockView);
+      const dom = new ImageBlockWidget("e", url(key), `![e](${key})`).toDOM(mockView);
       const img = dom.querySelector("img");
       expect(img).not.toBeNull();
       img?.dispatchEvent(new Event("error"));

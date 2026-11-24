@@ -22,7 +22,7 @@
 //      incrementally maintained across transactions), then diff it against the
 //      field computed from scratch on the same final EditorState (the "full"
 //      oracle). `WidgetType.eq()` pins the widget identity — TableBlockWidget.eq
-//      on (docFrom, slice, nodeFrom); FrontmatterBlockWidget.eq on slice — so an
+//      on (slice, nodeOffset); FrontmatterBlockWidget.eq on slice — so an
 //      incremental reuse that goes stale relative to a fresh recompute surfaces
 //      as bounded ≢ full.
 //
@@ -575,15 +575,15 @@ describe("CRLF-seeded byte-identity: line-ending-aware widget anchors", () => {
 // same assertEquivalent the matrices use. If this did NOT throw, every case
 // above would be vacuous.
 
-function tableWidgetSlot(src: string, docFrom: number, nodeFrom: number): Slot {
+function tableWidgetSlot(src: string, from: number, nodeOffset: number): Slot {
   const table = parseTable(src, 0, src.length);
   if (table === null) {
     throw new Error("fixture must parse");
   }
   return {
-    from: docFrom,
-    to: docFrom + src.length,
-    widget: new TableBlockWidget(table, src, docFrom, nodeFrom),
+    from,
+    to: from + src.length,
+    widget: new TableBlockWidget(table, src, nodeOffset),
   };
 }
 

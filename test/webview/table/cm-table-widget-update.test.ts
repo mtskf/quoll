@@ -1,10 +1,6 @@
 // @vitest-environment happy-dom
 // `updateDOM`: when the widget may reuse an already-rendered DOM (and when it
-// must refuse), plus the offset re-stamping both reuse paths owe the click
-// handlers. The one fresh-render row here is deliberate — it is the baseline of
-// the fresh / stampRow / patchRow triad, so all three stamp assertions can be
-// read side by side. Everything else about a fresh `toDOM` is
-// cm-table-widget-render.test.ts. Fixtures: helpers/widget-fixtures.ts.
+// must refuse), plus fresh and patched block-relative cell stamps.
 import { describe, expect, it } from "vitest";
 
 import { parseTable } from "../../../src/markdown/table/index.js";
@@ -13,12 +9,12 @@ import { makeWidget, mockView, stubView } from "./helpers/widget-fixtures.js";
 
 describe("updateDOM", () => {
   // Helper: build a widget, render to DOM, then call updateDOM with a new widget.
-  function buildAndUpdate(srcA: string, srcB: string, docFrom = 0) {
+  function buildAndUpdate(srcA: string, srcB: string) {
     const dispatched: unknown[] = [];
     const view = stubView(dispatched);
-    const widgetA = makeWidget(srcA, docFrom);
+    const widgetA = makeWidget(srcA);
     const domA = widgetA.toDOM(view);
-    const widgetB = makeWidget(srcB, docFrom);
+    const widgetB = makeWidget(srcB);
     const result = widgetB.updateDOM(domA, view, widgetA);
     return { dom: domA, result, dispatched, view };
   }
@@ -60,27 +56,6 @@ describe("updateDOM", () => {
     expect(th.style.textAlign).toBe("");
     expect(td.style.textAlign).toBe("");
   });
-
-  it("re-stamps offsets WITHOUT re-tokenizing cells when the slice is unchanged", () => {
-    const src = "| a | b |\n| - | - |\n| c | d |\n";
-    const a = makeWidget(src, 0);
-    const domA = a.toDOM(mockView);
-    const th0 = domA.querySelectorAll("thead th")[0] as HTMLElement;
-    const cellChild = th0.firstChild; // renderCellInline output node — identity we must preserve
-    expect(cellChild).not.toBeNull();
-
-    const table = parseTable(src, 0, src.length);
-    if (table === null) {
-      throw new Error("fixture must parse");
-    }
-    const shifted = new TableBlockWidget(table, src, 5, 5); // shifted docFrom + nodeFrom, same bytes
-    const reused = shifted.updateDOM(domA, mockView, a);
-
-    expect(reused).toBe(true);
-    expect(th0.firstChild).toBe(cellChild); // same node — no textContent="" + re-render
-    expect((domA as HTMLElement).dataset.docFrom).toBe("5");
-    expect(th0.dataset.cellFrom).toBe("7"); // nodeFrom 5 + 'a' at 2
-  });
 });
 
 describe("TableBlockWidget cell span stamps", () => {
@@ -92,23 +67,22 @@ describe("TableBlockWidget cell span stamps", () => {
     expect(td.dataset.cellTo).toBe(String(src.indexOf("alpha") + "alpha".length));
   });
 
-  it("re-stamps BOTH offsets on a pure positional shift (stampRow path)", () => {
+  it("re-stamps both offsets when the node offset changes", () => {
     const src = "| Name | Role |\n| - | - |\n| alpha | admin |";
-    const first = new TableBlockWidget(parseTable(src, 0, src.length)!, src, 0, 0);
+    const first = makeWidget(src);
     const dom = first.toDOM(mockView);
-    const shifted = new TableBlockWidget(parseTable(src, 0, src.length)!, src, 5, 5);
-    expect(shifted.updateDOM(dom, mockView, first)).toBe(true);
+    expect(makeWidget(src, 2).updateDOM(dom, mockView, first)).toBe(true);
     const td = dom.querySelectorAll("td")[0] as HTMLElement;
-    expect(td.dataset.cellFrom).toBe(String(5 + src.indexOf("alpha")));
-    expect(td.dataset.cellTo).toBe(String(5 + src.indexOf("alpha") + "alpha".length));
+    expect(td.dataset.cellFrom).toBe(String(2 + src.indexOf("alpha")));
+    expect(td.dataset.cellTo).toBe(String(2 + src.indexOf("alpha") + "alpha".length));
   });
 
   it("re-stamps BOTH offsets on a content edit (patchRow path)", () => {
     const src = "| Name | Role |\n| - | - |\n| alpha | admin |";
     const edited = "| Name | Role |\n| - | - |\n| gamma | admin |";
-    const first = new TableBlockWidget(parseTable(src, 0, src.length)!, src, 0, 0);
+    const first = new TableBlockWidget(parseTable(src, 0, src.length)!, src, 0);
     const dom = first.toDOM(mockView);
-    const next = new TableBlockWidget(parseTable(edited, 0, edited.length)!, edited, 0, 0);
+    const next = new TableBlockWidget(parseTable(edited, 0, edited.length)!, edited, 0);
     expect(next.updateDOM(dom, mockView, first)).toBe(true);
     const td = dom.querySelectorAll("td")[0] as HTMLElement;
     expect(td.dataset.cellFrom).toBe(String(edited.indexOf("gamma")));
