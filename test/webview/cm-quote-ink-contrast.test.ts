@@ -625,11 +625,12 @@ const PANEL_SELECTORS = [
  * `--quoll-quote-ink-mix` step that level declares — are read from `spec` HERE,
  * inside the measured function, so there is no pre-built level array for a later
  * edit to turn back into a literal. That matters most at depth-1: the base rule's
- * `--quoll-quote-ink-mix: 90%` is the ONLY thing stepping the completed-task ink there
- * (its own fallback is 100%, the bare token), so a level restated without it would
- * measure the completed ink sub-AA while a restated mix that drifted from the spec
- * would keep reporting a number the browser no longer paints. An added depth rule that deepens the fill without its ink step lands here
- * as a sub-AA number for the same reason.
+ * `--quoll-quote-ink-mix: 90%` is the ONLY thing stepping the completed-task ink
+ * there (its own fallback is 100%, the bare token), so a level restated without it
+ * would measure the completed ink sub-AA while a restated mix that drifted from the
+ * spec would keep reporting a number the browser no longer paints. An added depth
+ * rule that deepens the fill without its ink step lands here as a sub-AA number for
+ * the same reason.
  *
  * `spec` is a defaulted parameter so that read is OBSERVABLE: against the shipped
  * spec a real read and a restatement are indistinguishable, which is precisely what

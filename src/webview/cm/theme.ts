@@ -176,10 +176,10 @@ export const quollCmLinePaddingTheme = EditorView.theme(cmLinePaddingThemeSpec);
 // (light), 5.70 → 6.16 (dark), 5.47 → 6.06 (hc-light), 9.96 → 10.89 (hc-dark).
 //
 // SCOPE of those ratios: they are the depth-1 BASE panel, which is the `90%` the base
-// `.cm-line.quoll-blockquote` rule declares (and the formula's fallback restates). A nested `> >` / `> > >` line mixes the fill a further
-// 7% / 14% toward the editor foreground (the -depth-2/-3 rules below), and against
-// those darker fills the shared depth-1 ink measured 4.49 (depth-2) and 3.81
-// (depth-3) in light — both under AA.
+// `.cm-line.quoll-blockquote` rule declares (and the formula's fallback restates). A
+// nested `> >` / `> > >` line mixes the fill a further 7% / 14% toward the editor
+// foreground (the -depth-2/-3 rules below), and against those darker fills the shared
+// depth-1 ink measured 4.49 (depth-2) and 3.81 (depth-3) in light — both under AA.
 //
 // A11Y-13 closes that by making the mix PERCENTAGE an inherited custom property:
 // each depth rule steps `--quoll-quote-ink-mix` down by the same 7 points as its
@@ -224,7 +224,8 @@ export const quollCmLinePaddingTheme = EditorView.theme(cmLinePaddingThemeSpec);
 // line never carries either class and the base panel is untouched by that lever —
 // the cost of retuning the mixes is a weaker nesting cue (the deeper bands would
 // read closer to the base panel), not a moved base panel. What DOES move the base
-// panel is retuning the base rule's `90%` — and the formula's matching fallback with it.
+// panel is retuning the base rule's `90%` — and the formula's matching fallback with
+// it.
 //
 // CONCRETE FALLBACKS (not a nested `var()` chain) because color-mix cannot take
 // `inherit`, and a nested fallback is invisible to happy-dom's CSSOM. They keep the
