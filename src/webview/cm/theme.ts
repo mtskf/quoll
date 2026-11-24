@@ -182,8 +182,11 @@ export const quollCmLinePaddingTheme = EditorView.theme(cmLinePaddingThemeSpec);
 // (depth-3) in light — both under AA.
 //
 // A11Y-13 closes that by making the mix PERCENTAGE an inherited custom property:
-// each depth rule steps `--quoll-quote-ink-mix` down by the same 7 points as its
-// own fill (90 → 83 → 76), so the ink tracks the fill level for level. Custom
+// each depth rule steps `--quoll-quote-ink-mix` down 14 points (90 → 76 → 62),
+// TWICE its own fill's 7-point step, so the ink tracks the fill level for level.
+// (A11Y-17: the original 7-point ink step — 90 → 83 → 76 — cleared the four
+// palettes below but left VS Code's bundled 2026 Dark at 4.24:1 on depth-3; at
+// 14 points it resolves 5.22 / 4.97 / 4.62 there.) Custom
 // properties inherit, so the `t.quote` span INSIDE a nested line re-resolves this
 // one formula at its own depth — no per-depth colour constant, and no specificity
 // fight with the generated highlight class. (Carrying a custom property on a
@@ -194,11 +197,14 @@ export const quollCmLinePaddingTheme = EditorView.theme(cmLinePaddingThemeSpec);
 // bring its own ink step (pinned by cm-decoration-block-style.test.ts).
 //
 // MEASURED, not derived — `pnpm a11y:probe` over the four shipped palettes, on the
-// SPAN the reader actually sees. depth-2 / depth-3, before → after:
-//   light    4.49 → 5.06   3.81 → 4.85     (the AA failure this closes)
-//   dark     5.48 → 5.74   4.75 → 5.18
-//   hc-light 5.66 → 6.03   5.25 → 5.91
-//   hc-dark 10.24 → 10.79  8.95 → 9.83
+// SPAN the reader actually sees. depth-2 / depth-3, shared depth-1 ink → 7-point
+// step (A11Y-13) → 14-point step (A11Y-17):
+//   light    4.49 → 5.06 → 5.72    3.81 → 4.85 → 6.22   (the AA failure A11Y-13 closed)
+//   dark     5.48 → 5.74 → 6.01    4.75 → 5.18 → 5.62
+//   hc-light 5.66 → 6.03 → 6.43    5.25 → 5.91 → 6.67
+//   hc-dark 10.24 → 10.79 → 11.36  8.95 → 9.83 → 10.77
+// (2026 Dark has no harness palette, so its numbers above are the CI model's, not
+// the probe's.)
 // The depth-1 base is untouched by construction and measured unchanged (5.24 /
 // 6.16 / 6.06 / 10.89). A nested line INSIDE a callout measures identical to a
 // plain one at the same depth, which is the callout rules adding no fill and no
@@ -211,8 +217,9 @@ export const quollCmLinePaddingTheme = EditorView.theme(cmLinePaddingThemeSpec);
 // measured, NOT as a proof that a future palette rises. Re-run the probe when a
 // palette changes — CI does NOT make that instruction obsolete. What CI gained in
 // A11Y-14 is narrower than it sounds: test/webview/cm-quote-ink-contrast.test.ts
-// resolves this formula over the FOUR palettes transcribed in
-// scripts/preview/vscode-theme-palettes.mjs and asserts each result clears the 4.5
+// resolves this formula over the four palettes transcribed in
+// scripts/preview/vscode-theme-palettes.mjs (plus its EXTRA_THEMES — 2026 Dark /
+// 2026 Light, since A11Y-17) and asserts each result clears the 4.5
 // AA floor. It does not re-verify the table above — a retune that moves every
 // ratio while staying over 4.5 leaves these numbers stale and CI green — and it
 // cannot see a host at all, so a VS Code release or a third-party theme that
@@ -654,12 +661,12 @@ export const blockStyleThemeSpec = {
   ".cm-line.quoll-blockquote-depth-2": {
     backgroundColor:
       "color-mix(in srgb, var(--quoll-surface-fill, transparent), var(--vscode-editor-foreground) 7%)",
-    "--quoll-quote-ink-mix": "83%",
+    "--quoll-quote-ink-mix": "76%",
   },
   ".cm-line.quoll-blockquote-depth-3": {
     backgroundColor:
       "color-mix(in srgb, var(--quoll-surface-fill, transparent), var(--vscode-editor-foreground) 14%)",
-    "--quoll-quote-ink-mix": "76%",
+    "--quoll-quote-ink-mix": "62%",
   },
   // Callout admonitions (classification in decorations/callout.ts). An OUTERMOST
   // blockquote whose first line is `[!TYPE]` carries `quoll-callout

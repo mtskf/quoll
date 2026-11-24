@@ -106,10 +106,11 @@ describe("theme.ts — quollHighlightSpec navy+green token contract (palette ref
     // The ink override is what closes A11Y-13: the deeper fill alone left the
     // shared depth-1 ink at 4.49 (depth-2) / 3.81 (depth-3) in light, both under
     // AA 4.5:1. These percentages are measured, load-bearing numbers (the
-    // per-theme ratios live on QUOTE_INK in src/webview/cm/theme.ts), and they are
-    // the SAME 7-point step as the fill above.
-    expect(d2?.["--quoll-quote-ink-mix"]).toBe("83%");
-    expect(d3?.["--quoll-quote-ink-mix"]).toBe("76%");
+    // per-theme ratios live on QUOTE_INK in src/webview/cm/theme.ts). The ink steps
+    // 14 points per level, TWICE the fill's 7: the 7-point ink step left VS Code's
+    // 2026 Dark at 4.24:1 on depth-3 (A11Y-17).
+    expect(d2?.["--quoll-quote-ink-mix"]).toBe("76%");
+    expect(d3?.["--quoll-quote-ink-mix"]).toBe("62%");
     // Monotonic: a deeper level is a strictly smaller percentage of the muted
     // token, i.e. ink strictly closer to the editor foreground. Pinned as an
     // ordering (not just two literals) so a future retune cannot invert the ramp
