@@ -359,24 +359,34 @@ describe("collapse bars — keyboard path (real Chromium, production bundle)", (
   }
 
   // A control pushed off sideways (a wide table cell, say) is vertically on screen but not
-  // visible: Tab must not put focus there. The offset is forced with a transform, and a
-  // synthetic Tab keeps the check on the handler (native Tab would take the bar itself).
-  it("read-only: Tab does not take a bar that is off screen sideways", async () => {
-    fixture = await productionPasteFixture(CASES[0].doc, "\n", false);
-    const f = fixture;
-    const scroller = f.view.scrollDOM;
-    const bar = toggleOf(f, "fenced");
-    bar.style.transform = "translateX(3000px)";
-    const port = scroller.getBoundingClientRect();
-    expect(bar.getBoundingClientRect().left).toBeGreaterThanOrEqual(port.right);
-    expect(bar.getBoundingClientRect().top).toBeLessThan(port.bottom);
+  // visible: Tab must not put focus there, on either side. The offset is forced with a
+  // transform, and a synthetic Tab keeps the check on the handler (native Tab would take
+  // the bar itself).
+  for (const side of ["right", "left"] as const) {
+    it(`read-only: Tab does not take a bar that is off screen sideways (${side})`, async () => {
+      fixture = await productionPasteFixture(CASES[0].doc, "\n", false);
+      const f = fixture;
+      const scroller = f.view.scrollDOM;
+      const bar = toggleOf(f, "fenced");
+      bar.style.transform = `translateX(${side === "right" ? 3000 : -3000}px)`;
+      const port = scroller.getBoundingClientRect();
+      const box = bar.getBoundingClientRect();
+      expect(
+        side === "right" ? box.left - port.right : port.left - box.right
+      ).toBeGreaterThanOrEqual(0);
+      expect(box.top).toBeLessThan(port.bottom);
 
-    scroller.focus({ preventScroll: true });
-    const tab = new f.win.KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
-    scroller.dispatchEvent(tab);
-    expect(tab.defaultPrevented).toBe(false);
-    expect(f.win.document.activeElement).toBe(scroller);
-  });
+      scroller.focus({ preventScroll: true });
+      const tab = new f.win.KeyboardEvent("keydown", {
+        key: "Tab",
+        bubbles: true,
+        cancelable: true,
+      });
+      scroller.dispatchEvent(tab);
+      expect(tab.defaultPrevented).toBe(false);
+      expect(f.win.document.activeElement).toBe(scroller);
+    });
+  }
 
   it("the scroller is the editor's tab stop only while read-only", async () => {
     fixture = await productionPasteFixture(CASES[0].doc);
