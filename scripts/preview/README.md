@@ -108,12 +108,12 @@ plain browser they don't exist, so `serve.mjs` emits the ACTIVE themeKind's
 palette into `preview.template.html`'s `:root` from
 `scripts/preview/vscode-theme-palettes.mjs` — one standalone table per kind
 (`light`, `dark`, `hc-light`, `hc-dark`), covering the tokens the template
-stubs rather than every `--vscode-*` the webview reads. Provenance differs per
-kind: the two HC tables are verbatim from the installed VS Code build, while
-`light` / `dark` are older approximations of Default Light+/Dark+ with some
-known drift (documented in that module's `PROVENANCE` block — read it before
-citing a harness value as a measurement). `<body>` also carries the host-shaped
-`vscode-*` theme class plus `data-vscode-theme-kind`, mirroring what the real
+stubs rather than every `--vscode-*` the webview reads. All four tables are
+derived from the installed VS Code build, with registry aliases resolved to
+their base (the build version and method are in that module's `PROVENANCE`
+block — after a VS Code upgrade, re-derive the whole set). `<body>` also
+carries the host-shaped `vscode-*` theme class plus `data-vscode-theme-kind`,
+mirroring what the real
 webview host stamps.
 **`--vscode-font-family` / `--vscode-font-size` must be realistic**: the
 nested-list indent is measured at runtime from the proportional font's space
