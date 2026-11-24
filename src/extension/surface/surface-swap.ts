@@ -233,9 +233,10 @@ export async function finalizeForwardSwap(
   return completed;
 }
 
-/** Forward switch body for the panel's `switch-to-text` arm. Claim the URI
- *  once the barrier lets the switch start. Every stopped switch reports an
- *  abort to release the webview's lock. */
+/** Forward switch body for the panel's `switch-to-text` arm. Claim the URI at
+ *  switch receipt, before the barrier may defer the switch, so a deliberate
+ *  selection made while it waits supersedes it; a superseded switch never opens
+ *  text. Every stopped switch reports an abort to release the webview's lock. */
 export function runForwardSwitch(deps: {
   barrier: Pick<EditSettledBarrier, "run">;
   claim: () => SurfaceClaim;
@@ -245,9 +246,13 @@ export function runForwardSwitch(deps: {
   postAborted: () => void;
   onError?: (err: unknown) => void;
 }): void {
+  const claim = deps.claim();
   const op = async (): Promise<void> => {
     try {
-      const claim = deps.claim();
+      if (!claim.isCurrent()) {
+        deps.postAborted();
+        return;
+      }
       await deps.open();
       if (!claim.isCurrent()) {
         deps.postAborted();

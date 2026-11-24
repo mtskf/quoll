@@ -420,7 +420,7 @@ describe("runForwardSwitch", () => {
     const open = deferred<void>();
     test.deps.open.mockReturnValue(open.promise);
     runForwardSwitch(test.deps);
-    expect(test.deps.claim).not.toHaveBeenCalled();
+    expect(test.deps.claim).toHaveBeenCalledOnce();
     test.run();
     expect(test.deps.claim).toHaveBeenCalledBefore(test.deps.open);
     expect(test.deps.open).toHaveBeenCalledOnce();
@@ -437,10 +437,22 @@ describe("runForwardSwitch", () => {
     runForwardSwitch(test.deps);
     test.drop();
     expect(test.deps.postAborted).toHaveBeenCalledOnce();
-    expect(test.deps.claim).not.toHaveBeenCalled();
+    expect(test.deps.claim).toHaveBeenCalledOnce();
     expect(test.deps.open).not.toHaveBeenCalled();
     expect(test.deps.restoreCaret).not.toHaveBeenCalled();
     expect(test.deps.finalize).not.toHaveBeenCalled();
+  });
+
+  it("aborts before opening text when superseded while the barrier defers it", async () => {
+    const test = setup();
+    runForwardSwitch(test.deps);
+    noteSurface(KEY, "quoll");
+    test.run();
+    await vi.waitFor(() => expect(test.deps.postAborted).toHaveBeenCalledOnce());
+    expect(test.deps.open).not.toHaveBeenCalled();
+    expect(test.deps.restoreCaret).not.toHaveBeenCalled();
+    expect(test.deps.finalize).not.toHaveBeenCalled();
+    expect(__getRememberedSurfaceForTest(KEY)).toBe("quoll");
   });
 
   it("can run successfully after a synchronous open throw", async () => {
