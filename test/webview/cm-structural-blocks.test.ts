@@ -1058,6 +1058,45 @@ describe("structural block contract updates (toy spec)", () => {
     expect(updated).toEqual(ranges(toyState(tr.state.doc.toString(), oracle), oracle));
   });
 
+  it("toy bounded overlap: two walked blocks overlap within one update", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const doc = [
+      "Intro.",
+      "",
+      ...fence(["alpha"]),
+      "",
+      "Between.",
+      "",
+      ...fence(["beta"]),
+      "",
+      "Tail.",
+    ].join("\n");
+    const options: ToyOptions = {
+      build: (b, state) =>
+        b.block.text.includes("alphax")
+          ? { ...b, to: state.doc.lineAt(state.doc.toString().indexOf("betax")).to }
+          : b,
+    };
+    const t = toy(options);
+    const state = toyState(doc, t);
+    expect(ranges(state, t)).toHaveLength(2);
+    const tr = state.update({
+      changes: [
+        { from: doc.indexOf("alpha") + 5, insert: "x" },
+        { from: doc.indexOf("beta") + 4, insert: "x" },
+      ],
+    });
+    expect(requiresFullBoundedRebuild(tr)).toBe(false); // precondition: bounded path
+    const updated = ranges(tr.state, t);
+    expect(updated).toHaveLength(1);
+    expect(spy).toHaveBeenCalledExactlyOnceWith(
+      "[quoll] structural blocks overlap; dropping the later one",
+      { name: "toy", arm: "overlap" }
+    );
+    const oracle = toy(options);
+    expect(updated).toEqual(ranges(toyState(tr.state.doc.toString(), oracle), oracle));
+  });
+
   it("toy dedupe: two distant edits inside one long block call each hook once for it", () => {
     const t = toy();
     const body = Array.from({ length: 12 }, (_, i) => `code line ${i}`);
