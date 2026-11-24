@@ -898,7 +898,7 @@ export const quollTaskCompletedContentTheme = EditorView.theme(taskCompletedCont
 // the host's secondary UI ink itself (`foreground` is #616161 against #000000 editor text
 // in Default Light), which the theme author keeps legible on widget surfaces.
 const fencedControlForeground = "var(--vscode-foreground)";
-//
+
 // High Contrast (A11Y-11): VS Code registers `toolbar.hoverBackground` as null for both HC
 // kinds, so the background fallback is `transparent` rather than an invented tint (white
 // at 10% was invisible on hc-light's white canvas). HC hover is instead the workbench's
