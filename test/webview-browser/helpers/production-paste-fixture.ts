@@ -184,6 +184,11 @@ export async function productionPasteFixture(
         send(snapshot);
         await expect.poll(() => view.state.readOnly).toBe(true);
       },
+      async writable() {
+        snapshot = { ...snapshot, canWrite: true, docVersion: snapshot.docVersion + 1 };
+        send(snapshot);
+        await expect.poll(() => view.state.readOnly).toBe(false);
+      },
       async posted(expected: string, count = 1) {
         await expect.poll(() => edits().length).toBe(count);
         expect(edits().at(-1)?.content).toBe(expected);
