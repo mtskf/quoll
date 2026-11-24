@@ -272,8 +272,8 @@ describe("list-nested table detection (real Lezer language)", () => {
     expect(b.block.table.header.cells).toHaveLength(2);
     // The block range covers whole lines including the header line's own indent.
     expect(doc.slice(b.from, b.to)).toBe("  | A | B |\n  |---|---|\n  | 1 | 2 |");
-    // Full-doc caret offset (what table-widget uses: nodeFrom + cell.from, with nodeFrom =
-    // from + nodeOffset). Pins the header-indent-outside-node / body-indent-inside-node
+    // Full-doc caret offset (what table-widget resolves: block start + nodeOffset +
+    // cell.from). Pins the header-indent-outside-node / body-indent-inside-node
     // asymmetry end-to-end, so click-to-reveal lands the caret on the right byte.
     const nodeFrom = b.from + b.block.nodeOffset;
     expect(nodeFrom + b.block.table.header.cells[0].from).toBe(doc.indexOf("A"));

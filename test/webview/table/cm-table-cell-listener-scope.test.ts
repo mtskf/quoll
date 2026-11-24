@@ -86,8 +86,8 @@ describe("renderCellInto listener scope", () => {
 
   it("leaves the current fill's guards armed", () => {
     // The other direction, and the reason the scope is cut here rather than per
-    // patch in widget-base.ts: a positional-shift patch re-stamps offsets without
-    // re-filling, so anything that disarmed on every patch would disarm links the
+    // patch in widget-base.ts: only the code that clears a cell knows its links
+    // are dead, so anything that disarmed on every patch could disarm links the
     // user can still click.
     const outer = new AbortController();
     const cell = cellInDocument();

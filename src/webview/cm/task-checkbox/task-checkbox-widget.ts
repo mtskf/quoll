@@ -46,8 +46,7 @@ import { toggleTaskCheckbox } from "./task-checkbox-command.js";
 // instance. So the new instance needs a channel to hand the current offset
 // to the existing listeners, and the channel has to be updatable exactly
 // when the position moves, which `patchDOM` can do and a closure cannot.
-// A WeakMap so a discarded span takes its entry with it. Same pattern, same
-// reason, as image-widget.ts's `blockStart`.
+// A WeakMap so a discarded span takes its entry with it.
 //
 // A WeakMap rather than the `dataset.from` stamp it replaced, so the offset
 // stays a `number` end to end: nothing is stringified, parsed, or read back

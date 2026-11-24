@@ -30,7 +30,7 @@
 // `dispose` — each with its own comment at the site.
 // The dispatched selection — caret or range — is what fires tableBlockField's
 // line-level reveal-on-caret, surfacing the source for editing.
-//
+
 import type { Text } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 
@@ -127,7 +127,9 @@ function toAbsolute(base: AbsoluteOffset, offset: BlockOffset): AbsoluteOffset {
   return asAbsoluteOffset(base + offset);
 }
 
-/** Equal widget payloads can reuse a root at a different block. */
+/** `pending` when it was armed against this same document and block start, else
+ *  `null`. An equal widget can reuse this root at a different block, so an anchor
+ *  captured at the old position must not be paired with the current one. */
 function dragForBlock(
   view: EditorView,
   base: AbsoluteOffset,
@@ -539,11 +541,11 @@ export class TableBlockWidget extends QuollWidget {
               return;
             }
             const owned = dragForBlock(view, base, pending);
-            const point = owned?.point;
+            const point = owned?.point ?? null;
             dispatchSelection(
               view,
               releaseRange(view, up, owned) ?? {
-                anchor: point == null ? base : toAbsolute(base, point.cellFrom),
+                anchor: point === null ? base : toAbsolute(base, point.cellFrom),
               }
             );
           },

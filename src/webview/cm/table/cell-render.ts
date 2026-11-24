@@ -602,12 +602,10 @@ const cellFillScope = new WeakMap<HTMLElement, AbortController>();
  *  not a faithful oracle for listener retention, so this was not reproduced in a
  *  real browser.)
  *
- *  Why the scope is cut HERE and not per patch in widget-base.ts: a patch does
- *  not always rebuild what it bound to (`TableBlockWidget.patchDOM`'s
- *  positional-shift arm re-stamps offsets and keeps the rendered cells), so
- *  aborting an element-wide scope per patch would disarm the click/auxclick guard
- *  on links that are still live. Only the code that clears the nodes knows their
- *  listeners are dead. */
+ *  Why the scope is cut HERE and not per patch in widget-base.ts: a patch is not
+ *  required to rebuild what it bound to, so aborting an element-wide scope per
+ *  patch could disarm the click/auxclick guard on links that are still live.
+ *  Only the code that clears the nodes knows their listeners are dead. */
 function cellFillSignal(cell: HTMLElement, outer: AbortSignal): AbortSignal {
   cellFillScope.get(cell)?.abort();
   const controller = new AbortController();
