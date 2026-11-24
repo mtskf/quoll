@@ -5,6 +5,7 @@ import {
   claimSurface,
   decideOpenReconcile,
   noteSurface,
+  noteTextLeftOpen,
   reconcileOpen,
 } from "../../../src/extension/surface/surface-memory.js";
 
@@ -125,6 +126,14 @@ describe("claimSurface", () => {
   it("stays current when a fresh text open records text", () => {
     const claim = claimSurface(key);
     expect(reconcileOpen(key, "text", false)).toBeNull();
+    expect(claim.isCurrent()).toBe(true);
+    expect(__getRememberedSurfaceForTest(key)).toBe("text");
+  });
+
+  it('stays current when the last Quoll tab closes with text left open (records "text")', () => {
+    noteSurface(key, "quoll");
+    const claim = claimSurface(key);
+    noteTextLeftOpen(key);
     expect(claim.isCurrent()).toBe(true);
     expect(__getRememberedSurfaceForTest(key)).toBe("text");
   });

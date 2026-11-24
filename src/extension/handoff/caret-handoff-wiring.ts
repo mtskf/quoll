@@ -150,10 +150,9 @@ export function createCaretHandoffWiring(deps: CaretHandoffWiringDeps): CaretHan
   // limitation of a one-shot handoff with a flat {line, character} state.
   //
   // NEVER throws: a failed caret restore is logged and dropped. The panel's
-  // switch-to-text arm calls this right before finalizeForwardSwap inside a
-  // `.then(f, r)` fulfilled arm, where a throw would skip the finalize (surface
-  // memory left on the sibling-adopt "text", Quoll tab never closed) as an
-  // unhandled rejection — `r` does not catch a throw from `f`.
+  // switch-to-text path calls this right before finalizeForwardSwap; a throw
+  // would skip the finalize (no outcome recorded in surface memory, Quoll tab
+  // never closed) and turn the switch into an abort.
   const applyCaretToTextEditor = (editor: TextEditor, caret: Caret): void => {
     try {
       const doc = editor.document;

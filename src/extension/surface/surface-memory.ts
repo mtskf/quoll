@@ -8,11 +8,17 @@
 // a session; entries are never evicted (a session-lifetime cache), mirroring
 // the module-level store pattern of editor-switch-caret.ts.
 //
-// Reverse swaps use noteSurface after the target opens and before closing the
-// source. Forward swaps claim the URI before opening text and record the outcome
-// after finalize settles if the claim is still current. The tab watcher records
-// deliberate Quoll opens through reconcileOpen. Text opens beside a Quoll tab
-// stay in place and leave memory to the deliberate selection sites.
+// Writers. Deliberate selections supersede any outstanding claim:
+//   - Reverse swaps use noteSurface after the target opens and before closing
+//     the source.
+//   - Forward swaps claim the URI when the switch is received and record the
+//     outcome after finalize settles if the claim is still current.
+//   - The tab watcher, through reconcileOpen, records deliberate Quoll opens.
+// Text records never supersede a claim (they write the map directly):
+//   - reconcileOpen adopts a fresh text open with no Quoll sibling as "text".
+//   - When the last Quoll tab for a file closes and a text tab remains, the
+//     watcher records "text" (noteTextLeftOpen).
+// A text open beside a Quoll tab stays in place and records nothing.
 
 export type EditorSurface = "quoll" | "text";
 
@@ -93,6 +99,14 @@ export function reconcileOpen(
     surfaces.set(uriKey, record);
   }
   return reopen;
+}
+
+/** Record "text" because the last Quoll tab for `uriKey` closed while a text
+ *  tab stays open — the surface left on screen is the remembered one. Like a
+ *  text adopt, it does not supersede a claim: a forward swap's own close lands
+ *  here first and its claim then records the same outcome. */
+export function noteTextLeftOpen(uriKey: string): void {
+  surfaces.set(uriKey, "text");
 }
 
 /** Record a deliberate selection for `uriKey` (a `Uri.toString()`) and
