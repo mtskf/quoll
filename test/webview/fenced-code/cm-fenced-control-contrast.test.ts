@@ -189,11 +189,81 @@ function copyBackdrop(token: string, themeKind: string, hovered: boolean): Rgb {
   if (!hovered) {
     return base;
   }
+  // HC hosts emit no toolbar-hoverBackground, so the tint resolves to transparent there.
   const tint = resolveRgba(hoverRule.backgroundColor ?? "", themeKind);
-  expect(tint, "hover tint").not.toBeNull();
-  const { rgb, a } = tint as Rgba;
+  if (tint === null) {
+    return base;
+  }
+  const { rgb, a } = tint;
   return rgb.map((v, i) => a * v + (1 - a) * base[i]) as Rgb;
 }
+
+// A11Y-11 — under High Contrast the hover tint is absent (registry null), so the hover
+// affordance is the workbench's dashed toolbar-hoverOutline. Non-text UI → 3:1 against
+// every surface the control sits on.
+const HOVER_OUTLINE_RULES = [
+  {
+    name: "copy button",
+    key: ".quoll-copy-button:hover:not(:focus-visible)",
+    spec: copyButtonThemeSpec,
+    surfaces: ["--quoll-surface-header", "--quoll-surface-fill"],
+  },
+  {
+    name: "fenced collapse toggle",
+    key: ".quoll-fenced-collapse-toggle:hover:not(:focus-visible)",
+    spec: collapseToggleThemeSpec,
+    surfaces: ["--quoll-surface-fill"],
+  },
+  {
+    name: "blockquote collapse toggle",
+    key: ".quoll-blockquote-collapse-toggle:hover:not(:focus-visible)",
+    spec: collapseToggleThemeSpec,
+    surfaces: ["--quoll-surface-fill"],
+  },
+];
+
+describe("fenced-control hover under High Contrast (A11Y-11)", () => {
+  for (const { name, key, spec, surfaces } of HOVER_OUTLINE_RULES) {
+    const rule = (spec as Record<string, Record<string, string | undefined>>)[key];
+
+    it(`${name}: hover draws the dashed toolbar-hoverOutline`, () => {
+      expect(rule?.outline).toBe("1px dashed var(--vscode-toolbar-hoverOutline)");
+    });
+
+    for (const themeKind of ["hc-light", "hc-dark"]) {
+      for (const token of surfaces) {
+        it(`${themeKind}: ${name} hover outline clears 3:1 on ${token}`, () => {
+          const ink = resolveColor("var(--vscode-toolbar-hoverOutline)", themeKind) as Rgb;
+          expect(contrast(ink, surface(token, themeKind), 1)).toBeGreaterThanOrEqual(3);
+        });
+      }
+    }
+  }
+
+  // No invented tint under HC: the host emits no toolbar-hoverBackground there.
+  for (const themeKind of ["hc-light", "hc-dark"]) {
+    it(`${themeKind}: the hover background is transparent (no invented tint)`, () => {
+      expect(resolveRgba(hoverRule.backgroundColor ?? "", themeKind)).toBeNull();
+    });
+  }
+
+  // Outside HC the token is registry-null, so the outline declaration paints nothing and
+  // the toolbar-hoverBackground tint stays the only hover affordance.
+  for (const themeKind of ["light", "dark"]) {
+    it(`${themeKind}: no hover outline token; the hover tint is the host colour`, () => {
+      expect(PALETTES[themeKind]).not.toHaveProperty("toolbar-hoverOutline");
+      expect(resolveRgba(hoverRule.backgroundColor ?? "", themeKind)).not.toBeNull();
+    });
+  }
+
+  // Non-vacuity: the pre-fix literal fallback (white at 10%) on hc-light's white canvas
+  // is indistinguishable from the resting button — the A11Y-11 defect.
+  it("the pre-fix white 10% tint is invisible on the hc-light canvas", () => {
+    const canvas = surface("--quoll-surface-fill", "hc-light");
+    const tinted = canvas.map((v) => 0.1 * 255 + 0.9 * v) as Rgb;
+    expect(contrast(tinted, canvas, 1)).toBeLessThan(1.1);
+  });
+});
 
 describe("copy button success checkmark contrast (A11Y-16)", () => {
   for (const themeKind of Object.keys(THEME_BLOCK)) {
