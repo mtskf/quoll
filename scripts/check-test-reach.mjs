@@ -12,8 +12,12 @@
 // The contract: every `test/**/*.test.ts` on disk is collected by at least one of
 //   - unit:    the `test:unit` script, listed via `vitest list`
 //   - browser: the `test:browser` script, listed via `vitest list`
-//   - e2e:     test/extension/e2e/*.test.ts, which test/extension/e2e/index.ts
-//              discovers by reading its own directory (no config can drop one)
+//   - e2e:     test/extension/e2e/*.test.ts. test/extension/e2e/index.ts runs
+//              every .test.js tsc emits into its directory, so no vitest config
+//              can drop one. A file dropped from test/extension/tsconfig.json's
+//              include is not caught here: test/build/no-file-level-ts-nocheck.test.ts
+//              catches it (every test file must sit in some tsc program), and
+//              this check keeps that guard itself in reach.
 // Each runner's list comes from the package.json script CI actually calls, with
 // `run` swapped for `list`, so a filter added to the script narrows the list too.
 //
