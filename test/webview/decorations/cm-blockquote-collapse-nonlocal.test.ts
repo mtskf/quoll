@@ -94,8 +94,13 @@ function expectMatchesFresh(state: EditorState): Bar[] {
   return actual;
 }
 
+/** Apply one edit, then let the background parse publish (`settledState`). The edit's own
+ *  transaction parses under a 20ms budget and can stop short under CPU load; the live editor
+ *  fixes that with a later tree publication, which the field answers with a full rebuild.
+ *  When the edit's tree is already complete (the unloaded case) the settle is a no-op that
+ *  keeps the tree identity, so the bars still come from the doc-change path under test. */
 function edit(state: EditorState, from: number, to: number, insert: string): EditorState {
-  return state.update({ changes: { from, to, insert } }).state;
+  return settledState(state.update({ changes: { from, to, insert } }).state);
 }
 
 /** Replace the whole text of 1-based line `n` with `text`. */
