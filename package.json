@@ -329,6 +329,7 @@
     "check:todo-markers": "node scripts/check-stale-todo-markers.mjs",
     "check:todo-hygiene": "node scripts/check-todo-hygiene.mjs",
     "check:doc-sync": "node scripts/check-doc-sync.mjs",
+    "check:test-reach": "node scripts/check-test-reach.mjs",
     "gen:perf-fixtures": "node scripts/gen-perf-fixtures.mjs",
     "preview": "node scripts/preview/serve.mjs",
     "smoke:visual": "node scripts/preview/visual-smoke.mjs",

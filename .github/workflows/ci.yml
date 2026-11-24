@@ -59,6 +59,13 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+      # A config line (e.g. an `exclude` entry) can drop a whole test directory
+      # while every run stays green, and no test can see its own absence. This
+      # asks vitest which files each test:* script collects and fails if a test
+      # file on disk is reached by no runner. Rationale: the script's header.
+      - name: Test reach (every test file is run by some runner)
+        run: pnpm check:test-reach
+
       - name: Unit tests
         run: pnpm test:unit
 
