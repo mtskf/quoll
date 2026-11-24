@@ -489,4 +489,27 @@ describe("table clicks in EditorView", () => {
       view.destroy();
     }
   });
+
+  // An indented (list-nested) table starts its widget at the line start but its
+  // cells two columns in; the field's per-block `nodeOffset` is what closes that
+  // gap, so a click must land on the cell content, not two bytes early.
+  it.each([
+    ["header", "th", "A"],
+    ["body", "td", "1"],
+  ] as const)("a %s cell click in a list-nested table lands on the cell content", (_which, tag, text) => {
+    const doc = "- item intro:\n\n  | A | B |\n  |---|---|\n  | 1 | 2 |\n\nTail.";
+    const state = EditorState.create({
+      doc,
+      extensions: [quollMarkdownLanguage(), tableBlockField],
+    });
+    const view = settledMount({ state, parent: document.body });
+    try {
+      const root = view.contentDOM.querySelector<HTMLElement>(".quoll-table-block");
+      expect(root).not.toBeNull();
+      root!.querySelector<HTMLElement>(tag)!.click();
+      expect(view.state.selection.main.anchor).toBe(doc.indexOf(text));
+    } finally {
+      view.destroy();
+    }
+  });
 });
