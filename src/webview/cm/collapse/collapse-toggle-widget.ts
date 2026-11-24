@@ -105,17 +105,25 @@ export function renderCollapseBar(args: {
       // focus to the replacement button (CodeMirror redraws synchronously in dispatch). A
       // keyboard collapse scrolls its "Show more" into view in that dispatch, so it is
       // drawn; an expand does not scroll, and a long block's "Show less" can sit beyond the
-      // viewport, undrawn — focus then goes to the scroller, which keeps keyboard scrolling
-      // and the next Tab inside the editor. preventScroll: focus must not move the reader.
-      // A mouse click never focuses the button (mousedown above), so this is keyboard-only.
+      // viewport, undrawn — or drawn in CodeMirror's off-screen buffer. Focus goes to the
+      // replacement only when it is inside the scrollport (a focused control the reader
+      // cannot see would take the next Enter); otherwise to the scroller, which keeps
+      // keyboard scrolling and the next Tab inside the editor. preventScroll: focus must not
+      // move the reader. A mouse click never focuses the button (mousedown above), so this
+      // is keyboard-only.
       const hadFocus = button.ownerDocument.activeElement === button;
       onToggle(hadFocus);
       if (hadFocus) {
-        const next =
-          view.contentDOM.querySelector<HTMLElement>(
-            `.${classes.toggle}[data-collapse-key="${blockKey}"]`
-          ) ?? view.scrollDOM;
-        next.focus({ preventScroll: true });
+        const scroller = view.scrollDOM;
+        const next = view.contentDOM.querySelector<HTMLElement>(
+          `.${classes.toggle}[data-collapse-key="${blockKey}"]`
+        );
+        const box = next?.getBoundingClientRect();
+        const port = scroller.getBoundingClientRect();
+        const top = port.top + scroller.clientTop;
+        const inPort =
+          box !== undefined && box.top >= top && box.bottom <= top + scroller.clientHeight;
+        (inPort ? (next as HTMLElement) : scroller).focus({ preventScroll: true });
       }
     },
     { signal }

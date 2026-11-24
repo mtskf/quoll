@@ -104,8 +104,14 @@ describe("collapse bars — keyboard path (real Chromium, production bundle)", (
 
       await userEvent.keyboard("{Enter}");
       await expect.poll(() => expanded(f, c.bar)).toBe("true");
-      // The "Show less" bar is a NEW widget; focus moved onto it, so the next key
-      // reaches it without re-tabbing from the top of the page.
+      // The "Show less" bar is a NEW widget, drawn (CodeMirror renders past the scrollport)
+      // but below the 360px frame: focusing it would put the next Enter on a control the
+      // reader cannot see, so focus goes to the scroller and the next Tab reaches the bar.
+      expect(toggleOf(f, c.bar).getBoundingClientRect().top).toBeGreaterThan(
+        f.view.scrollDOM.getBoundingClientRect().bottom
+      );
+      expect(f.win.document.activeElement).toBe(f.view.scrollDOM);
+      await userEvent.keyboard("{Tab}");
       expect(f.win.document.activeElement).toBe(toggleOf(f, c.bar));
       await userEvent.keyboard("{Enter}");
       await expect.poll(() => expanded(f, c.bar)).toBe("false");
@@ -202,6 +208,44 @@ describe("collapse bars — keyboard path (real Chromium, production bundle)", (
       const port = scroller.getBoundingClientRect();
       expect(box.top).toBeGreaterThanOrEqual(port.top);
       expect(box.bottom).toBeLessThanOrEqual(port.bottom);
+      expect(f.changes()).toBe(0);
+    });
+  }
+
+  // The mouse never focuses the bar, so a collapse must neither scroll to the replacement
+  // "Show more" nor take focus. A tall tail keeps the collapsed document taller than the
+  // scrollport, so after the browser clamps the scroll the bar sits above the viewport and
+  // a scroll-into-view (the keyboard path's) would be observable.
+  const tail = Array.from({ length: 60 }, (_, i) => `tail${i + 1}`).join("\n\n");
+  for (const c of LONG_CASES) {
+    it(`read-only long ${c.name}: a mouse collapse neither scrolls to the bar nor takes focus`, async () => {
+      fixture = await productionPasteFixture(c.doc.replace("para\n", `${tail}\n`), "\n", false);
+      const f = fixture;
+      const scroller = f.view.scrollDOM;
+      const bar = (state: "true" | "false") =>
+        f.win.document.querySelector<HTMLButtonElement>(
+          `.quoll-${c.bar}-collapse-toggle[aria-expanded="${state}"]`
+        );
+      await userEvent.click(bar("false") as HTMLElement);
+      for (let i = 0; i < 80 && bar("true") === null; i++) {
+        scroller.scrollTop += 300;
+        await frames(f, 3);
+      }
+      const less = bar("true") as HTMLElement;
+      expect(less).not.toBeNull();
+      less.scrollIntoView({ block: "center" });
+      await frames(f, 5);
+      await userEvent.click(bar("true") as HTMLElement);
+      await expect.poll(() => bar("true")).toBeNull();
+      await frames(f, 5);
+      // Not scrolled to: the replacement is undrawn, or at least above the scrollport.
+      const more = bar("false");
+      if (more !== null) {
+        expect(more.getBoundingClientRect().bottom).toBeLessThan(
+          scroller.getBoundingClientRect().top
+        );
+      }
+      expect(f.win.document.activeElement).not.toBe(bar("false"));
       expect(f.changes()).toBe(0);
     });
   }
