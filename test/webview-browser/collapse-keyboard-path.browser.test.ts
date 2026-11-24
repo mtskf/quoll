@@ -23,6 +23,22 @@ const CASES = [
   { name: "fenced code", doc: `\`\`\`\n${body(14, "")}\n\`\`\`\n\npara\n`, bar: "fenced" },
   { name: "blockquote", doc: `${body(14, "> ")}\n\npara\n`, bar: "blockquote" },
 ] as const;
+const rows = Array.from({ length: 300 }, (_, i) => `row${i + 1}x`);
+const LONG_CASES = [
+  { name: "fenced code", doc: `\`\`\`\n${rows.join("\n")}\n\`\`\`\n\npara\n`, bar: "fenced" },
+  {
+    name: "blockquote",
+    doc: `${rows.map((r) => `> ${r}`).join("\n")}\n\npara\n`,
+    bar: "blockquote",
+  },
+] as const;
+
+const frames = (f: Fixture, n: number) =>
+  new Promise<void>((resolve) => {
+    let left = n;
+    const tick = () => (--left <= 0 ? resolve() : f.win.requestAnimationFrame(tick));
+    f.win.requestAnimationFrame(tick);
+  });
 
 const toggleOf = (f: Fixture, bar: string) => {
   const t = f.win.document.querySelectorAll<HTMLButtonElement>(`.quoll-${bar}-collapse-toggle`);
@@ -77,6 +93,60 @@ describe("collapse bars — keyboard path (real Chromium, production bundle)", (
       await userEvent.keyboard("{Enter}");
       await expect.poll(() => expanded(f, c.bar)).toBe("false");
       expect(f.win.document.activeElement).toBe(toggleOf(f, c.bar));
+      expect(f.changes()).toBe(0);
+    });
+  }
+
+  // A block far taller than the 360px frame: its "Show less" sits beyond CodeMirror's drawn
+  // viewport after an expand, and its "Show more" far above it after a collapse — neither
+  // replacement bar exists in the DOM unless the toggle makes it so.
+  for (const c of LONG_CASES) {
+    it(`read-only long ${c.name}: focus never drops to <body>, so the keys keep working`, async () => {
+      fixture = await productionPasteFixture(c.doc, "\n", false);
+      const f = fixture;
+      const scroller = f.view.scrollDOM;
+      const active = () => f.win.document.activeElement;
+      const bar = (state: "true" | "false") =>
+        f.win.document.querySelector<HTMLButtonElement>(
+          `.quoll-${c.bar}-collapse-toggle[aria-expanded="${state}"]`
+        );
+      const line = [...f.view.contentDOM.querySelectorAll<HTMLElement>(".cm-line")].find((l) =>
+        l.textContent?.includes("row2x")
+      );
+      await userEvent.click(line as HTMLElement);
+      await userEvent.keyboard("{Tab}");
+      expect(active()).toBe(bar("false"));
+
+      // Expand: the reader keeps their place, and focus stays inside the editor.
+      const top = scroller.scrollTop;
+      await userEvent.keyboard("{Enter}");
+      expect(bar("false")).toBeNull();
+      expect(bar("true")).toBeNull(); // not drawn: the fallback is what is under test
+      expect(active()).toBe(scroller);
+      await frames(f, 5);
+      expect(scroller.scrollTop).toBe(top);
+      await userEvent.keyboard("{PageDown}");
+      await expect.poll(() => scroller.scrollTop).toBeGreaterThan(top);
+
+      // Read on to the end of the block, then Tab onto "Show less".
+      for (let i = 0; i < 80 && bar("true") === null; i++) {
+        await userEvent.keyboard("{PageDown}");
+        await frames(f, 3);
+      }
+      await userEvent.keyboard("{Tab}");
+      expect(active()).toBe(bar("true"));
+
+      // Collapse: the replacement "Show more" is drawn by the toggle's own dispatch and
+      // takes focus at once; once measured, it is on screen.
+      await userEvent.keyboard("{Enter}");
+      const more = bar("false");
+      expect(more).not.toBeNull();
+      expect(active()).toBe(more);
+      await frames(f, 5);
+      const box = (more as HTMLElement).getBoundingClientRect();
+      const port = scroller.getBoundingClientRect();
+      expect(box.top).toBeGreaterThanOrEqual(port.top);
+      expect(box.bottom).toBeLessThanOrEqual(port.bottom);
       expect(f.changes()).toBe(0);
     });
   }

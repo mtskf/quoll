@@ -164,6 +164,11 @@ export const fencedCollapseTarget: CollapseTarget<null> = {
 
 /** Toggle a block's expanded state; collapsing also parks every selection head inside the
  *  soon-concealed region (the closing fence included) in the SAME transaction. */
-export function toggleFencedCollapse(view: EditorView, key: number, expand: boolean): void {
-  toggleCollapse(view, fencedCollapseTarget, key, expand);
+export function toggleFencedCollapse(
+  view: EditorView,
+  key: number,
+  expand: boolean,
+  keepFocus = false
+): void {
+  toggleCollapse(view, fencedCollapseTarget, key, expand, keepFocus);
 }

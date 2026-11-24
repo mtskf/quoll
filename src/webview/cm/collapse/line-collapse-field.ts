@@ -355,12 +355,18 @@ export function findCollapseBlockAt<X>(
  *  plus, in the SAME transaction, parking every selection head inside [concealFrom,
  *  collapseTo] at `safeCaret`, so the build's auto-expand does not immediately re-open it.
  *  A stale key resolves to null → the effect alone (it only edits the Set), so there is no
- *  error path. */
+ *  error path.
+ *
+ *  `keepFocus` (a focused bar toggled from the keyboard): a collapse also scrolls
+ *  `concealFrom` into view in the same transaction, so the replacement "Show more" bar —
+ *  possibly far above a long block's "Show less" — is drawn by this dispatch and the caller
+ *  can hand it focus. An expand never scrolls: the reader keeps their place. */
 export function toggleCollapse<X>(
   view: EditorView,
   target: CollapseTarget<X>,
   key: number,
-  expand: boolean
+  expand: boolean,
+  keepFocus = false
 ): void {
   const effects = target.effect.of({ key, expanded: expand });
   if (expand) {
@@ -368,18 +374,22 @@ export function toggleCollapse<X>(
     return;
   }
   const block = findCollapseBlockAt(target, view.state, key);
-  const parked =
-    block === null
-      ? null
-      : parkSelectionOutsideConceal(
-          view.state.selection,
-          block.concealFrom,
-          // Park heads on the trailing edge too (collapseTo, not concealTo): otherwise
-          // collapsing with the caret there would auto-expand right back.
-          block.collapseTo,
-          block.safeCaret
-        );
-  view.dispatch(parked !== null ? { effects, selection: parked } : { effects });
+  if (block === null) {
+    view.dispatch({ effects });
+    return;
+  }
+  const parked = parkSelectionOutsideConceal(
+    view.state.selection,
+    block.concealFrom,
+    // Park heads on the trailing edge too (collapseTo, not concealTo): otherwise
+    // collapsing with the caret there would auto-expand right back.
+    block.collapseTo,
+    block.safeCaret
+  );
+  view.dispatch({
+    effects: keepFocus ? [effects, EditorView.scrollIntoView(block.concealFrom)] : effects,
+    ...(parked !== null ? { selection: parked } : {}),
+  });
 }
 
 /** The keyboard path to `toggleCollapse`: a Command that collapses (`expand === false`) or

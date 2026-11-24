@@ -66,7 +66,7 @@ export class FencedCollapseToggleWidget extends QuollWidget {
       expanded: this.expanded,
       hiddenCount: this.hiddenCount,
       signal,
-      onToggle: () => toggleFencedCollapse(view, this.key, !this.expanded),
+      onToggle: (keepFocus) => toggleFencedCollapse(view, this.key, !this.expanded, keepFocus),
     });
   }
 

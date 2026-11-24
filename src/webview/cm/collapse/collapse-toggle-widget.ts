@@ -55,7 +55,8 @@ export function renderCollapseBar(args: {
   expanded: boolean;
   hiddenCount: number;
   signal: AbortSignal;
-  onToggle: () => void;
+  /** `keepFocus`: the button held focus (keyboard activation) — see toggleCollapse. */
+  onToggle: (keepFocus: boolean) => void;
 }): HTMLElement {
   const { view, classes, blockKey, expanded, hiddenCount, signal, onToggle } = args;
   const root = document.createElement("div");
@@ -100,17 +101,21 @@ export function renderCollapseBar(args: {
       event.stopPropagation();
       // Toggling swaps this widget for the other state's (a different decoration at a
       // different offset), so a focused button — reached with Tab in read-only mode — would
-      // drop focus to <body> and the next Tab would restart at the top of the page. Hand
-      // focus to the replacement button (CodeMirror redraws synchronously in dispatch).
-      // preventScroll: an expanded block's "Show less" can sit far below; focus must not
-      // yank the reader there. Not rendered (beyond the viewport) → focus is not moved.
+      // drop focus to <body>, where neither Tab nor PageDown reaches the editor again. Hand
+      // focus to the replacement button (CodeMirror redraws synchronously in dispatch). A
+      // keyboard collapse scrolls its "Show more" into view in that dispatch, so it is
+      // drawn; an expand does not scroll, and a long block's "Show less" can sit beyond the
+      // viewport, undrawn — focus then goes to the scroller, which keeps keyboard scrolling
+      // and the next Tab inside the editor. preventScroll: focus must not move the reader.
       // A mouse click never focuses the button (mousedown above), so this is keyboard-only.
       const hadFocus = button.ownerDocument.activeElement === button;
-      onToggle();
+      onToggle(hadFocus);
       if (hadFocus) {
-        view.contentDOM
-          .querySelector<HTMLElement>(`.${classes.toggle}[data-collapse-key="${blockKey}"]`)
-          ?.focus({ preventScroll: true });
+        const next =
+          view.contentDOM.querySelector<HTMLElement>(
+            `.${classes.toggle}[data-collapse-key="${blockKey}"]`
+          ) ?? view.scrollDOM;
+        next.focus({ preventScroll: true });
       }
     },
     { signal }

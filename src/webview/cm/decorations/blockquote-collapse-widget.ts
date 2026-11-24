@@ -50,7 +50,7 @@ export class BlockquoteCollapseToggleWidget extends QuollWidget {
       expanded: this.expanded,
       hiddenCount: this.hiddenCount,
       signal,
-      onToggle: () => toggleBlockquoteCollapse(view, this.key, !this.expanded),
+      onToggle: (keepFocus) => toggleBlockquoteCollapse(view, this.key, !this.expanded, keepFocus),
     });
     if (this.calloutType !== null) {
       root.classList.add(CALLOUT_CLASS, calloutClassForType(this.calloutType));

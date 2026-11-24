@@ -61,7 +61,7 @@ A toggle-able overlay lists the document's headings — click one to jump straig
 - **Familiar formatting shortcuts** — `⌘B` bold, `⌘I` italic, `⌘E` code, `⌘K` link, `⌘⇧X` strikethrough (Ctrl on Windows/Linux), plus a whole-document formatter.
 - **Rich blocks, rendered in place** — headings, lists, blockquotes, callouts (`[!TIP]`, `[!NOTE]`, …), images, and fenced code.
 - **Frontmatter panel** — YAML frontmatter renders as a metadata block.
-- **Fenced-code tools** — one-click copy; long code blocks and blockquotes collapse behind a "Show more" bar. From the keyboard, `⌘⌥]` / `⌘⌥[` (`Ctrl+Shift+]` / `Ctrl+Shift+[`) expands or collapses the block at the caret; in read-only mode, Tab to the bar and press Enter.
+- **Fenced-code tools** — one-click copy; long code blocks and blockquotes collapse behind a "Show more" bar. From the keyboard, `⌘⌥]` / `⌘⌥[` (`Ctrl+Shift+]` / `Ctrl+Shift+[`) expands or collapses the block at the caret; in read-only mode, Tab to the bar and press Enter. In a long block, read down to its end and Tab to "Show less" to collapse it again.
 - **Image paste & drop** — pasted or dropped images save under `./assets/` and insert a relative link.
 - **Plain paste** — `⌘⇧V` (`Ctrl+Shift+V`) pastes the clipboard as plain text, with no link wrapping, list re-indent or rich conversion. If another app (such as a clipboard manager) takes that shortcut, rebind `quoll.pastePlain` in Keyboard Shortcuts.
 - **Switch between rich and text** — flip between Quoll and the built-in text editor with `⌘⌥E` (`Ctrl+Alt+E`), carrying your caret across.
