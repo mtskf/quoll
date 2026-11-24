@@ -88,12 +88,12 @@ describe("theme.ts — quollHighlightSpec navy+green token contract (palette ref
     expect(String(mono?.boxShadow)).toContain("--quoll-surface-fill");
   });
 
-  it("nested-quote depth-2/-3 rules deepen the fill AND darken the ink by the same step", () => {
+  it("nested-quote depth-2/-3 rules deepen the fill AND darken the ink (ink at twice the fill step)", () => {
     const spec = blockStyleThemeSpec as Record<string, Record<string, string>>;
     const d2 = spec[".cm-line.quoll-blockquote-depth-2"];
     const d3 = spec[".cm-line.quoll-blockquote-depth-3"];
-    // A11Y-13: each level moves BOTH the fill and the quote ink 7 points further
-    // toward the editor foreground. Nothing else — border/padding/radius, and
+    // A11Y-13: each level moves the fill 7 points and the quote ink 14 points
+    // (A11Y-17) further toward the editor foreground. Nothing else — border/padding/radius, and
     // `color` itself, all stay on the base .quoll-blockquote rule, which both
     // classes co-apply. The key SET is pinned so a third property cannot sneak in;
     // the key ORDER deliberately is not, since it carries no CSS meaning here and

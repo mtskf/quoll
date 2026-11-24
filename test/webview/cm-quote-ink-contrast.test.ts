@@ -734,12 +734,15 @@ describe("quote ink resolves above the AA floor on every shipped palette (A11Y-1
     ).toHaveLength(1);
   });
 
-  it("actually generated a case per themeKind and panel level", () => {
-    // The AA cases below are GENERATED from these two lists, so an empty one would
-    // make this whole file vacuously green — the exact shape of failure it exists to
-    // remove. The kinds are derived from the palette module rather than restated
-    // here (test/build/theme-palettes.test.ts pins that list equal to the wire
-    // vocabulary), so a fifth palette widens the sweep instead of going unmeasured.
+  it("actually generated a case per swept palette and panel level", () => {
+    // The AA cases below are GENERATED from SWEEP (PALETTES + EXTRA_THEMES) and
+    // PANEL_SELECTORS, so an empty list would make this whole file vacuously green —
+    // the exact shape of failure it exists to remove. The kinds are derived from the
+    // palette module rather than restated here (test/build/theme-palettes.test.ts
+    // pins that list equal to the wire vocabulary), so a new palette or a new
+    // EXTRA_THEMES entry widens the sweep instead of going unmeasured. The
+    // "2026-dark" pin stops EXTRA_THEMES being emptied, which would drop VS Code's
+    // 2026 Dark (A11Y-17) from the sweep.
     expect(THEME_KINDS.length).toBeGreaterThanOrEqual(4);
     expect(SWEEP.map((c) => c.name)).toContain("2026-dark");
     expect(PANEL_SELECTORS.length).toBe(3);
