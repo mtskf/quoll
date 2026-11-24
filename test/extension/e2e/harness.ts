@@ -224,7 +224,9 @@ export async function pollUntil(
 }
 
 /** Out-of-process write of `content` to `file`, repeated every `retryMs` until
- *  `observed` settles; returns `observed`.
+ *  `observed` settles; returns `observed`. The helper owns the deadline: after
+ *  `timeoutMs` without `observed` settling it stops writing and rejects, naming
+ *  the file and the last swallowed write error (if any).
  *
  *  Why repeat: every watcher that can see the write (VS Code's own watch on a
  *  visible out-of-workspace editor, Quoll's `createFileSystemWatcher`) is
@@ -239,29 +241,41 @@ export async function pollUntil(
  *  Rewriting the same bytes is safe for callers: a write that was only slow and
  *  a later duplicate land on the same content, so the effect under test does
  *  not change. A broken watch path still fails, because no attempt is ever seen.
- *  `observed` must carry its own timeout (e.g. `waitForEvent`'s), which also
- *  ends the loop. */
+ */
 export async function writeUntilObserved<T>(
   file: string,
   content: string,
   observed: Promise<T>,
+  timeoutMs = 8000,
   retryMs = 1000
 ): Promise<T> {
-  let settled = false;
-  const result = observed.finally(() => {
-    settled = true;
-  });
+  // A throwing first write must not leave a later rejection of `observed` unhandled.
+  observed.catch(() => undefined);
   await fs.writeFile(file, content);
+  let done = false;
+  let lastError: unknown;
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const cause = lastError === undefined ? "" : `; last write error: ${String(lastError)}`;
+      reject(new Error(`write to ${file} not observed within ${timeoutMs}ms${cause}`));
+    }, timeoutMs);
+  });
   void (async () => {
     for (;;) {
       await tick(retryMs);
-      if (settled) {
+      if (done) {
         return;
       }
-      await fs.writeFile(file, content).catch(() => undefined);
+      await fs.writeFile(file, content).catch((e: unknown) => {
+        lastError = e;
+      });
     }
   })();
-  return result;
+  return Promise.race([observed, deadline]).finally(() => {
+    done = true;
+    clearTimeout(timer);
+  });
 }
 
 /** Open a temp `.md` in Quoll and return the NEWLY-registered panel controls.
