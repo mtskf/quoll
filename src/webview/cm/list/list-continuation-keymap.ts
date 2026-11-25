@@ -54,25 +54,27 @@ import {
   type SyntaxNode,
 } from "./list-tree.js";
 
-/** Re-resolve `item` from a tree parsed to `upto` (default EOF): `listItemAt`'s
- *  caret-line-bounded tree does not contain the siblings below the caret, which
- *  `renumberRun` needs to walk. Fail-closed: a null `ensureSyntaxTree` means the
+/** Resolve the ListItem at `markFrom` from a tree parsed through `upto`. Callers pass
+ *  the bound they need: the next line's end to judge a bare marker's emptiness, or
+ *  `state.doc.length` to re-resolve for the shift and `renumberRun`, since
+ *  `listItemAt`'s caret-line-bounded tree does not contain the siblings below the
+ *  caret. Fail-closed: a null `ensureSyntaxTree` means the
  *  parse did not reach `upto` within budget, so the list tail may be unparsed —
  *  returning null here makes the caller skip renumber entirely (the insert still
  *  lands unless it would move the content column; the tail keeps its original
  *  numbers) rather than renumber only the visible prefix (a split-brain run,
  *  worse than none). */
-function resolveAtEof(
+function resolveListItemThrough(
   state: EditorState,
   markFrom: number,
-  upto = state.doc.length
+  upto: number
 ): SyntaxNode | null {
   const tree = ensureSyntaxTree(state, upto, 50);
   if (tree === null) {
     // Dev-only signal (QUOLL_PERF-gated, prod byte-identical): a budget miss on a
     // large doc is a retryable no-op, not "nothing to renumber" — mirrors the same
     // warning on the sibling resolveItemAtEof in list-transform.ts.
-    warnBudgetMiss("resolveAtEof", state);
+    warnBudgetMiss("resolveListItemThrough", state);
     return null;
   }
   let item: SyntaxNode | null = tree.resolveInner(markFrom, 1);
@@ -141,7 +143,8 @@ export const continueListOnEnter: Command = (view) => {
   // parse only that far, never to EOF (a large unparsed tail must not cost the
   // budget). A budget miss cannot tell empty from body-owning: keep the list.
   const nextLineEnd = state.doc.line(Math.min(caretLine.number + 1, state.doc.lines)).to;
-  const judged = lineContent === null ? resolveAtEof(state, mark.from, nextLineEnd) : item;
+  const judged =
+    lineContent === null ? resolveListItemThrough(state, mark.from, nextLineEnd) : item;
   const empty = judged !== null && isEmptyItem(state, judged);
   if (empty) {
     // Empty item → remove the whole marker line, exiting the list. Uniform across
@@ -172,7 +175,7 @@ export const continueListOnEnter: Command = (view) => {
   // Re-resolve from an EOF-bounded tree, only now that an edit will land: the
   // caret-bounded `item` sees neither its own lines below the caret nor the
   // following siblings.
-  const eofItem = resolveAtEof(state, mark.from);
+  const eofItem = resolveListItemThrough(state, mark.from, state.doc.length);
   // The tail can add marker padding. Use the complete new line so the item's
   // own lines move to the column where the split content begins.
   const tail = state.doc.sliceString(head, caretLine.to);

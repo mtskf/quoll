@@ -531,7 +531,7 @@ export function renumberRun(
 }
 
 /** The parse tree budget (ms) used to reach EOF. Matches `renumberRun` /
- *  `resolveAtEof` — big lists resolve within this on the seed path. */
+ *  `resolveListItemThrough` — big lists resolve within this on the seed path. */
 const EOF_BUDGET = 50;
 
 /** Dev-only signal that a planner fell back to a no-op because
@@ -552,7 +552,7 @@ export function warnBudgetMiss(where: string, state: EditorState): void {
 }
 
 /** Re-resolve the innermost `ListItem` for the line containing `headPos` from an
- *  EOF-bounded tree (mirrors `list-continuation-keymap.ts`'s `resolveAtEof`,
+ *  EOF-bounded tree (mirrors `list-continuation-keymap.ts`'s `resolveListItemThrough`,
  *  kept private here so the planner owns its resolution). The caret-line-bounded
  *  tree that `listItemAt` builds truncates the item's forced-children and
  *  destination followers (they live BELOW the caret), so the planner MUST parse
