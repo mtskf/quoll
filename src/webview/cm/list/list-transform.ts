@@ -383,8 +383,9 @@ function contentColumnAfterMove(
   return contentColumnFromMarkerLine(text, newMarkCol + newMarker.length, state.tabSize);
 }
 
-/** True when the item has no continuable content ON ITS MARKER LINE
- *  (`markerLineContent`, so `-\n  text` counts as empty): a bare `- ` / `1. `, a
+/** True when the item has no continuable content: a bare `- ` / `1. ` that
+ *  owns no later lines either (`-\n  text` / `-\n  - child` are NOT empty — the
+ *  Enter and outdent empty arms would delete or strand that body), a
  *  content-less bare task marker (`- [ ]`, which the grammar leaves as a 3-byte
  *  Paragraph), or a `Task` node with only whitespace after its 3-byte
  *  `TaskMarker` (`- [ ] ` / `- [x] ` — the just-typed empty task, which the
@@ -397,7 +398,9 @@ export function isEmptyItem(state: EditorState, item: SyntaxNode): boolean {
   const mark = listMarkOf(item);
   const content = mark === null ? null : markerLineContent(state, mark);
   if (content === null) {
-    return true;
+    // Bare marker line: empty only if the item ends on it. `item.to` rather than
+    // `mark.nextSibling`, which in a blockquote is the next line's QuoteMark.
+    return mark === null || item.to <= state.doc.lineAt(mark.from).to;
   }
   if (isContentlessTaskParagraph(state, content)) {
     return true;

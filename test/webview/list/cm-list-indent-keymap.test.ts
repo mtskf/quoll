@@ -638,6 +638,23 @@ describe("outdentListItem", () => {
     }
   });
 
+  // A bare marker line that owns a body below is not an empty item: the body
+  // must shift with the marker, or it stays at its old column and re-parses as
+  // an indented code block / a stray child.
+  it.each([
+    ["- p\n    -\n      text", "- p\n-\n  text"],
+    ["- p\n  -\n    - child\n  - sib", "- p\n-\n  - child\n  - sib"],
+  ])("outdents a bare-marker item together with its body (%j)", (doc, expected) => {
+    const view = mount(doc, EditorSelection.cursor(0));
+    view.dispatch({ selection: EditorSelection.cursor(view.state.doc.line(2).to) });
+    try {
+      expect(outdentListItem(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(expected);
+    } finally {
+      view.destroy();
+    }
+  });
+
   it("returns true (swallow) in a plain paragraph", () => {
     const view = mount("paragraph", EditorSelection.cursor(3));
     try {

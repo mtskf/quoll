@@ -615,6 +615,16 @@ describe("continueListOnEnter — fall-through (returns false, doc unchanged)", 
     expectNoop("just prose", 4);
   });
 
+  // A bare marker line whose item owns a body on the next lines is not an empty
+  // item: exiting the list here would delete the marker and orphan the body.
+  it.each([
+    ["- a\n-\n  text", 5],
+    ["-\n  - child", 1],
+    ["- a\n-\n  ```\n  code\n  ```", 5],
+  ])("a bare marker line that owns a body below (%j)", (doc, caret) => {
+    expectNoop(doc, caret);
+  });
+
   it("inside a fenced code body", () => {
     const doc = "```\n- a\nmore";
     const view = mount(doc, at(0));

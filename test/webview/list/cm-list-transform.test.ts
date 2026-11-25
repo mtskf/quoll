@@ -225,14 +225,23 @@ describe("isEmptyItem", () => {
     }
   });
 
-  // Content that starts on a LATER line is not marker-line content: the marker
-  // line `-` is empty (the @lezer/markdown 1.6.4 shape, which carried a
-  // zero-width Paragraph on the marker line).
-  it("is true when the only content starts on the next line (`-\\n  text`)", () => {
-    const view = mount("-\n  text", EditorSelection.cursor(0));
+  // A bare marker line whose item owns later lines is NOT empty: both consumers'
+  // empty arms (Enter deletes the marker line, outdent skips the body shift)
+  // would destroy that body. The `> ` case puts a QuoteMark, not the body, right
+  // after the ListMark.
+  it.each([
+    "-\n  text",
+    "-\n  - child",
+    "> -\n>   text",
+  ])("is false when the item owns a continuation body (%j)", (doc) => {
+    const view = mount(doc, EditorSelection.cursor(0));
     try {
-      const item = resolveItemAtLine(view.state, 1);
-      expect(isEmptyItem(view.state, item)).toBe(true);
+      // The marker `-` is the first ListMark in every doc; walk up to its item.
+      const mark = syntaxTree(view.state).resolveInner(doc.indexOf("-"), 1);
+      const item = mark.parent;
+      expect(mark.name).toBe("ListMark");
+      expect(item?.name).toBe("ListItem");
+      expect(isEmptyItem(view.state, item as NonNullable<typeof item>)).toBe(false);
     } finally {
       view.destroy();
     }
