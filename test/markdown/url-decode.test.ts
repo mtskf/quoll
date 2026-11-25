@@ -121,6 +121,15 @@ describe("encodeMarkdownDestination", () => {
     expect(parsedDestination(encodeMarkdownDestination("x(\\"))).toBe("x(\\");
   });
 
+  it("known limitation: the v0.1.86–0.1.87 spelling `<x(\\\\>` no longer resolves", () => {
+    // Accepted residual of the 1.8.1 bump (LEARNING "Dependency policy",
+    // 2026-11-25): the old encoder doubled `\`, and 1.8.1 reads the closing `>`
+    // after `\\` as escaped, so the link loses its destination. The bytes are
+    // unchanged; rewriting `\\` as `&#92;` restores it. Goes red if a parser
+    // fix lifts the limitation — then drop this pin and the LEARNING note.
+    expect(parsedDestination("<x(\\\\>")).toBeNull();
+  });
+
   it("writes angle brackets as references and wraps only for whitespace or parens", () => {
     expect(encodeMarkdownDestination("a<b>c")).toBe("a&lt;b&gt;c");
     expect(encodeMarkdownDestination("a b")).toBe("<a b>");
