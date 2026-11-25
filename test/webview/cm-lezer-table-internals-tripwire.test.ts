@@ -23,12 +23,10 @@ describe("@lezer/markdown table internals the guard mirrors", () => {
   });
 
   it("still applies that regex to the RAW peeked line in endLeaf", () => {
-    // This asymmetry — endLeaf tests `cx.peekLine()` raw while TableParser.nextLine tests
-    // `line.text.slice(line.pos)` — is why `isTableDelimiterShaped` reads the line BOTH ways
-    // before deciding it is delimiter-shaped. ⚠️ Against the 1.8.1 regex above the two reads
-    // are currently EQUIVALENT (reason in that function's doc comment), so deleting one
-    // reds nothing — which is exactly why THIS test, pinning the regex verbatim,
-    // is the notice to re-derive both reads rather than to drop one.
+    // endLeaf tests `cx.peekLine()` raw while TableParser.nextLine tests
+    // `line.text.slice(line.pos)`. `isTableDelimiterShaped` reads the raw line ONCE because the
+    // 1.8.1 regex's `[>\s]*` head absorbs the leading whitespace both call sites differ by.
+    // This test pins the regex verbatim: if it goes red, re-derive how each site reads the line.
     expect(dist).toMatch(/let next = cx\.peekLine\(\);\s*\n\s*return delimiterLine\.test\(next\)/);
     expect(dist).toContain("delimiterLine.test(lineText = line.text.slice(line.pos))");
   });

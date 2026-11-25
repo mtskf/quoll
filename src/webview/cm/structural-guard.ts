@@ -136,22 +136,17 @@ function hasUnescapedPipe(text: string): boolean {
 /** @lezer/markdown 1.8.1's `delimiterLine` regex, VERBATIM (the `[>\s]*` head is absent in 1.6.4 and present in 1.8.1). */
 const TABLE_DELIMITER_LINE = /^[>\s]*\|?(\s*:?-+:?\s*\|)+(\s*:?-+:?\s*)?$/;
 
-/** Is this line delimiter-SHAPED? Read BOTH raw (what `endLeaf` tests, on `cx.peekLine()`)
- *  and with leading spaces/tabs stripped (what `TableParser.nextLine` tests, on
- *  `line.text.slice(line.pos)`). The regex opens with `[>\s]*`, which absorbs any leading
- *  whitespace and any `>` quote marker, so a `>`-prefixed line reads the way the parser reads
- *  it past the quote (`> |---|` is true raw AND stripped). Only a LIST-MARKER prefix
- *  (`- |---|`) is false on both reads while the parser, starting past the marker, sees
- *  `|---|` and says true; that value is carried by SHAPE's container alternation firing on
- *  such a line first, so the pairing is no more self-contained than the `hasPipe`/`parseRow`
- *  offsets above.
- *  ⚠️ Against this regex the two reads are EQUIVALENT (stripping `[ \t]+` changes nothing),
- *  so deleting either reds nothing today. Both are kept because they mirror two DIFFERENT
- *  parser call sites and the equivalence is a property of THAT regex, which
- *  cm-lezer-table-internals-tripwire.test.ts pins verbatim: if upstream changes it, the raw
- *  read is what keeps `endLeaf`'s raw input modelled instead of silently unmodelled. */
+/** Is this line delimiter-SHAPED? One read of the raw text is enough: the regex opens with
+ *  `[>\s]*`, which absorbs any leading whitespace and `>` quote marker, so it answers the
+ *  same for `endLeaf`'s raw `peekLine` and for `TableParser.nextLine`'s `line.pos`-onward
+ *  text (`> |---|` is true either way). Only a LIST-MARKER prefix (`- |---|`) is false here
+ *  while the parser, starting past the marker, sees `|---|` and says true; that value is
+ *  carried by SHAPE's container alternation firing on such a line first, so the pairing is
+ *  no more self-contained than the `hasPipe`/`parseRow` offsets above.
+ *  ⚠️ If upstream changes the regex, cm-lezer-table-internals-tripwire.test.ts goes red:
+ *  re-derive how each call site reads the line then, rather than assuming one read. */
 function isTableDelimiterShaped(text: string): boolean {
-  return TABLE_DELIMITER_LINE.test(text) || TABLE_DELIMITER_LINE.test(text.replace(/^[ \t]+/, ""));
+  return TABLE_DELIMITER_LINE.test(text);
 }
 
 /** Mirror of `parseRow`'s return value: cells split on unescaped `|`; a leading pipe opens
