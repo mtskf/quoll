@@ -75,7 +75,7 @@ export function isBlankLine(text: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// TABLE-DELIM inputs — mirrors of @lezer/markdown 1.6.4's own table-formation tests
+// TABLE-DELIM inputs — mirrors of @lezer/markdown's own table-formation tests
 // (`hasPipe`, `delimiterLine`, `parseRow`). A GFM `Table` exists in that parser iff a leaf
 // block's first line has an unescaped pipe, a following line is delimiter-shaped, and the
 // two lines' `parseRow` cell counts agree — via `TableParser.nextLine` for the ordinary
@@ -133,27 +133,23 @@ function hasUnescapedPipe(text: string): boolean {
   return false;
 }
 
-/** @lezer/markdown 1.8.1's `delimiterLine` regex, VERBATIM (1.7.2 added the `[>\s]*` head). */
+/** @lezer/markdown 1.8.1's `delimiterLine` regex, VERBATIM (the `[>\s]*` head is absent in 1.6.4 and present in 1.8.1). */
 const TABLE_DELIMITER_LINE = /^[>\s]*\|?(\s*:?-+:?\s*\|)+(\s*:?-+:?\s*)?$/;
 
 /** Is this line delimiter-SHAPED? Read BOTH raw (what `endLeaf` tests, on `cx.peekLine()`)
  *  and with leading spaces/tabs stripped (what `TableParser.nextLine` tests, on
- *  `line.text.slice(line.pos)`). Those two reads cover every possible `line.pos` ONLY while
- *  `[0, line.pos)` is WHITESPACE: the regex's sole whitespace sensitivity is its `^\|?`
- *  anchor, so a partially-stripped prefix reads the same as one of the two. On a
- *  CONTAINER-PREFIXED line they do not — `> |---|` is false raw AND false stripped while the
- *  parser, starting past `> `, sees `|---|` and says true. That THIRD value is carried by
- *  SHAPE's container alternation firing on such a line first; the pairing is no more
- *  self-contained than the `hasPipe`/`parseRow` offsets above.
- *  Since 1.7.2 the regex opens with `[>\s]*`, so it also reads a `>`-prefixed line the way
- *  the parser does past the quote marker (`> |---|` is now true raw). List-marker prefixes
- *  still rely on SHAPE as above.
- *  ⚠️ Against the 1.8.1 regex the two reads are EQUIVALENT — the `[>\s]*` head absorbs any
- *  leading `[ \t]+`, so stripping it changes nothing. Deleting either read therefore reds
- *  nothing today. Both are kept because they mirror two DIFFERENT parser call sites and the
- *  equivalence is a property of THAT regex, which cm-lezer-table-internals-tripwire.test.ts
- *  pins verbatim: if upstream changes it, the raw read is what keeps `endLeaf`'s raw input
- *  modelled instead of silently unmodelled. */
+ *  `line.text.slice(line.pos)`). The regex opens with `[>\s]*`, which absorbs any leading
+ *  whitespace and any `>` quote marker, so a `>`-prefixed line reads the way the parser reads
+ *  it past the quote (`> |---|` is true raw AND stripped). Only a LIST-MARKER prefix
+ *  (`- |---|`) is false on both reads while the parser, starting past the marker, sees
+ *  `|---|` and says true; that value is carried by SHAPE's container alternation firing on
+ *  such a line first, so the pairing is no more self-contained than the `hasPipe`/`parseRow`
+ *  offsets above.
+ *  ⚠️ Against this regex the two reads are EQUIVALENT (stripping `[ \t]+` changes nothing),
+ *  so deleting either reds nothing today. Both are kept because they mirror two DIFFERENT
+ *  parser call sites and the equivalence is a property of THAT regex, which
+ *  cm-lezer-table-internals-tripwire.test.ts pins verbatim: if upstream changes it, the raw
+ *  read is what keeps `endLeaf`'s raw input modelled instead of silently unmodelled. */
 function isTableDelimiterShaped(text: string): boolean {
   return TABLE_DELIMITER_LINE.test(text) || TABLE_DELIMITER_LINE.test(text.replace(/^[ \t]+/, ""));
 }
