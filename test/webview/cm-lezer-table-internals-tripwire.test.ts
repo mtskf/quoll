@@ -1,7 +1,7 @@
 // @vitest-environment node
 //
 // The TABLE-DELIM arm mirrors @lezer/markdown's PRIVATE table internals, and
-// package.json declares `@lezer/markdown: "^1.6.4"` — a CARET range. A doc comment naming
+// package.json declares `@lezer/markdown: "^1.8.1"` — a CARET range. A doc comment naming
 // a version cannot stop a `pnpm update` from changing the thing being mirrored, so this
 // test asserts the mirrored facts against the INSTALLED dist and reds on drift. It is
 // deliberately a source-text assertion: the internals are not exported, so there is no
@@ -17,15 +17,17 @@ const dist = readFileSync(distPath, "utf8");
 
 describe("@lezer/markdown table internals the guard mirrors", () => {
   it("still ships the delimiterLine regex the mirror copies verbatim", () => {
-    expect(dist).toContain("const delimiterLine = /^\\|?(\\s*:?-+:?\\s*\\|)+(\\s*:?-+:?\\s*)?$/;");
+    expect(dist).toContain(
+      "const delimiterLine = /^[>\\s]*\\|?(\\s*:?-+:?\\s*\\|)+(\\s*:?-+:?\\s*)?$/;"
+    );
   });
 
   it("still applies that regex to the RAW peeked line in endLeaf", () => {
     // This asymmetry — endLeaf tests `cx.peekLine()` raw while TableParser.nextLine tests
     // `line.text.slice(line.pos)` — is why `isTableDelimiterShaped` reads the line BOTH ways
-    // before deciding it is delimiter-shaped. ⚠️ Against the 1.6.4 regex above the raw read
-    // is currently SUBSUMED by the stripped one (proof in that function's doc comment), so
-    // deleting it reds nothing — which is exactly why THIS test, pinning the regex verbatim,
+    // before deciding it is delimiter-shaped. ⚠️ Against the 1.8.1 regex above the two reads
+    // are currently EQUIVALENT (reason in that function's doc comment), so deleting one
+    // reds nothing — which is exactly why THIS test, pinning the regex verbatim,
     // is the notice to re-derive both reads rather than to drop one.
     expect(dist).toMatch(/let next = cx\.peekLine\(\);\s*\n\s*return delimiterLine\.test\(next\)/);
     expect(dist).toContain("delimiterLine.test(lineText = line.text.slice(line.pos))");
@@ -68,10 +70,10 @@ describe("@lezer/markdown table internals the guard mirrors", () => {
     const manifest = JSON.parse(
       readFileSync(join(dirname(distPath), "..", "package.json"), "utf8")
     ) as { version: string };
-    // The mirrors were derived from 1.6.4. A bump is not forbidden, but it must be a
+    // The mirrors were re-derived from 1.8.1 (first derived from 1.6.4). A bump is not forbidden, but it must be a
     // CONSCIOUS edit here — the four assertions above are what actually check the
     // behaviour, and this line is what makes an unnoticed bump visible in the diff.
-    expect(manifest.version).toBe("1.6.4");
+    expect(manifest.version).toBe("1.8.1");
   });
 });
 

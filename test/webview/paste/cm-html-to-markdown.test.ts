@@ -312,7 +312,7 @@ describe("htmlToMarkdown — inline constructs", () => {
     const md = convert(
       '<p><a href="https://x.com/?a=1&amp;amp;b=2&amp;copy;&amp;#58;\\_c">t</a></p>'
     );
-    expect(md).toBe("[t](https://x.com/?a=1&amp;amp;b=2&amp;copy;&amp;#58;\\\\_c)");
+    expect(md).toBe("[t](https://x.com/?a=1&amp;amp;b=2&amp;copy;&amp;#58;&#92;_c)");
     // Escaping preserves the literal entity in the converted destination.
   });
   it("escapes a blockquote `>` marker at a line start", () => {

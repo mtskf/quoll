@@ -110,9 +110,15 @@ describe("encodeMarkdownDestination", () => {
     expect(encodeMarkdownDestination("?a=1&copy=2&lt=3&&")).toBe("?a=1&copy=2&lt=3&&");
   });
 
-  it("doubles every backslash", () => {
-    expect(encodeMarkdownDestination("a\\_b")).toBe("a\\\\_b");
-    expect(encodeMarkdownDestination("a\\b")).toBe("a\\\\b");
+  it("writes every backslash as a character reference", () => {
+    expect(encodeMarkdownDestination("a\\_b")).toBe("a&#92;_b");
+    expect(encodeMarkdownDestination("a\\b")).toBe("a&#92;b");
+  });
+
+  it("keeps a trailing backslash inside the angle form (Lezer 1.8.1 escape state)", () => {
+    // `<x(\\>` would end the destination at an ESCAPED `>` in @lezer/markdown 1.8.1.
+    expect(encodeMarkdownDestination("x(\\")).toBe("<x(&#92;>");
+    expect(parsedDestination(encodeMarkdownDestination("x(\\"))).toBe("x(\\");
   });
 
   it("writes angle brackets as references and wraps only for whitespace or parens", () => {

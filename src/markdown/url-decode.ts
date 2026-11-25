@@ -219,14 +219,17 @@ function decodeCharacterReferences(s: string): string {
  *     unescapes backslashes BEFORE it decodes references, so `\&amp;` still
  *     decodes to `&`. The reference pass is a single pass, so the `&` that
  *     `&amp;` yields is never re-read as the start of another reference.
- *   - `\` is doubled everywhere, not just before punctuation — a lone
- *     backslash left in front of an escape this function inserts would
- *     swallow it.
+ *   - `\` becomes `&#92;` everywhere. Doubling it is not enough: since
+ *     @lezer/markdown 1.8.1 the angle form honours backslash escapes but does
+ *     not clear the escape after an escaped backslash, so `<a\\>` reads its
+ *     closing `>` as escaped and the link is lost. A reference is decoded
+ *     after backslashes are unescaped, so it can neither escape the next
+ *     character nor be swallowed by a backslash in front of it.
  *   - `<` / `>` become `&lt;` / `&gt;` in both forms. The angle form cannot
- *     hold either raw (the shipped parser ends it at the first `>`, rejects
- *     a `<`, and honours no backslash escape there), and the bare form
- *     cannot start with `<`. Writing them as references everywhere keeps one
- *     rule for both forms.
+ *     hold either raw (the shipped parser ends it at the first unescaped
+ *     `>` and rejects an unescaped `<`), and the bare form cannot start with
+ *     `<`. Writing them as references everywhere keeps one rule for both
+ *     forms.
  *   - The angle form is used only for whitespace or parentheses. The bare
  *     form cannot carry whitespace, and carries unescaped parentheses only
  *     when they balance; wrapping every parenthesised href avoids a balance
@@ -238,7 +241,7 @@ function decodeCharacterReferences(s: string): string {
 export function encodeMarkdownDestination(href: string): string {
   const enc = href
     .replace(CHARACTER_REFERENCE, (ref) => `&amp;${ref.slice(1)}`)
-    .replace(/\\/g, "\\\\")
+    .replace(/\\/g, "&#92;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
   return /[\s()]/.test(enc) ? `<${enc}>` : enc;

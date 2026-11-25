@@ -221,7 +221,7 @@ it.each([
     label: "label",
     href: "https://x.test/a\\\\b",
     escapedLabel: "label",
-    destination: "https://x.test/a\\\\\\\\b",
+    destination: "https://x.test/a&#92;&#92;b",
     text: "label",
   },
 ])("writes a full link for $label → $href", ({ label, href, escapedLabel, destination, text }) => {

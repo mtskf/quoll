@@ -338,9 +338,6 @@ function ownMarkerWidth(state: EditorState, listItem: SyntaxNode): Col | null {
     return null;
   }
   const content = listMark.nextSibling;
-  if (content === null) {
-    return null; // grammar drift — no content node at all
-  }
   const markCol = columnAt(state, listMark.from);
 
   // Task content: a real `Task` node, OR a content-less bare-marker Paragraph
@@ -348,10 +345,10 @@ function ownMarkerWidth(state: EditorState, listItem: SyntaxNode): Col | null {
   // checkbox, so both fold the visible prefix into the MARKER column. A
   // `Task`-named node with an invalid marker returns null (F7 fail-closed).
   const taskGeom =
-    content.name === "Task"
+    content?.name === "Task"
       ? resolveTaskMarkerGeometry(state, content)
       : resolveContentlessTaskMarkerGeometry(state, listItem);
-  if (content.name === "Task" && taskGeom === null) {
+  if (content?.name === "Task" && taskGeom === null) {
     return null; // task-shaped but invalid marker → no hang (F7 fail-closed)
   }
   if (taskGeom !== null) {
@@ -372,8 +369,10 @@ function ownMarkerWidth(state: EditorState, listItem: SyntaxNode): Col | null {
   // byte-identical to a canonical `- x` sibling (the marker column is
   // own-independent — `own` cancels in the first-line offset — but matching the
   // sibling keeps the geometry a single, testable value). Keeps hang ↔
-  // fold-gutter in lock-step for empty items.
-  if (content.from === content.to) {
+  // fold-gutter in lock-step for empty items. Since @lezer/markdown 1.7.2 an
+  // empty item has NO content node at all (no leaf starts on an empty line);
+  // older trees carried a zero-width Paragraph. Both shapes take this branch.
+  if (content === null || content.from === content.to) {
     return { ch: 1, glyph: columnAt(state, listMark.to) - markCol, markers: 0 };
   }
 

@@ -133,8 +133,8 @@ function hasUnescapedPipe(text: string): boolean {
   return false;
 }
 
-/** @lezer/markdown 1.6.4's `delimiterLine` regex, VERBATIM. */
-const TABLE_DELIMITER_LINE = /^\|?(\s*:?-+:?\s*\|)+(\s*:?-+:?\s*)?$/;
+/** @lezer/markdown 1.8.1's `delimiterLine` regex, VERBATIM (1.7.2 added the `[>\s]*` head). */
+const TABLE_DELIMITER_LINE = /^[>\s]*\|?(\s*:?-+:?\s*\|)+(\s*:?-+:?\s*)?$/;
 
 /** Is this line delimiter-SHAPED? Read BOTH raw (what `endLeaf` tests, on `cx.peekLine()`)
  *  and with leading spaces/tabs stripped (what `TableParser.nextLine` tests, on
@@ -145,14 +145,15 @@ const TABLE_DELIMITER_LINE = /^\|?(\s*:?-+:?\s*\|)+(\s*:?-+:?\s*)?$/;
  *  parser, starting past `> `, sees `|---|` and says true. That THIRD value is carried by
  *  SHAPE's container alternation firing on such a line first; the pairing is no more
  *  self-contained than the `hasPipe`/`parseRow` offsets above.
- *  ⚠️ Measured (clause drill, 2026-09-06): against 1.6.4's regex the RAW read is SUBSUMED by
- *  the stripped one — raw-true IMPLIES stripped-true, because a leading `[ \t]+` can only be
- *  consumed by the `\s*` that opens the first group (`:?-+` matches no space and `-+` needs a
- *  dash), so dropping those characters leaves that same match valid. Deleting the raw read
- *  therefore reds nothing today. It is kept because the two reads mirror two DIFFERENT parser
- *  call sites and the subsumption is a property of THAT regex, which
- *  cm-lezer-table-internals-tripwire.test.ts pins verbatim: if upstream changes it, this read
- *  is what keeps `endLeaf`'s raw input modelled instead of silently unmodelled. */
+ *  Since 1.7.2 the regex opens with `[>\s]*`, so it also reads a `>`-prefixed line the way
+ *  the parser does past the quote marker (`> |---|` is now true raw). List-marker prefixes
+ *  still rely on SHAPE as above.
+ *  ⚠️ Against the 1.8.1 regex the two reads are EQUIVALENT — the `[>\s]*` head absorbs any
+ *  leading `[ \t]+`, so stripping it changes nothing. Deleting either read therefore reds
+ *  nothing today. Both are kept because they mirror two DIFFERENT parser call sites and the
+ *  equivalence is a property of THAT regex, which cm-lezer-table-internals-tripwire.test.ts
+ *  pins verbatim: if upstream changes it, the raw read is what keeps `endLeaf`'s raw input
+ *  modelled instead of silently unmodelled. */
 function isTableDelimiterShaped(text: string): boolean {
   return TABLE_DELIMITER_LINE.test(text) || TABLE_DELIMITER_LINE.test(text.replace(/^[ \t]+/, ""));
 }

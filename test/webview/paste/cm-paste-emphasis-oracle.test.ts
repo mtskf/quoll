@@ -32,13 +32,15 @@ it("both readers normalize padded code spans", () => {
   }
 });
 
-it("CommonMark oracle rejects the three Lezer-only layouts", () => {
+// Lezer accepted all three before @lezer/markdown 1.8.0 fixed partial-mark matching; it now
+// rejects some of them too. The pin is the CommonMark arm, so read only that arm.
+it("CommonMark oracle rejects the three formerly Lezer-only layouts", () => {
   for (const [html, md] of [
     ["<b>a<i>b</i></b><i>c</i>", "**a*b****c*"],
     ["<i>a<b>b</b></i><b>c</b>", "*a**b*****c**"],
     ["<b><i>a</i>a<i>a</i></b>", "***a*a*a***"],
   ]) {
-    expect(() => assertStyleParity(html, md)).toThrow(/CommonMark/);
+    expect(() => assertStyleParity(html, md, "CommonMark")).toThrow(/CommonMark/);
   }
 });
 
