@@ -246,6 +246,29 @@ describe("isEmptyItem", () => {
       view.destroy();
     }
   });
+
+  // The true side of the same `item.to` rule: a bare marker line whose item ends
+  // on it, including inside a blockquote, mid-list, and before a blank line
+  // (`-\n\n  text` — an item may start with at most one blank line, so `text`
+  // is not its body).
+  it.each([
+    ["> -", 1],
+    ["> - a\n> -", 2],
+    ["- a\n-\n- b", 2],
+    ["-\n\n  text", 1],
+  ] as const)("is true for a bare marker line that owns nothing below (%j line %i)", (doc, lineNo) => {
+    const view = mount(doc, EditorSelection.cursor(0));
+    try {
+      const line = view.state.doc.line(lineNo);
+      const mark = syntaxTree(view.state).resolveInner(line.from + line.text.indexOf("-"), 1);
+      const item = mark.parent;
+      expect(mark.name).toBe("ListMark");
+      expect(item?.name).toBe("ListItem");
+      expect(isEmptyItem(view.state, item as NonNullable<typeof item>)).toBe(true);
+    } finally {
+      view.destroy();
+    }
+  });
 });
 
 describe("contentColumnOf — empty marker line", () => {
