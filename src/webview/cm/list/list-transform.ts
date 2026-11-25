@@ -44,7 +44,10 @@ import {
   type SelectionRange,
 } from "@codemirror/state";
 
-import { isContentlessTaskParagraph } from "../task-checkbox/task-marker-shape.js";
+import {
+  isContentlessTaskParagraph,
+  markerLineContent,
+} from "../task-checkbox/task-marker-shape.js";
 import { columnAt, findTaskMarker, isTaskItem } from "./list-geometry.js";
 import {
   caretInCode,
@@ -92,8 +95,9 @@ export function formatMarker(shape: ListMarkShape): string {
   return shape.kind === "bullet" ? shape.glyph : `${shape.number}${shape.delim}`;
 }
 
-/** Column where the item's content begins (its `ListMark`'s next sibling), with
- *  a fallback for an empty/malformed item so it is NEVER null: `markCol +
+/** Column where the item's content begins (its `markerLineContent`), with a
+ *  fallback for an empty/malformed item — including one whose content starts on
+ *  a later line — so it is NEVER null: `markCol +
  *  markerLen + 1` (the CommonMark implied single-space content indent — the
  *  same convention `list-geometry.ts`'s `ownMarkerWidth` uses for an empty
  *  item's hang). */
@@ -103,8 +107,8 @@ export function contentColumnOf(state: EditorState, item: SyntaxNode): number {
     return columnAt(state, item.from);
   }
   const markCol = columnAt(state, mark.from);
-  const content = mark.nextSibling;
-  if (content === null || content.from === content.to) {
+  const content = markerLineContent(state, mark);
+  if (content === null) {
     return markCol + (mark.to - mark.from) + 1;
   }
   return columnAt(state, content.from);
@@ -379,7 +383,8 @@ function contentColumnAfterMove(
   return contentColumnFromMarkerLine(text, newMarkCol + newMarker.length, state.tabSize);
 }
 
-/** True when the item has no continuable content: a bare `- ` / `1. `, a
+/** True when the item has no continuable content ON ITS MARKER LINE
+ *  (`markerLineContent`, so `-\n  text` counts as empty): a bare `- ` / `1. `, a
  *  content-less bare task marker (`- [ ]`, which the grammar leaves as a 3-byte
  *  Paragraph), or a `Task` node with only whitespace after its 3-byte
  *  `TaskMarker` (`- [ ] ` / `- [x] ` — the just-typed empty task, which the
@@ -389,8 +394,9 @@ function contentColumnAfterMove(
  *  Enter-continuation (planners) can share it without re-deriving `content`
  *  themselves. */
 export function isEmptyItem(state: EditorState, item: SyntaxNode): boolean {
-  const content = listMarkOf(item)?.nextSibling ?? null;
-  if (content === null || content.from === content.to) {
+  const mark = listMarkOf(item);
+  const content = mark === null ? null : markerLineContent(state, mark);
+  if (content === null) {
     return true;
   }
   if (isContentlessTaskParagraph(state, content)) {

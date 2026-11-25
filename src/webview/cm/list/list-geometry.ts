@@ -36,7 +36,11 @@
 import type { syntaxTree } from "@codemirror/language";
 import { countColumn, type EditorState } from "@codemirror/state";
 
-import { isContentlessTaskParagraph, TASK_MARKER_RE } from "../task-checkbox/task-marker-shape.js";
+import {
+  isContentlessTaskParagraph,
+  markerLineContent,
+  TASK_MARKER_RE,
+} from "../task-checkbox/task-marker-shape.js";
 
 // `@lezer/common` is a direct dep as of PR #66 (for the lint incremental
 // parser's `TreeFragment`); derive SyntaxNode from syntaxTree's return type
@@ -106,8 +110,16 @@ export function resolveTaskMarkerGeometry(
   }
   const listItem = task.parent;
   const listMark = listItem !== null && listItem.name === "ListItem" ? listItem.firstChild : null;
-  const listMarkFrom =
-    listMark !== null && listMark.name === "ListMark" ? listMark.from : marker.from;
+  const hasListMark = listMark !== null && listMark.name === "ListMark";
+  // A `Task` that is not the item's marker-line content (`-\n  [ ] foo`, or a
+  // later paragraph `- a\n\n  [ ] b`) renders no checkbox: the replace
+  // [ListMark.from, TaskMarker.to) would span a line break, which CodeMirror
+  // refuses — dropping every checkbox in the viewport. Same rule as the
+  // content-less arm (isContentlessTaskParagraph).
+  if (hasListMark && markerLineContent(state, listMark)?.from !== task.from) {
+    return null;
+  }
+  const listMarkFrom = hasListMark ? listMark.from : marker.from;
   const isBullet =
     listItem !== null && listItem.name === "ListItem" && listItem.parent?.name === "BulletList";
   return {
@@ -337,7 +349,7 @@ function ownMarkerWidth(state: EditorState, listItem: SyntaxNode): Col | null {
   if (listMark === null || listMark.name !== "ListMark") {
     return null;
   }
-  const content = listMark.nextSibling;
+  const content = markerLineContent(state, listMark);
   const markCol = columnAt(state, listMark.from);
 
   // Task content: a real `Task` node, OR a content-less bare-marker Paragraph
@@ -369,10 +381,11 @@ function ownMarkerWidth(state: EditorState, listItem: SyntaxNode): Col | null {
   // byte-identical to a canonical `- x` sibling (the marker column is
   // own-independent — `own` cancels in the first-line offset — but matching the
   // sibling keeps the geometry a single, testable value). Keeps hang ↔
-  // fold-gutter in lock-step for empty items. Since @lezer/markdown 1.7.2 an
-  // empty item has NO content node at all (no leaf starts on an empty line);
-  // older trees carried a zero-width Paragraph. Both shapes take this branch.
-  if (content === null || content.from === content.to) {
+  // fold-gutter in lock-step for empty items. "Empty" means no content on the
+  // marker line (markerLineContent): since @lezer/markdown 1.7.2 such an item
+  // has no content node there, and its nextSibling may sit on a later line
+  // (`> -\n>   - child`), whose column must not be mixed with this line's.
+  if (content === null) {
     return { ch: 1, glyph: columnAt(state, listMark.to) - markCol, markers: 0 };
   }
 

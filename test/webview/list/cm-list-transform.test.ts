@@ -6,6 +6,7 @@ import type { EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 import {
   classifyItemLines,
+  contentColumnOf,
   continuationMarkerFor,
   formatMarker,
   isEmptyItem,
@@ -219,6 +220,36 @@ describe("isEmptyItem", () => {
     try {
       const item = resolveItemAtLine(view.state, 1);
       expect(isEmptyItem(view.state, item)).toBe(false);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // Content that starts on a LATER line is not marker-line content: the marker
+  // line `-` is empty (the @lezer/markdown 1.6.4 shape, which carried a
+  // zero-width Paragraph on the marker line).
+  it("is true when the only content starts on the next line (`-\\n  text`)", () => {
+    const view = mount("-\n  text", EditorSelection.cursor(0));
+    try {
+      const item = resolveItemAtLine(view.state, 1);
+      expect(isEmptyItem(view.state, item)).toBe(true);
+    } finally {
+      view.destroy();
+    }
+  });
+});
+
+describe("contentColumnOf — empty marker line", () => {
+  // `> -\n>   - child`: the marker line has no content node, and nextSibling is
+  // the continuation line's QuoteMark at col 0. The content column must come
+  // from the marker line (markCol 2 + 1 + 1), not from that other line.
+  it("uses the implied single-space column, not a later line's node", () => {
+    const view = mount("> -\n>   - child\n", EditorSelection.cursor(0));
+    try {
+      // Probe at the `-` (offset 2): line 1's first non-ws char is the `>`.
+      const item = syntaxTree(view.state).resolveInner(2, 1).parent;
+      expect(item?.name).toBe("ListItem");
+      expect(contentColumnOf(view.state, item!)).toBe(4);
     } finally {
       view.destroy();
     }

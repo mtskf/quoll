@@ -424,6 +424,32 @@ describe("content-less / empty items — hang", () => {
     const h = hangOfTop("-");
     expect(h?.indent).toEqual(h?.pad);
   });
+
+  // Content on a LATER line is not marker-line content (since @lezer/markdown
+  // 1.7.2 the empty marker line has no node, so nextSibling is the next line's
+  // block). Inside a blockquote that block starts at the continuation `>`
+  // (col 0), which once yielded a negative ch (-1) hang.
+  it("empty marker line with a nested child on the next line hangs like `-`", () => {
+    expect(hangOfTop("> -\n>   - child\n")).toEqual(hangOfTop("> -\n"));
+    expect(hangOfTop("> -\n>   - child\n")).toEqual(hangOfTop("> - x\n"));
+    expect(hangOfTop("-\n  - child\n")).toEqual(hangOfTop("-"));
+  });
+});
+
+describe("task marker on the line after the ListMark — no checkbox geometry", () => {
+  // `-\n  [ ] foo`: the replace [ListMark.from, TaskMarker.to) would span a line
+  // break, so neither consumer may treat it as a checkbox.
+  it("content-bearing `-\\n  [ ] foo` resolves no task geometry", () => {
+    expect(taskGeom("-\n  [ ] foo")).toBeNull();
+    const { state, item } = listItemAt("-\n  [ ] foo", 0);
+    expect(isTaskItem(state, item)).toBe(false);
+  });
+
+  it("content-less `-\\n  [ ]` resolves no task geometry", () => {
+    const { state, item } = listItemAt("-\n  [ ]", 0);
+    expect(resolveContentlessTaskMarkerGeometry(state, item)).toBeNull();
+    expect(isTaskItem(state, item)).toBe(false);
+  });
 });
 
 describe("isBulletItem — structural predicate (BulletList wrapper only)", () => {
