@@ -14,6 +14,14 @@ import type { EditorState } from "@codemirror/state";
 export type Tree = ReturnType<typeof syntaxTree>;
 export type SyntaxNode = Tree["topNode"];
 
+/** Length of `text`'s leading run of ASCII spaces and tabs. Markdown indentation
+ *  and blank lines are made only of these (Lezer and CommonMark alike), so a line
+ *  is blank iff this equals its length; U+00A0 and other Unicode spaces are
+ *  content. `trim()` strips those too and would misjudge list structure. */
+export function indentLength(text: string): number {
+  return text.match(/^[ \t]*/)?.[0].length ?? 0;
+}
+
 /** The innermost `ListItem` for the line containing `head`, or null when that
  *  line is not in a list item OR the probe sits inside a `FencedCode` /
  *  `CodeBlock`. Probes the line's first non-whitespace column, not `head`. */

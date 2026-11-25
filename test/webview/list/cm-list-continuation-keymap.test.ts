@@ -672,6 +672,25 @@ describe("continueListOnEnter — bare marker line that owns a body below", () =
     }
   });
 
+  // Only ASCII spaces and tabs make a line blank (as in Lezer and CommonMark): a
+  // line of indentation + U+00A0 is paragraph text, so the item owns the body
+  // below it. Enter continues, and the body — moved with the item when the
+  // marker widens (`9.` → `10.`) — still belongs to the new item on reparse.
+  it.each([
+    ["8.\n   \u00a0\n   body", "8.\n9. \n   \u00a0\n   body"],
+    ["9.\n   \u00a0\n   body", "9.\n10. \n    \u00a0\n    body"],
+  ])("Enter on %j keeps the U+00A0 line and body in the list", (doc, expected) => {
+    const out = pressEnter(doc, 2);
+    expect(out).toBe(expected);
+    const reparsed = EditorState.create({ doc: out, extensions: [quollMarkdownLanguage()] });
+    const tree = ensureSyntaxTree(reparsed, out.length, 10_000);
+    let node = tree?.resolveInner(out.indexOf("body"), 1) ?? null;
+    while (node !== null && node.name !== "ListItem") {
+      node = node.parent;
+    }
+    expect(node?.from).toBe(out.indexOf("\n") + 1);
+  });
+
   it("keeps the marker when the tree is parsed only up to the caret line", () => {
     const filler = "para line of some text here\n\n".repeat(1000);
     expect(pressEnter("-\n  text", 1, filler)).toBe("-\n- \n  text");

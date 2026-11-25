@@ -49,6 +49,7 @@ import {
 import {
   caretInBlockquote,
   caretInCode,
+  indentLength,
   listItemAt,
   listMarkOf,
   type SyntaxNode,
@@ -88,7 +89,8 @@ function resolveListItemThrough(
  *  The item ends on its marker line unless it owns a body, and the caret-bounded
  *  tree cuts `item.to` at that line, so it cannot answer this. A bare item may
  *  start with at most one blank line — the marker line itself (CommonMark) — so
- *  the NEXT line decides. No next line, or a blank one, means no body: empty
+ *  the NEXT line decides. No next line, or a blank one (ASCII spaces / tabs
+ *  only — `indentLength`; a U+00A0 line is text), means no body: empty
  *  without parsing (Lezer 1.8.1 pulls `9.\n\n   body` into the item, CommonMark
  *  does not). Otherwise parse only through the next line, never to EOF (a large
  *  unparsed tail must not cost the budget); a budget miss cannot tell empty from
@@ -98,7 +100,7 @@ function bareItemIsEmpty(state: EditorState, markFrom: number, lineNo: number): 
     return true;
   }
   const next = state.doc.line(lineNo + 1);
-  if (next.text.trim() === "") {
+  if (indentLength(next.text) === next.text.length) {
     return true;
   }
   const item = resolveListItemThrough(state, markFrom, next.to);

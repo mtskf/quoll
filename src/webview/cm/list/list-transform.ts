@@ -54,6 +54,7 @@ import {
   destinationForIndent,
   destinationForOutdent,
   followingListItems,
+  indentLength,
   isListNode,
   lastListItemOf,
   listMarkOf,
@@ -134,13 +135,13 @@ export function contentColumnFromMarkerLine(
 }
 
 /** First non-whitespace column of `line`, or `null` when the line is blank /
- *  whitespace-only. */
+ *  only ASCII spaces / tabs (`indentLength`: a U+00A0 line is text). */
 function firstNonWsColumn(state: EditorState, lineNumber: number): number | null {
   const line = state.doc.line(lineNumber);
-  if (line.text.trim() === "") {
+  const wsLen = indentLength(line.text);
+  if (wsLen === line.text.length) {
     return null;
   }
-  const wsLen = line.text.length - line.text.trimStart().length;
   return columnAt(state, line.from + wsLen);
 }
 
