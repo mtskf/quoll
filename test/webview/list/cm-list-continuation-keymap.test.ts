@@ -644,6 +644,34 @@ describe("continueListOnEnter — bare marker line that owns a body below", () =
     expect(pressEnter(doc, caret)).toBe(expected);
   });
 
+  // The caret may sit anywhere between the marker end and the line end: the
+  // result is the line-end result (the new marker lands at the line end).
+  // Upstream Enter strips the marker for these carets.
+  it.each([
+    ["- \n  body", 1, "- \n- \n  body"],
+    ["1.  \n    body", 2, "1.  \n2. \n    body"],
+    ["1.  \n    body", 3, "1.  \n2. \n    body"],
+  ])("Enter on %j at caret %i in the marker padding continues the list", (doc, caret, expected) => {
+    expect(pressEnter(doc, caret)).toBe(expected);
+    expect(pressEnter(doc, doc.indexOf("\n"))).toBe(expected);
+  });
+
+  // No representable next marker (9-digit cap): consume Enter without an edit
+  // rather than fall through to upstream, which strips the marker.
+  it("consumes Enter on a 9-digit bare marker that owns a body", () => {
+    const doc = "999999999.\n           body";
+    expect(pressEnter(doc, 10)).toBe(doc);
+  });
+
+  it("keeps deferring a caret before the bare marker end (`1|.`)", () => {
+    const view = mount("1.\n   body", at(1));
+    try {
+      expect(continueListOnEnter(view)).toBe(false);
+    } finally {
+      view.destroy();
+    }
+  });
+
   it("keeps the marker when the tree is parsed only up to the caret line", () => {
     const filler = "para line of some text here\n\n".repeat(1000);
     expect(pressEnter("-\n  text", 1, filler)).toBe("-\n- \n  text");

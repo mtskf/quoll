@@ -158,27 +158,33 @@ export const continueListOnEnter: Command = (view) => {
     });
     return true;
   }
-  // A bare marker line that owns a body below continues from the line end (the
-  // body moves under the new item; nothing is deleted). Otherwise continuable
-  // content starts after the checkbox for a task, else at the content's start.
-  // A caret before it (indent / marker region `1|. a`, or inside `[|x]`) must not
-  // split the marker — defer to the default Enter.
+  // A bare marker line that owns a body below continues from the marker end:
+  // a caret anywhere in the trailing padding (`-| \n  body`) inserts at the line
+  // end, so the body moves under the new item and nothing is deleted. Otherwise
+  // continuable content starts after the checkbox for a task, else at the
+  // content's start. A caret before it (indent / marker region `1|. a`, or inside
+  // `[|x]`) must not split the marker — defer to the default Enter.
+  const bare = lineContent === null;
   const taskMarker = lineContent?.name === "Task" ? findTaskMarker(state, lineContent) : null;
-  const contentStart = lineContent === null ? caretLine.to : (taskMarker?.to ?? lineContent.from);
+  const contentStart = bare ? mark.to : (taskMarker?.to ?? lineContent.from);
   if (head < contentStart) {
     return false;
   }
   const markerStr = continuationMarkerFor(state, item);
   if (markerStr === null) {
-    return false;
+    // No representable next marker (the 9-digit ordered cap). A bare marker owns
+    // a body here, and upstream Enter would strip the marker and orphan it, so
+    // consume Enter without an edit; content-bearing items keep the default Enter.
+    return bare;
   }
+  const at = bare ? caretLine.to : head;
   // Re-resolve from an EOF-bounded tree, only now that an edit will land: the
   // caret-bounded `item` sees neither its own lines below the caret nor the
   // following siblings.
   const eofItem = resolveListItemThrough(state, mark.from, state.doc.length);
   // The tail can add marker padding. Use the complete new line so the item's
   // own lines move to the column where the split content begins.
-  const tail = state.doc.sliceString(head, caretLine.to);
+  const tail = state.doc.sliceString(at, caretLine.to);
   const newContentCol = contentColumnFromMarkerLine(
     indent + markerStr + tail,
     indent.length + markerStr.indexOf(" "),
@@ -195,9 +201,9 @@ export const continueListOnEnter: Command = (view) => {
     return true;
   }
   const insert = `\n${indent}${markerStr}`;
-  const caret = head + insert.length;
-  const changes: ChangeSpec[] = [{ from: head, insert }];
-  // All edits below sit past `head`, so the caret is unaffected.
+  const caret = at + insert.length;
+  const changes: ChangeSpec[] = [{ from: at, insert }];
+  // All edits below sit past `at`, so the caret is unaffected.
   if (eofItem !== null) {
     changes.push(...shiftOwnLines(state, eofItem, newContentCol));
   }
