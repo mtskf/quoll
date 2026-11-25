@@ -1,9 +1,9 @@
 // @vitest-environment happy-dom
 
-import { history, undo } from "@codemirror/commands";
+import { defaultKeymap, history, undo } from "@codemirror/commands";
 import { ensureSyntaxTree } from "@codemirror/language";
 import { EditorSelection, EditorState, type SelectionRange } from "@codemirror/state";
-import { type EditorView, runScopeHandlers } from "@codemirror/view";
+import { EditorView, keymap, runScopeHandlers } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -600,6 +600,59 @@ describe("continueListOnEnter — empty marker line exits the list", () => {
   });
 });
 
+// A bare marker line whose item owns a body on the next lines is not an empty
+// item: exiting would delete the marker and orphan the body. Enter continues the
+// list from the marker-line end instead, through the WHOLE Enter stack — the
+// upstream markdownKeymap Enter (insertNewlineContinueMarkup) deletes the marker
+// line for these inputs, so Quoll must not fall through to it.
+describe("continueListOnEnter — bare marker line that owns a body below", () => {
+  function pressEnter(doc: string, caret: number, filler = ""): string {
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    // A plain EditorView (not settledMount): with a large `filler` the initial
+    // parse stops short of the caret, so listItemAt works on a tree cut at the
+    // caret line — the partial-parse state the empty check must not trust.
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc: filler + doc,
+        extensions: [quollMarkdownLanguage(), listContinuationKeymap(), keymap.of(defaultKeymap)],
+      }),
+    });
+    try {
+      view.dispatch({ selection: EditorSelection.cursor(filler.length + caret) });
+      runScopeHandlers(view, new KeyboardEvent("keydown", { key: "Enter" }), "editor");
+      return view.state.doc.sliceString(filler.length);
+    } finally {
+      view.destroy();
+    }
+  }
+
+  it.each([
+    ["- \n  body", 2, "- \n- \n  body"],
+    ["1.\n   body", 2, "1.\n2. \n   body"],
+    ["-\n  text", 1, "-\n- \n  text"],
+    ["- a\n-\n  text", 5, "- a\n-\n- \n  text"],
+    ["-\n  - child", 1, "-\n- \n  - child"],
+    ["- a\n-\n  ```\n  code\n  ```", 5, "- a\n-\n- \n  ```\n  code\n  ```"],
+  ])("Enter on %j continues the list", (doc, caret, expected) => {
+    expect(pressEnter(doc, caret)).toBe(expected);
+  });
+
+  it("keeps the marker when the tree is parsed only up to the caret line", () => {
+    const filler = "para line of some text here\n\n".repeat(1000);
+    expect(pressEnter("-\n  text", 1, filler)).toBe("-\n- \n  text");
+  });
+
+  it.each([
+    ["- ", 2, ""],
+    ["-", 1, ""],
+    ["- \n- b", 2, "\n- b"],
+  ])("a truly empty item %j still exits the list", (doc, caret, expected) => {
+    expect(pressEnter(doc, caret)).toBe(expected);
+  });
+});
+
 describe("continueListOnEnter — fall-through (returns false, doc unchanged)", () => {
   function expectNoop(doc: string, caret: number, opts?: { readOnly?: boolean }) {
     const view = mount(doc, at(caret), opts);
@@ -613,16 +666,6 @@ describe("continueListOnEnter — fall-through (returns false, doc unchanged)", 
 
   it("plain paragraph", () => {
     expectNoop("just prose", 4);
-  });
-
-  // A bare marker line whose item owns a body on the next lines is not an empty
-  // item: exiting the list here would delete the marker and orphan the body.
-  it.each([
-    ["- a\n-\n  text", 5],
-    ["-\n  - child", 1],
-    ["- a\n-\n  ```\n  code\n  ```", 5],
-  ])("a bare marker line that owns a body below (%j)", (doc, caret) => {
-    expectNoop(doc, caret);
   });
 
   it("inside a fenced code body", () => {

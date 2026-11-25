@@ -3,7 +3,8 @@
 // item Enter inserts the next marker (bullet glyph preserved; ordered number
 // incremented and delimiter preserved; a task continues as an unchecked `- [ ]`)
 // and, for an ordered list, renumbers the following siblings so the run stays
-// sequential. On an EMPTY marker line Enter removes the marker, exiting the list.
+// sequential. On an EMPTY marker line Enter removes the marker, exiting the list;
+// a bare marker line that owns a body below (`-\n  text`) continues instead.
 //
 // TRIGGER / DEFER: the command runs on EVERY Enter, so the hot path stays cheap
 // (a plain-paragraph caret is rejected after a caret-line-bounded parse). It
@@ -34,6 +35,7 @@ import { type ChangeSpec, EditorSelection, type EditorState, Prec } from "@codem
 import { type Command, keymap } from "@codemirror/view";
 
 import { leadingFrontmatterEnd } from "../frontmatter/detect.js";
+import { markerLineContent } from "../task-checkbox/task-marker-shape.js";
 import { findTaskMarker } from "./list-geometry.js";
 import {
   contentColumnFromMarkerLine,
@@ -126,9 +128,19 @@ export const continueListOnEnter: Command = (view) => {
   if (!ordered && !bullet) {
     return false;
   }
-  const content = mark.nextSibling;
   const indent = state.doc.sliceString(caretLine.from, mark.from);
-  if (isEmptyItem(state, item)) {
+  // Re-resolve from an EOF-bounded tree: the caret-bounded `item` sees neither
+  // its own lines below the caret nor the following siblings.
+  const eofItem = resolveAtEof(state, mark.from);
+  const lineContent = markerLineContent(state, mark);
+  // A bare marker line is empty only if the item ends on it, and the caret-bounded
+  // tree cuts `item.to` at the caret line — so judge it on the EOF tree. A budget
+  // miss cannot tell empty from body-owning: keep the list rather than delete.
+  const empty =
+    lineContent === null
+      ? eofItem !== null && isEmptyItem(state, eofItem)
+      : isEmptyItem(state, item);
+  if (empty) {
     // Empty item → remove the whole marker line, exiting the list. Uniform across
     // nesting: no outdent (outdentListItem shifts whitespace only and would leave
     // a duplicate ordered number at the promoted level — Codex review 2026-07-11).
@@ -140,14 +152,13 @@ export const continueListOnEnter: Command = (view) => {
     });
     return true;
   }
-  // content is non-null here (isEmptyItem covers the null case).
-  const contentNode = content as SyntaxNode;
-  const isTask = contentNode.name === "Task";
-  // Continuable content starts after the checkbox for a task, else at content.from.
+  // A bare marker line that owns a body below continues from the line end (the
+  // body moves under the new item; nothing is deleted). Otherwise continuable
+  // content starts after the checkbox for a task, else at the content's start.
   // A caret before it (indent / marker region `1|. a`, or inside `[|x]`) must not
   // split the marker — defer to the default Enter.
-  const taskMarker = isTask ? findTaskMarker(state, contentNode) : null;
-  const contentStart = taskMarker !== null ? taskMarker.to : contentNode.from;
+  const taskMarker = lineContent?.name === "Task" ? findTaskMarker(state, lineContent) : null;
+  const contentStart = lineContent === null ? caretLine.to : (taskMarker?.to ?? lineContent.from);
   if (head < contentStart) {
     return false;
   }
@@ -158,10 +169,7 @@ export const continueListOnEnter: Command = (view) => {
   const insert = `\n${indent}${markerStr}`;
   const caret = head + insert.length;
   const changes: ChangeSpec[] = [{ from: head, insert }];
-  // Re-resolve from an EOF-bounded tree: the caret-bounded `item` above sees
-  // neither its own lines below the caret nor the following siblings. All edits
-  // below sit past `head`, so the caret is unaffected.
-  const eofItem = resolveAtEof(state, mark.from);
+  // All edits below sit past `head`, so the caret is unaffected.
   if (eofItem !== null) {
     // The tail can add marker padding. Use the complete new line so the
     // item's own lines move to the column where the split content begins.
