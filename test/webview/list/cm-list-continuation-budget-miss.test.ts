@@ -66,3 +66,21 @@ describe("continueListOnEnter — bare-marker empty check under a budget miss", 
     expect(pressEnter(doc, 1)).toBe("-\n- \n  text\n\npara");
   });
 });
+
+describe("continueListOnEnter — EOF budget miss across a marker-width change", () => {
+  // `9.` → `10. ` moves the content column, so the body must shift with it.
+  // Without the EOF tree the shift cannot be computed: Enter must leave the
+  // doc untouched (not insert `10. ` and orphan the body as a paragraph).
+  it.each([
+    ["bare marker owning a body", "9.\n   body\n\npara", 2],
+    ["item with content and a body", "9. a\n   body", 4],
+  ])("does not orphan the body (%s)", (_label, doc, caret) => {
+    missWhen = (state, upto) => upto >= state.doc.length;
+    expect(pressEnter(doc, caret)).toBe(doc);
+  });
+
+  it("still inserts when the content column does not move (`- a`)", () => {
+    missWhen = (state, upto) => upto >= state.doc.length;
+    expect(pressEnter("- a\n  body", 3)).toBe("- a\n- \n  body");
+  });
+});

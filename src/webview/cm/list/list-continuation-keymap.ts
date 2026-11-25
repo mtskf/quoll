@@ -59,8 +59,9 @@ import {
  *  `renumberRun` needs to walk. Fail-closed: a null `ensureSyntaxTree` means the
  *  parse did not reach `upto` within budget, so the list tail may be unparsed —
  *  returning null here makes the caller skip renumber entirely (the insert still
- *  lands; the tail keeps its original numbers) rather than renumber only the
- *  visible prefix (a split-brain run, worse than none). */
+ *  lands unless it would move the content column; the tail keeps its original
+ *  numbers) rather than renumber only the visible prefix (a split-brain run,
+ *  worse than none). */
 function resolveAtEof(
   state: EditorState,
   markFrom: number,
@@ -172,19 +173,29 @@ export const continueListOnEnter: Command = (view) => {
   // caret-bounded `item` sees neither its own lines below the caret nor the
   // following siblings.
   const eofItem = resolveAtEof(state, mark.from);
+  // The tail can add marker padding. Use the complete new line so the item's
+  // own lines move to the column where the split content begins.
+  const tail = state.doc.sliceString(head, caretLine.to);
+  const newContentCol = contentColumnFromMarkerLine(
+    indent + markerStr + tail,
+    indent.length + markerStr.indexOf(" "),
+    state.tabSize
+  );
+  if (
+    eofItem === null &&
+    newContentCol !==
+      contentColumnFromMarkerLine(caretLine.text, mark.to - caretLine.from, state.tabSize)
+  ) {
+    // Budget miss and the new marker moves the content column (`9.` → `10. `):
+    // inserting without shifting the body would drop it out of the list, so do
+    // nothing — but consume Enter, since upstream would strip the marker.
+    return true;
+  }
   const insert = `\n${indent}${markerStr}`;
   const caret = head + insert.length;
   const changes: ChangeSpec[] = [{ from: head, insert }];
   // All edits below sit past `head`, so the caret is unaffected.
   if (eofItem !== null) {
-    // The tail can add marker padding. Use the complete new line so the
-    // item's own lines move to the column where the split content begins.
-    const tail = state.doc.sliceString(head, caretLine.to);
-    const newContentCol = contentColumnFromMarkerLine(
-      indent + markerStr + tail,
-      indent.length + markerStr.indexOf(" "),
-      state.tabSize
-    );
     changes.push(...shiftOwnLines(state, eofItem, newContentCol));
   }
   if (ordered) {
