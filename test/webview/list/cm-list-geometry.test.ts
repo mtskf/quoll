@@ -457,10 +457,28 @@ describe("task marker on the line after the ListMark — no checkbox geometry", 
     expect(taskGeom("- a\n\n  [ ] b")).toBeNull();
   });
 
-  // Deliberately no checkbox for the ordered and blockquoted shapes either, so
-  // the checkbox stays in lock-step with the hang (which treats them as empty).
-  it.each(["1.\n   [ ] foo", "> -\n>   [ ] foo"])("%j resolves no task geometry", (doc) => {
-    expect(taskGeom(doc)).toBeNull();
+  it("blockquoted `> -\n>   [ ] foo` resolves no task geometry", () => {
+    expect(taskGeom("> -\n>   [ ] foo")).toBeNull();
+  });
+
+  // Ordered: the replace is only the `[ ]` (foldFrom = TaskMarker.from), a
+  // single-line span, so a Task off the marker line keeps its checkbox — the
+  // same treatment main (@lezer/markdown 1.6.4) gave `1. a\n\n   [ ] b`. 1.6.4
+  // parsed `1.\n   [ ] foo` as a plain Paragraph (no checkbox); 1.8.1 emits a
+  // Task, which GFM agrees with (the item's first block is the task paragraph).
+  // Lock-step with the hang: the checkbox sits on line 2, not beside the
+  // marker, so the item hangs like a bare `1.` and is not a task parent.
+  it.each([
+    ["1. a\n\n   [ ] b", 9],
+    ["1.\n   [ ] foo", 6],
+  ])("ordered %j keeps a single-line checkbox off the marker line", (doc, from) => {
+    expect(taskGeom(doc)).toMatchObject({ isBullet: false, taskMarkerFrom: from, foldFrom: from });
+    const { state, item } = listItemAt(doc, 0);
+    expect(isTaskItem(state, item)).toBe(false);
+  });
+
+  it("ordered `1.\n   [ ] foo` hangs like a bare `1.`", () => {
+    expect(hangOfTop("1.\n   [ ] foo")).toEqual(hangOfTop("1."));
   });
 
   // Hang lock-step (F7): no checkbox is drawn, so the hang must not reserve the

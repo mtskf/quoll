@@ -110,25 +110,27 @@ export function resolveTaskMarkerGeometry(
   }
   const listItem = task.parent;
   const listMark = listItem !== null && listItem.name === "ListItem" ? listItem.firstChild : null;
-  const hasListMark = listMark !== null && listMark.name === "ListMark";
-  // A `Task` that is not the item's marker-line content (`-\n  [ ] foo`, or a
-  // later paragraph `- a\n\n  [ ] b`) renders no checkbox: the replace
-  // [ListMark.from, TaskMarker.to) would span a line break, which CodeMirror
-  // refuses — dropping every checkbox in the viewport. Same rule as the
-  // content-less arm (isContentlessTaskParagraph).
-  if (hasListMark && markerLineContent(state, listMark)?.from !== task.from) {
-    return null;
-  }
-  const listMarkFrom = hasListMark ? listMark.from : marker.from;
+  const listMarkFrom =
+    listMark !== null && listMark.name === "ListMark" ? listMark.from : marker.from;
   const isBullet =
     listItem !== null && listItem.name === "ListItem" && listItem.parent?.name === "BulletList";
+  const foldFrom = isBullet ? listMarkFrom : marker.from;
+  // The checkbox replaces [foldFrom, TaskMarker.to). When that span crosses a
+  // line break — a bullet Task not on the marker line (`-\n  [ ] foo`, or a
+  // later paragraph `- a\n\n  [ ] b`) — render no checkbox: CodeMirror refuses
+  // such a replace and drops every checkbox in the viewport. An ordered Task
+  // off the marker line (`1. a\n\n   [ ] b`) replaces only its own `[ ]`, a
+  // single-line span, so it keeps its checkbox and Mod-L toggle.
+  if (state.doc.lineAt(foldFrom).number !== state.doc.lineAt(marker.to).number) {
+    return null;
+  }
   return {
     listMarkFrom,
     taskMarkerFrom: marker.from,
     taskMarkerTo: marker.to,
     checked: marker.checked,
     isBullet,
-    foldFrom: isBullet ? listMarkFrom : marker.from,
+    foldFrom,
   };
 }
 
@@ -302,7 +304,11 @@ function enclosingListItem(listItem: SyntaxNode): SyntaxNode | null {
  *  re-base a child one NEST_STEP past the (wide-checkbox) parent's content
  *  column, identically for content-bearing and content-less task parents. */
 export function isTaskItem(state: EditorState, listItem: SyntaxNode): boolean {
-  const content = listItem.firstChild?.nextSibling ?? null;
+  // Marker-line content only, like the hang (ownMarkerWidth): an ordered Task on
+  // a later line (`1.\n   [ ] foo`) draws its checkbox there, not beside the
+  // marker, so it must not re-base the item's children past a checkbox.
+  const listMark = listItem.firstChild;
+  const content = listMark === null ? null : markerLineContent(state, listMark);
   if (content === null) {
     return false;
   }
