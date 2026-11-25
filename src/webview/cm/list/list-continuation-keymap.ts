@@ -84,6 +84,27 @@ function resolveListItemThrough(
   return item;
 }
 
+/** Whether the bare marker at `markFrom` (on line `lineNo`) heads an EMPTY item.
+ *  The item ends on its marker line unless it owns a body, and the caret-bounded
+ *  tree cuts `item.to` at that line, so it cannot answer this. A bare item may
+ *  start with at most one blank line — the marker line itself (CommonMark) — so
+ *  the NEXT line decides. No next line, or a blank one, means no body: empty
+ *  without parsing (Lezer 1.8.1 pulls `9.\n\n   body` into the item, CommonMark
+ *  does not). Otherwise parse only through the next line, never to EOF (a large
+ *  unparsed tail must not cost the budget); a budget miss cannot tell empty from
+ *  body-owning, so it keeps the list. */
+function bareItemIsEmpty(state: EditorState, markFrom: number, lineNo: number): boolean {
+  if (lineNo === state.doc.lines) {
+    return true;
+  }
+  const next = state.doc.line(lineNo + 1);
+  if (next.text.trim() === "") {
+    return true;
+  }
+  const item = resolveListItemThrough(state, markFrom, next.to);
+  return item !== null && isEmptyItem(state, item);
+}
+
 export const continueListOnEnter: Command = (view) => {
   const { state } = view;
   if (state.readOnly) {
@@ -137,15 +158,10 @@ export const continueListOnEnter: Command = (view) => {
   }
   const indent = state.doc.sliceString(caretLine.from, mark.from);
   const lineContent = markerLineContent(state, mark);
-  // A bare marker line is empty only if the item ends on it, and the caret-bounded
-  // tree cuts `item.to` at the caret line. A bare item may start with at most one
-  // blank line (CommonMark), so the NEXT line decides whether it owns a body —
-  // parse only that far, never to EOF (a large unparsed tail must not cost the
-  // budget). A budget miss cannot tell empty from body-owning: keep the list.
-  const nextLineEnd = state.doc.line(Math.min(caretLine.number + 1, state.doc.lines)).to;
-  const judged =
-    lineContent === null ? resolveListItemThrough(state, mark.from, nextLineEnd) : item;
-  const empty = judged !== null && isEmptyItem(state, judged);
+  const empty =
+    lineContent === null
+      ? bareItemIsEmpty(state, mark.from, caretLine.number)
+      : isEmptyItem(state, item);
   if (empty) {
     // Empty item → remove the whole marker line, exiting the list. Uniform across
     // nesting: no outdent (outdentListItem shifts whitespace only and would leave

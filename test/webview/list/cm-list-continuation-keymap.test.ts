@@ -681,6 +681,12 @@ describe("continueListOnEnter — bare marker line that owns a body below", () =
     ["- ", 2, ""],
     ["-", 1, ""],
     ["- \n- b", 2, "\n- b"],
+    // A blank line right after a bare marker ends the item (CommonMark: a bare
+    // item starts with at most one blank line), so the body below is a separate
+    // paragraph and stays untouched — even though Lezer 1.8.1 parses it inside
+    // the item. Continuing there would detach it as indented code.
+    ["9.\n\n   body", 2, "\n\n   body"],
+    ["-\n\n  body", 1, "\n\n  body"],
   ])("a truly empty item %j still exits the list", (doc, caret, expected) => {
     expect(pressEnter(doc, caret)).toBe(expected);
   });
