@@ -54,15 +54,19 @@ import {
   type SyntaxNode,
 } from "./list-tree.js";
 
-/** Re-resolve `item` from an EOF-bounded tree: `listItemAt`'s caret-line-bounded
- *  tree does not contain the siblings below the caret, which `renumberRun`
- *  needs to walk. Fail-closed: a null `ensureSyntaxTree` means the parse did
- *  not reach EOF within budget, so the list tail may be unparsed — returning
- *  null here makes the caller skip renumber entirely (the insert still lands;
- *  the tail keeps its original numbers) rather than renumber only the visible
- *  prefix (a split-brain run, worse than none). */
-function resolveAtEof(state: EditorState, markFrom: number): SyntaxNode | null {
-  const tree = ensureSyntaxTree(state, state.doc.length, 50);
+/** Re-resolve `item` from a tree parsed to `upto` (default EOF): `listItemAt`'s
+ *  caret-line-bounded tree does not contain the siblings below the caret, which
+ *  `renumberRun` needs to walk. Fail-closed: a null `ensureSyntaxTree` means the
+ *  parse did not reach `upto` within budget, so the list tail may be unparsed —
+ *  returning null here makes the caller skip renumber entirely (the insert still
+ *  lands; the tail keeps its original numbers) rather than renumber only the
+ *  visible prefix (a split-brain run, worse than none). */
+function resolveAtEof(
+  state: EditorState,
+  markFrom: number,
+  upto = state.doc.length
+): SyntaxNode | null {
+  const tree = ensureSyntaxTree(state, upto, 50);
   if (tree === null) {
     // Dev-only signal (QUOLL_PERF-gated, prod byte-identical): a budget miss on a
     // large doc is a retryable no-op, not "nothing to renumber" — mirrors the same
@@ -129,17 +133,15 @@ export const continueListOnEnter: Command = (view) => {
     return false;
   }
   const indent = state.doc.sliceString(caretLine.from, mark.from);
-  // Re-resolve from an EOF-bounded tree: the caret-bounded `item` sees neither
-  // its own lines below the caret nor the following siblings.
-  const eofItem = resolveAtEof(state, mark.from);
   const lineContent = markerLineContent(state, mark);
   // A bare marker line is empty only if the item ends on it, and the caret-bounded
-  // tree cuts `item.to` at the caret line — so judge it on the EOF tree. A budget
-  // miss cannot tell empty from body-owning: keep the list rather than delete.
-  const empty =
-    lineContent === null
-      ? eofItem !== null && isEmptyItem(state, eofItem)
-      : isEmptyItem(state, item);
+  // tree cuts `item.to` at the caret line. A bare item may start with at most one
+  // blank line (CommonMark), so the NEXT line decides whether it owns a body —
+  // parse only that far, never to EOF (a large unparsed tail must not cost the
+  // budget). A budget miss cannot tell empty from body-owning: keep the list.
+  const nextLineEnd = state.doc.line(Math.min(caretLine.number + 1, state.doc.lines)).to;
+  const judged = lineContent === null ? resolveAtEof(state, mark.from, nextLineEnd) : item;
+  const empty = judged !== null && isEmptyItem(state, judged);
   if (empty) {
     // Empty item → remove the whole marker line, exiting the list. Uniform across
     // nesting: no outdent (outdentListItem shifts whitespace only and would leave
@@ -166,6 +168,10 @@ export const continueListOnEnter: Command = (view) => {
   if (markerStr === null) {
     return false;
   }
+  // Re-resolve from an EOF-bounded tree, only now that an edit will land: the
+  // caret-bounded `item` sees neither its own lines below the caret nor the
+  // following siblings.
+  const eofItem = resolveAtEof(state, mark.from);
   const insert = `\n${indent}${markerStr}`;
   const caret = head + insert.length;
   const changes: ChangeSpec[] = [{ from: head, insert }];
