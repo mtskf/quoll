@@ -1,10 +1,12 @@
 // @vitest-environment happy-dom
-// A task marker on the line AFTER its ListMark (`-\n  [ ] foo`, `-\n  [ ]` —
-// the @lezer/markdown >= 1.7.2 shape of an item whose marker line is empty).
-// The checkbox replace [ListMark.from, TaskMarker.to) would span a line break,
-// which the decoration orchestrator rejects by dropping the WHOLE checkbox
-// provider — so every other checkbox in the viewport reverted to raw source.
-// Contract: such an item renders no checkbox, and its siblings keep theirs.
+// A Task below its item's ListMark line — `-\n  [ ] foo` (the @lezer/markdown
+// >= 1.7.2 shape of an item whose marker line is empty), a later paragraph
+// `- a\n\n  [ ] b`, or the ordered `1. a\n\n   [ ] b`. One fold rule covers them
+// all: the checkbox replaces only the Task's own `[ ]` (the bullet folds in only
+// when it shares the line), so it renders, toggles with Mod-L, and the bullet
+// keeps its dot. A replace that crossed a line break would make the decoration
+// orchestrator drop the WHOLE checkbox provider (every checkbox in the viewport
+// reverted to raw source), so the provider must never emit one — pinned below.
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorSelection, EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
@@ -14,14 +16,28 @@ import { taskCheckboxReveal } from "../../../src/webview/cm/task-checkbox/task-c
 import { fullTree } from "../helpers/full-tree.js";
 import { settledMount } from "../helpers/settled-view.js";
 
-const DOCS = [
-  "- [ ] other\n\n-\n  [ ] foo\n\npara",
-  "- [ ] other\n\n-\n  [ ]\n\npara",
-  // A Task in a later paragraph of the item, not on its marker line.
-  "- [ ] other\n\n- a\n\n  [ ] b\n\npara",
+function mount(doc: string, caret: number) {
+  const parent = document.createElement("div");
+  document.body.appendChild(parent);
+  return settledMount({
+    parent,
+    state: EditorState.create({
+      doc,
+      selection: EditorSelection.single(caret),
+      extensions: [markdown({ base: markdownLanguage }), quollSyntaxReveal()],
+    }),
+  });
+}
+
+// [doc, rendered checkboxes]. The content-less `-\n  [ ]` is a plain paragraph
+// (no Task node), so only the sibling renders there.
+const DOCS: Array<[string, number]> = [
+  ["- [ ] other\n\n-\n  [ ] foo\n\npara", 2],
+  ["- [ ] other\n\n-\n  [ ]\n\npara", 1],
+  ["- [ ] other\n\n- a\n\n  [ ] b\n\npara", 2],
 ];
 
-describe("task marker on the line after the ListMark", () => {
+describe("task marker below the ListMark line", () => {
   it.each(DOCS)("provider emits no replace crossing a line break (%j)", (doc) => {
     const state = EditorState.create({
       doc,
@@ -41,62 +57,45 @@ describe("task marker on the line after the ListMark", () => {
     }
   });
 
-  it.each(DOCS)("the sibling `- [ ] other` still renders its checkbox (%j)", (doc) => {
-    const parent = document.createElement("div");
-    document.body.appendChild(parent);
-    const view = settledMount({
-      parent,
-      state: EditorState.create({
-        doc,
-        selection: EditorSelection.single(doc.length),
-        extensions: [markdown({ base: markdownLanguage }), quollSyntaxReveal()],
-      }),
-    });
+  it.each(DOCS)("the sibling `- [ ] other` keeps its checkbox (%j)", (doc, count) => {
+    const view = mount(doc, doc.length);
     try {
       // Re-run the decoration build against the settled tree.
       view.dispatch({ selection: EditorSelection.single(doc.length - 1) });
-      expect(view.dom.querySelectorAll(".quoll-task-checkbox").length).toBe(1);
+      expect(view.dom.querySelectorAll(".quoll-task-checkbox").length).toBe(count);
     } finally {
       view.destroy();
     }
   });
 });
 
-// An ORDERED Task off the marker line replaces only its own `[ ]` (the `N. `
-// stays visible), a single-line span — so unlike the bullet shapes above it
-// keeps the checkbox and the Mod-L toggle it had on main (@lezer/markdown 1.6.4).
-describe("ordered Task in a later paragraph (`1. a\\n\\n   [ ] b`)", () => {
-  const doc = "1. a\n\n   [ ] b\n\npara";
+// Bullet and ordered alike: the off-line Task renders its checkbox and Mod-L
+// toggles it (the ordered shape had both on main, @lezer/markdown 1.6.4).
+describe.each([
+  ["-\n  [ ] foo\n\npara", "-\n  [x] foo\n\npara"],
+  ["- a\n\n  [ ] b\n\npara", "- a\n\n  [x] b\n\npara"],
+  ["1. a\n\n   [ ] b\n\npara", "1. a\n\n   [x] b\n\npara"],
+])("Task below the marker line (%j)", (doc, toggled) => {
   const marker = doc.indexOf("[ ]");
 
-  function mount(caret: number) {
-    const parent = document.createElement("div");
-    document.body.appendChild(parent);
-    return settledMount({
-      parent,
-      state: EditorState.create({
-        doc,
-        selection: EditorSelection.single(caret),
-        extensions: [markdown({ base: markdownLanguage }), quollSyntaxReveal()],
-      }),
-    });
-  }
-
-  it("renders its checkbox (caret off the task line)", () => {
-    const view = mount(doc.length);
+  it("renders its checkbox, and a bullet keeps its dot (caret off the task line)", () => {
+    const view = mount(doc, doc.length);
     try {
       view.dispatch({ selection: EditorSelection.single(doc.length - 1) });
       expect(view.dom.querySelectorAll(".quoll-task-checkbox").length).toBe(1);
+      expect(view.dom.querySelectorAll(".quoll-bullet-marker").length).toBe(
+        doc.startsWith("-") ? 1 : 0
+      );
     } finally {
       view.destroy();
     }
   });
 
   it("Mod-L toggle at a caret on the task line checks it", () => {
-    const view = mount(marker + 4);
+    const view = mount(doc, marker + 4);
     try {
       expect(toggleTaskCheckboxAtCaret(view)).toBe(true);
-      expect(view.state.doc.toString()).toBe("1. a\n\n   [x] b\n\npara");
+      expect(view.state.doc.toString()).toBe(toggled);
     } finally {
       view.destroy();
     }

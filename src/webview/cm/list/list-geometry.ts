@@ -84,22 +84,27 @@ export type TaskMarkerGeometry = {
   /** End of the `TaskMarker` (taskMarkerFrom + 3). */
   taskMarkerTo: number;
   checked: boolean;
-  /** True when the wrapping list is a `BulletList` — the `- ` folds into the
-   *  checkbox. False for `OrderedList` / grammar drift — the visible prefix
-   *  stays, only `[ ]` folds. */
-  isBullet: boolean;
-  /** The byte from which the RENDERED marker prefix begins: `listMarkFrom` for
-   *  a bullet task (fold `- `), `taskMarkerFrom` otherwise (keep `N. `
-   *  visible). The checkbox replace-start AND the hang prefix-column both
-   *  derive from this single field — the F7 contract. */
+  /** True when the checkbox swallows the bullet: a `BulletList` item whose
+   *  `ListMark` sits on the TaskMarker's own line, so `- [ ]` folds into one
+   *  checkbox (and the bullet gets no dot). False for `OrderedList` / grammar
+   *  drift (keep `N. ` visible), and for a bullet Task on a later line than its
+   *  marker (`-\n  [ ] foo`, `- a\n\n  [ ] b`): there the bullet stays a bullet
+   *  and the checkbox replaces only its own `[ ]`, like an ordered task. */
+  foldsListMark: boolean;
+  /** The byte from which the RENDERED marker prefix begins: `listMarkFrom` when
+   *  `foldsListMark`, `taskMarkerFrom` otherwise. The checkbox replace-start AND
+   *  the hang prefix-column both derive from this single field — the F7
+   *  contract. Always on the TaskMarker's line, so the replace never spans a
+   *  line break. */
   foldFrom: number;
 };
 
 /** Resolve the rendered task-marker geometry for a `Task` node, or null when
  *  it has no valid 3-byte marker (then neither consumer renders a checkbox /
- *  task hang). The fold policy degrades conservatively: a valid marker with a
- *  non-BulletList (ordered) or malformed wrapper keeps the visible prefix
- *  (`foldFrom = taskMarkerFrom`), exactly the pre-PR2 reveal fallback. */
+ *  task hang). One fold rule: the checkbox replaces the TaskMarker's own `[ ]`,
+ *  widened back to the bullet `ListMark` only when that mark is on the same
+ *  line. Everything else — ordered, malformed wrapper, a bullet Task below its
+ *  marker line — keeps the visible prefix (`foldFrom = taskMarkerFrom`). */
 export function resolveTaskMarkerGeometry(
   state: EditorState,
   task: SyntaxNode
@@ -110,27 +115,22 @@ export function resolveTaskMarkerGeometry(
   }
   const listItem = task.parent;
   const listMark = listItem !== null && listItem.name === "ListItem" ? listItem.firstChild : null;
-  const listMarkFrom =
-    listMark !== null && listMark.name === "ListMark" ? listMark.from : marker.from;
-  const isBullet =
-    listItem !== null && listItem.name === "ListItem" && listItem.parent?.name === "BulletList";
-  const foldFrom = isBullet ? listMarkFrom : marker.from;
-  // The checkbox replaces [foldFrom, TaskMarker.to). When that span crosses a
-  // line break — a bullet Task not on the marker line (`-\n  [ ] foo`, or a
-  // later paragraph `- a\n\n  [ ] b`) — render no checkbox: CodeMirror refuses
-  // such a replace and drops every checkbox in the viewport. An ordered Task
-  // off the marker line (`1. a\n\n   [ ] b`) replaces only its own `[ ]`, a
-  // single-line span, so it keeps its checkbox and Mod-L toggle.
-  if (state.doc.lineAt(foldFrom).number !== state.doc.lineAt(marker.to).number) {
-    return null;
-  }
+  const validMark = listMark !== null && listMark.name === "ListMark";
+  const listMarkFrom = validMark ? listMark.from : marker.from;
+  // `foldFrom` is either the 3-byte `[ ]` or a ListMark on the same line, so the
+  // replace cannot cross a line break (CodeMirror refuses such a replace and
+  // drops every checkbox in the viewport) — no separate span guard is needed.
+  const foldsListMark =
+    validMark &&
+    listItem?.parent?.name === "BulletList" &&
+    listMark.from >= state.doc.lineAt(marker.from).from;
   return {
     listMarkFrom,
     taskMarkerFrom: marker.from,
     taskMarkerTo: marker.to,
     checked: marker.checked,
-    isBullet,
-    foldFrom,
+    foldsListMark,
+    foldFrom: foldsListMark ? listMarkFrom : marker.from,
   };
 }
 
@@ -159,14 +159,16 @@ export function resolveContentlessTaskMarkerGeometry(
     return null;
   }
   const middle = state.doc.sliceString(content.from + 1, content.from + 2);
-  const isBullet = listItem.parent?.name === "BulletList";
+  // `content` is marker-line content (isContentlessTaskParagraph), so the
+  // ListMark always shares its line: the bullet folds whenever the list is one.
+  const foldsListMark = listItem.parent?.name === "BulletList";
   return {
     listMarkFrom: listMark.from,
     taskMarkerFrom: content.from,
     taskMarkerTo: content.to,
     checked: middle === "x" || middle === "X",
-    isBullet,
-    foldFrom: isBullet ? listMark.from : content.from,
+    foldsListMark,
+    foldFrom: foldsListMark ? listMark.from : content.from,
   };
 }
 

@@ -80,24 +80,28 @@ export const bulletMarkerReveal: DecorationProvider = {
           if (item === null || item.name !== "ListItem" || item.parent?.name !== "BulletList") {
             return;
           }
-          // A rendered bullet task's `- [ ]` is owned by taskCheckboxReveal (its
-          // checkbox replace starts at this same ListMark.from). Route the
+          // A rendered bullet task's `- [ ]` is owned by taskCheckboxReveal when its
+          // checkbox replace starts at this same ListMark.from (foldsListMark). Route the
           // ownership check through the shared geometry resolver — the single
           // source of truth for the bullet/ordered fold policy — so a dot here
           // never collides with the checkbox and a future grammar change
           // surfaces in one place. resolveTaskMarkerGeometry returns non-null
-          // with isBullet only for a VALID-marker bullet task; an invalid-marker
+          // with foldsListMark only for a VALID-marker same-line bullet task; a Task
+          // below the marker line keeps its dot, and an invalid-marker
           // Task on a stale tree renders no checkbox, so the ListMark is free and
           // legitimately gets its dot.
           const content = node.node.nextSibling;
-          if (content?.name === "Task" && resolveTaskMarkerGeometry(ctx.state, content)?.isBullet) {
+          if (
+            content?.name === "Task" &&
+            resolveTaskMarkerGeometry(ctx.state, content)?.foldsListMark
+          ) {
             return;
           }
           // Content-less bullet task `- [ ]`: no Task node, but the checkbox reveal
           // still replaces [ListMark.from, TaskMarker.to) — swallowing this `-`. Skip
           // the dot so it never collides with the checkbox. (Ordered `1. [ ]` is
-          // isBullet:false → not skipped here; ordered lists never dot anyway.)
-          if (resolveContentlessTaskMarkerGeometry(ctx.state, item)?.isBullet) {
+          // foldsListMark:false → not skipped here; ordered lists never dot anyway.)
+          if (resolveContentlessTaskMarkerGeometry(ctx.state, item)?.foldsListMark) {
             return;
           }
           const line = ctx.state.doc.lineAt(node.from);
