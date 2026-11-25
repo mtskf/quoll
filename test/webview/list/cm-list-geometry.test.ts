@@ -450,6 +450,24 @@ describe("task marker on the line after the ListMark — no checkbox geometry", 
     expect(resolveContentlessTaskMarkerGeometry(state, item)).toBeNull();
     expect(isTaskItem(state, item)).toBe(false);
   });
+
+  // A Task in a LATER paragraph of the item (not the marker-line content) would
+  // also stretch the replace across lines.
+  it("a Task in a later paragraph (`- a\\n\\n  [ ] b`) resolves no task geometry", () => {
+    expect(taskGeom("- a\n\n  [ ] b")).toBeNull();
+  });
+
+  // Deliberately no checkbox for the ordered and blockquoted shapes either, so
+  // the checkbox stays in lock-step with the hang (which treats them as empty).
+  it.each(["1.\n   [ ] foo", "> -\n>   [ ] foo"])("%j resolves no task geometry", (doc) => {
+    expect(taskGeom(doc)).toBeNull();
+  });
+
+  // Hang lock-step (F7): no checkbox is drawn, so the hang must not reserve the
+  // checkbox width either.
+  it.each(["-\n  [ ] foo", "-\n  [ ]"])("%j hangs like a bare `-`", (doc) => {
+    expect(hangOfTop(doc)).toEqual(hangOfTop("-"));
+  });
 });
 
 describe("isBulletItem — structural predicate (BulletList wrapper only)", () => {

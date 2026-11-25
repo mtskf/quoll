@@ -13,7 +13,12 @@ import { taskCheckboxReveal } from "../../../src/webview/cm/task-checkbox/task-c
 import { fullTree } from "../helpers/full-tree.js";
 import { settledMount } from "../helpers/settled-view.js";
 
-const DOCS = ["- [ ] other\n\n-\n  [ ] foo\n\npara", "- [ ] other\n\n-\n  [ ]\n\npara"];
+const DOCS = [
+  "- [ ] other\n\n-\n  [ ] foo\n\npara",
+  "- [ ] other\n\n-\n  [ ]\n\npara",
+  // A Task in a later paragraph of the item, not on its marker line.
+  "- [ ] other\n\n- a\n\n  [ ] b\n\npara",
+];
 
 describe("task marker on the line after the ListMark", () => {
   it.each(DOCS)("provider emits no replace crossing a line break (%j)", (doc) => {
