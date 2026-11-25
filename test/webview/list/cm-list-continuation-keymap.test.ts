@@ -620,7 +620,12 @@ describe("continueListOnEnter — bare marker line that owns a body below", () =
       }),
     });
     try {
-      view.dispatch({ selection: EditorSelection.cursor(filler.length + caret) });
+      const head = filler.length + caret;
+      // Build the caret-bounded tree with a generous budget so the handler's own
+      // 50ms probe hits the cache: otherwise a loaded machine misses the budget,
+      // Enter is delegated, and the test measures wall-clock instead of the contract.
+      ensureSyntaxTree(view.state, view.state.doc.lineAt(head).to, 10_000);
+      view.dispatch({ selection: EditorSelection.cursor(head) });
       runScopeHandlers(view, new KeyboardEvent("keydown", { key: "Enter" }), "editor");
       return view.state.doc.sliceString(filler.length);
     } finally {
