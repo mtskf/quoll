@@ -420,49 +420,74 @@ describe("continueListOnEnter — split keeps the item's children nested", () =>
     }
   });
 
-  // A bare new marker cannot own a lazy line below it (an empty item has no
-  // paragraph to continue). When the lazy paragraph runs to the end of the
-  // document, nothing follows, so the new item goes at the end and the paragraph
-  // stays whole in item 1. No own line lies below, so nothing is shifted.
+  // Enter at a line end whose paragraph continues below (a lazy or an indented
+  // line): the rest of the paragraph goes to the new item, its next line set to
+  // the new content column. Pinned through the real Enter keymap.
+  function enter(doc: string, caret: number): EditorView {
+    const view = mount(doc, at(caret), { withKeymap: true, withHistory: true });
+    runScopeHandlers(
+      view,
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+      "editor"
+    );
+    return view;
+  }
+
   it.each([
-    ["- x\nbody", "- x\nbody\n- ", "body"],
-    ["1. x\nbody", "1. x\nbody\n2. ", "body"],
-    ["  1. x\n    body", "  1. x\n    body\n  2. ", "body"],
-    ["1.   x\n         - y\nlazy", "1.   x\n         - y\nlazy\n2. ", "lazy"],
-    // A trailing newline (blank lines only) does not count as something following.
-    ["- x\nbody\n", "- x\nbody\n- \n", "body"],
-  ])("Enter at the end of `x` in %j adds the item at the document end", (doc, out, lazy) => {
-    const view = mount(doc, at(doc.indexOf("x") + 1));
+    // [doc, caret, result, caret after, text held, start of the item holding it, items per top list]
+    ["- x\nbody", 3, "- x\n- \n  body", 6, "body", 4, [2]],
+    ["- x\nbody\n- y", 3, "- x\n- \n  body\n- y", 6, "body", 4, [3]],
+    ["- x\n      y", 3, "- x\n- \n  y", 6, "y", 4, [2]],
+    ["- x  \nbody", 3, "- x\n-   \n  body", 6, "body", 4, [2]],
+    ["9. x\nbody\n10. y", 4, "9. x\n10. \n    body\n11. y", 9, "body", 5, [3]],
+    ["- x\n\tbody", 3, "- x\n- \n  body", 6, "body", 4, [2]],
+    ["- p\n  - x\nbody\n  - q", 9, "- p\n  - x\n  - \n    body\n  - q", 14, "body", 12, [1]],
+  ] as const)("Enter in %j at %i gives the rest of the paragraph to the new item", (doc, caret, out, after, held, owner, counts) => {
+    const view = enter(doc, caret);
     try {
-      expect(continueListOnEnter(view)).toBe(true);
       expect(view.state.doc.toString()).toBe(out);
-      expect(view.state.selection.main.head).toBe(out.trimEnd().length + 1);
-      expect(blockOwner(out, lazy)).toEqual(["Paragraph", 0]);
-      expect(topLevelItemCounts(out)).toEqual([2]);
+      expect(view.state.selection.main.head).toBe(after);
+      expect(blockOwner(out, held)).toEqual(["Paragraph", owner]);
+      expect(topLevelItemCounts(out)).toEqual([...counts]);
     } finally {
       view.destroy();
     }
   });
 
-  // When anything follows the lazy paragraph, placing the new item there puts it
-  // next to that neighbour, whose ownership would need its own column reasoning;
-  // that placement is unsafe, so Enter makes no edit and the input stays as is.
-  it.each([
-    ["- x\nbody\n- y", "body"],
-    ["1. x\nbody\n2. y", "body"],
-    ["1.   x\n         - y\nlazy\n   2. z", "lazy"],
-    ["- x\nbody\n\n  - child", "body"],
-  ])("Enter at the end of `x` in %j makes no edit (something follows)", (doc, lazy) => {
-    expect(blockOwner(doc, lazy)).toEqual(["Paragraph", 0]);
-    const view = mount(doc, at(doc.indexOf("x") + 1));
+  it("nests the new item among the inner items (`- p` / `- x` / `- q`)", () => {
+    const out = "- p\n  - x\n  - \n    body\n  - q";
+    expect(itemAncestry(out, out.indexOf("q"))).toEqual([out.indexOf("- q"), 0]);
+    expect(itemAncestry(out, out.indexOf("x"))).toEqual([6, 0]);
+  });
+
+  it("one undo restores the paragraph", () => {
+    const view = enter("- x\nbody\n- y", 3);
     try {
-      expect(continueListOnEnter(view)).toBe(true);
-      expect(view.state.doc.toString()).toBe(doc);
+      expect(view.state.doc.toString()).toBe("- x\n- \n  body\n- y");
+      expect(undo(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("- x\nbody\n- y");
     } finally {
       view.destroy();
     }
   });
 
+  // Refused: the rest of the paragraph would not stay one Paragraph of the new
+  // item (it starts a block once it opens an item, or a child list follows), so
+  // Enter makes no edit and leaves the caret.
+  it.each([
+    ["- x\n[a]: b\nbody\n- z", 3],
+    ["- x\n      # h\nbody", 3],
+    ["1.   x\n         - y", 6],
+    ["- x\n2. y", 3],
+  ] as const)("Enter in %j at %i makes no edit", (doc, caret) => {
+    const view = enter(doc, caret);
+    try {
+      expect(view.state.doc.toString()).toBe(doc);
+      expect(view.state.selection.main.head).toBe(caret);
+    } finally {
+      view.destroy();
+    }
+  });
   // An indented continuation line is the item's own, so it moves under the new marker.
   it("moves an indented continuation line under the new item", () => {
     const view = mount("- x\n  body", at(3));

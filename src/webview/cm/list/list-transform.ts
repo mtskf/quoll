@@ -349,11 +349,13 @@ function shiftLine(
 }
 
 /** Move the item's own lines using CommonMark marker padding on both sides
- *  of a split or renumber so nested content keeps its relative indentation. */
+ *  of a split or renumber so nested content keeps its relative indentation.
+ *  Line `skipLine` (none by default) is left alone: its caller sets it itself. */
 export function shiftOwnLines(
   state: EditorState,
   item: SyntaxNode,
-  newContentCol: number
+  newContentCol: number,
+  skipLine = 0
 ): ChangeSpec[] {
   const mark = listMarkOf(item);
   if (mark === null) {
@@ -371,7 +373,7 @@ export function shiftOwnLines(
   }
   const changes: ChangeSpec[] = [];
   for (const lineNo of classifyItemLines(state, item, boundary).ownLines) {
-    const change = shiftLine(state, item, lineNo, boundary, delta);
+    const change = lineNo === skipLine ? null : shiftLine(state, item, lineNo, boundary, delta);
     if (change !== null) {
       changes.push(change);
     }

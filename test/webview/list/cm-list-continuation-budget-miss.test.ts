@@ -119,6 +119,16 @@ describe("continueListOnEnter — checkbox-only task", () => {
   });
 });
 
+describe("continueListOnEnter — paragraph handed to a bare new item", () => {
+  it("makes no edit when the parse that checks the result misses its budget", () => {
+    // Only requests made on the post-edit document miss: the pre-edit parses
+    // succeed, so the command builds the edit and then cannot confirm it.
+    const doc = "- x\nbody\n- y";
+    missWhen = (state) => state.doc.toString() !== doc;
+    expect(pressEnter(doc, 3)).toBe(doc);
+  });
+});
+
 describe("continueListOnEnter — EOF budget miss across a marker-width change", () => {
   // `9.` → `10. ` moves the content column, so the body must shift with it.
   // Without a tree that shows the item closed the shift cannot be computed:

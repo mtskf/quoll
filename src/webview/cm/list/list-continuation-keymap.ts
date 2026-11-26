@@ -9,7 +9,10 @@
 // PARSE BUDGET: an insert that changes the content column, or that puts a bare
 // new marker above a blank line, needs a tree that shows the item closed; without
 // one, Enter is consumed and the document is not changed. A bare marker whose
-// emptiness cannot be judged is consumed the same way.
+// emptiness cannot be judged is consumed the same way. A bare new item that takes
+// the rest of the caret line's paragraph is dispatched only when a parse of the
+// result, bounded by that paragraph's last line, shows the item holding it; a
+// failed check or a missed budget is consumed with no edit too.
 //
 // TRIGGER / DEFER: the command runs on EVERY Enter, so the hot path stays cheap
 // (a plain-paragraph caret is rejected after a caret-line-bounded parse). It
@@ -57,6 +60,7 @@ import {
 import {
   caretInBlockquote,
   caretInCode,
+  indentLength,
   listItemAt,
   listMarkOf,
   type SyntaxNode,
@@ -92,47 +96,8 @@ function resolveListItemThrough(
   return item;
 }
 
-/** The last line of the item's marker-line paragraph when it continues below the
- *  caret line with a lazy line (a line of the paragraph not among `ownLines`,
- *  sorted), else null. A bare marker cannot own a lazy line, so a bare new item
- *  above it would strand it. One pass over `ownLines`, so linear. */
-function lazyParagraphEnd(
-  state: EditorState,
-  item: SyntaxNode,
-  caretLineNo: number,
-  ownLines: readonly number[]
-): number | null {
-  const mark = listMarkOf(item);
-  const content = mark === null ? null : markerLineContent(state, mark);
-  if (content === null) {
-    return null;
-  }
-  const last = state.doc.lineAt(content.to).number;
-  let own = 0;
-  for (const n of ownLines) {
-    if (n > last) {
-      break;
-    }
-    if (n > caretLineNo) {
-      own++;
-    }
-  }
-  return own === last - caretLineNo ? null : last;
-}
-
 /** Blank in Lezer's and CommonMark's sense: ASCII spaces and tabs only. */
 const ASCII_BLANK = /^[ \t]*$/;
-
-/** Whether every line after `lineNo` is blank (the document's tail after a
- *  block). Stops at the first non-blank line, so it never copies the tail. */
-function onlyBlankLinesAfter(state: EditorState, lineNo: number): boolean {
-  for (let n = lineNo + 1; n <= state.doc.lines; n++) {
-    if (!ASCII_BLANK.test(state.doc.line(n).text)) {
-      return false;
-    }
-  }
-  return true;
-}
 
 /** The item to judge a bare marker's emptiness on: one whose tree shows the line
  *  below the marker line, which is all `isEmptyItem` needs (a bare item's body
@@ -177,6 +142,25 @@ function closedItemWithin(state: EditorState, markFrom: number, from: number): S
     }
   }
   return null;
+}
+
+/** Whether, in `after` (the document once the edit lands), the bare item whose
+ *  marker is at `markFrom` holds one Paragraph that starts on the line below the
+ *  marker and ends at `paraTo`. Asked of the parser, bounded by `paraTo`'s line:
+ *  the text that used to continue a paragraph may start a block of its own (a
+ *  list, a heading, a link reference) once it is the first line of an item. */
+function ownsParagraphBelow(after: EditorState, markFrom: number, paraTo: number): boolean {
+  const item = resolveListItemThrough(after, markFrom, after.doc.lineAt(paraTo).to);
+  const mark = item === null ? null : listMarkOf(item);
+  const para = mark?.nextSibling ?? null;
+  return (
+    mark !== null &&
+    mark.from === markFrom &&
+    para !== null &&
+    para.name === "Paragraph" &&
+    para.to === paraTo &&
+    after.doc.lineAt(para.from).number === after.doc.lineAt(markFrom).number + 1
+  );
 }
 
 export const continueListOnEnter: Command = (view) => {
@@ -315,35 +299,42 @@ export const continueListOnEnter: Command = (view) => {
     // — but consume Enter, since upstream would strip the marker.
     return true;
   }
-  // The new line (marker + tail) goes after any blank lines above the item's first
-  // own line, so that line stays directly below it. A lazy line of the caret line's
-  // paragraph cannot sit below a bare marker, so then there are two outcomes:
-  //   - the paragraph runs to the document's end (only blank lines, such as the
-  //     file's trailing newline, may follow): nothing follows, so the new item goes
-  //     right after the paragraph and the paragraph stays whole in this item (no
-  //     own line lies below, so nothing is shifted);
-  //   - anything follows it: no edit. Placing the item after the paragraph puts it
-  //     next to that neighbour (a sibling, a child, an indented line), and each
-  //     needs its own column reasoning against Lezer's rules.
+  // A bare new marker owns only what sits directly below it, at its content column.
+  //   - The caret line's paragraph continues below (an indented or a lazy line):
+  //     the rest of the paragraph becomes the new item's, as on 1.6.4, so its next
+  //     line is set to exactly the new content column (lower is not owned; four or
+  //     more past it is code). That text may start a block of its own once it opens
+  //     an item (`2. y`, `[a]: b`, a nested marker), so `ownsParagraphBelow` checks
+  //     the result before it is dispatched.
+  //   - Otherwise the new line goes after any blank lines above the item's first
+  //     own line, so that line stays directly below it.
   let insertAt = at;
-  let shiftFrom: SyntaxNode | null = ownItem;
+  let pinned: { from: number; to: number; insert: string } | null = null;
+  let rest: number | null = null; // end of the caret line's paragraph, when it continues below
   if (newBare && ownItem !== null) {
-    const { ownLines } = classifyItemLines(state, ownItem, oldContentCol);
-    const lazyEnd = lazyParagraphEnd(state, ownItem, caretLine.number, ownLines);
-    if (lazyEnd !== null) {
-      if (!onlyBlankLinesAfter(state, lazyEnd)) {
-        return true;
-      }
-      insertAt = state.doc.line(lazyEnd).to;
-      shiftFrom = null;
+    // The block the caret line's end lies strictly inside, if any: a Paragraph
+    // there is one that continues on the line below.
+    let para: SyntaxNode | null = ownItem.resolveInner(caretLine.to, 1);
+    while (para !== null && para.name !== "Paragraph" && para.name !== "ListItem") {
+      para = para.parent;
     }
-    const firstOwn = lazyEnd === null ? ownLines[0] : undefined;
-    if (firstOwn !== undefined) {
-      const gap = blankGapBetween(state, caretLine.number, firstOwn);
-      if (gap === null) {
-        return true; // text in the gap: nothing safe to move, so no edit
+    if (para !== null && para.name === "Paragraph" && para.to > caretLine.to) {
+      rest = para.to;
+      const below = state.doc.line(caretLine.number + 1);
+      pinned = {
+        from: below.from,
+        to: below.from + indentLength(below.text),
+        insert: " ".repeat(newContentCol),
+      };
+    } else {
+      const firstOwn = classifyItemLines(state, ownItem, oldContentCol).ownLines[0];
+      if (firstOwn !== undefined) {
+        const gap = blankGapBetween(state, caretLine.number, firstOwn);
+        if (gap === null) {
+          return true; // text in the gap: nothing safe to move, so no edit
+        }
+        insertAt = gap.to;
       }
-      insertAt = gap.to;
     }
   }
   const insert = `\n${indent}${markerStr}`;
@@ -356,8 +347,12 @@ export const continueListOnEnter: Command = (view) => {
       ]
     : [{ from: at, insert }];
   // All edits below sit past `insertAt`, so the caret is unaffected.
-  if (shiftFrom !== null) {
-    changes.push(...shiftOwnLines(state, shiftFrom, newContentCol));
+  if (ownItem !== null) {
+    const skip = pinned === null ? 0 : caretLine.number + 1;
+    changes.push(...shiftOwnLines(state, ownItem, newContentCol, skip));
+  }
+  if (pinned !== null && state.doc.sliceString(pinned.from, pinned.to) !== pinned.insert) {
+    changes.push(pinned);
   }
   if (ordered) {
     // Keep the contiguous ordered run sequential.
@@ -369,13 +364,20 @@ export const continueListOnEnter: Command = (view) => {
       changes.push(...renumberRun(state, eofItem, editedNumber + 1));
     }
   }
-  view.dispatch({
+  const tr = state.update({
     changes,
     selection: EditorSelection.cursor(caret),
     userEvent: "input",
     annotations: isolateHistory.of("full"),
     scrollIntoView: true,
   });
+  if (
+    rest !== null &&
+    !ownsParagraphBelow(tr.state, at + 1 + indent.length, tr.changes.mapPos(rest, -1))
+  ) {
+    return true; // the rest of the paragraph would not stay one paragraph of the new item
+  }
+  view.dispatch(tr);
   return true;
 };
 
