@@ -11,7 +11,12 @@ import {
   listContinuationKeymap,
 } from "../../../src/webview/cm/list/list-continuation-keymap.js";
 import { quollMarkdownLanguage } from "../../../src/webview/cm/markdown.js";
-import { itemAncestry, parentMarkOf } from "../helpers/list-structure.js";
+import {
+  blockOwner,
+  itemAncestry,
+  parentMarkOf,
+  topLevelListCount,
+} from "../helpers/list-structure.js";
 import { settledMount } from "../helpers/settled-view.js";
 
 function mount(
@@ -188,11 +193,12 @@ describe("continueListOnEnter — ordered renumber", () => {
     }
   });
 
+  // The bare new item goes after `b`'s paragraph, so the lazy line stays with `b`.
   it("renumbers across a lazy-continuation line (tree siblings, not a line scan)", () => {
     const view = caretAtEndOf(mount("1. a\n2. b\nlazy line\n3. c", at(0)), 2);
     try {
       expect(continueListOnEnter(view)).toBe(true);
-      expect(view.state.doc.toString()).toBe("1. a\n2. b\n3. \nlazy line\n4. c");
+      expect(view.state.doc.toString()).toBe("1. a\n2. b\nlazy line\n3. \n4. c");
     } finally {
       view.destroy();
     }
@@ -414,12 +420,24 @@ describe("continueListOnEnter — split keeps the item's children nested", () =>
     }
   });
 
-  it("leaves the doc untouched when a non-blank line sits in that gap", () => {
-    const doc = "- a\nlazy\n\n  - child";
-    const view = mount(doc, at(3));
+  // A bare new marker cannot own a lazy line below it (an empty item has no
+  // paragraph to continue), so the paragraph's lazy lines would leave the list.
+  // The new item goes after the caret line's paragraph instead; an indented
+  // continuation line is the item's own and still moves under the new marker.
+  it.each([
+    // [doc, result, caret, start of the item that holds `body`]
+    ["  1. x\n    body", "  1. x\n    body\n  2. ", 21, 0],
+    ["- x\nbody\n- y", "- x\nbody\n- \n- y", 11, 0],
+    ["- x\nbody\n\n  - child", "- x\nbody\n\n- \n  - child", 12, 0],
+    ["- x\n  body", "- x\n- \n  body", 6, 4],
+  ] as const)("Enter at the end of `x` in %j keeps the paragraph in the list", (doc, out, caret, owner) => {
+    const view = mount(doc, at(doc.indexOf("x") + 1));
     try {
       expect(continueListOnEnter(view)).toBe(true);
-      expect(view.state.doc.toString()).toBe(doc);
+      expect(view.state.doc.toString()).toBe(out);
+      expect(view.state.selection.main.head).toBe(caret);
+      expect(blockOwner(out, "body")).toEqual(["Paragraph", owner]);
+      expect(topLevelListCount(out)).toBe(1);
     } finally {
       view.destroy();
     }

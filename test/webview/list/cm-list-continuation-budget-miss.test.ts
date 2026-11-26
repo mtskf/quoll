@@ -180,8 +180,18 @@ describe("continueListOnEnter — EOF budget miss across a marker-width change",
     expect(pressEnter(doc, 3)).toBe(doc);
   });
 
-  it("still inserts when the content column does not move (`- a`)", () => {
+  // A split with text after the caret: the content column does not move and the
+  // new line is not bare, so the insert needs no tree. (At a line end the new line
+  // would be bare, and without the item's lines a lazy line below could leave the
+  // list, so that case makes no edit; see the next test.)
+  it("still inserts when the content column does not move (`- ab`)", () => {
     missWhen = (state, upto) => upto >= state.doc.length;
-    expect(pressEnter("- a\n  body", 3)).toBe("- a\n- \n  body");
+    expect(pressEnter("- ab\n  body", 3)).toBe("- a\n- b\n  body");
+  });
+
+  it("makes no edit for a bare new marker above an unknown next line", () => {
+    missWhen = (state, upto) => upto >= state.doc.length;
+    const doc = "- a\nbody";
+    expect(pressEnter(doc, 3)).toBe(doc);
   });
 });
