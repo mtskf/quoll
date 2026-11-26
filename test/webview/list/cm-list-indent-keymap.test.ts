@@ -1025,20 +1025,55 @@ describe("indent / outdent keep a bare marker's first block directly below it", 
     }
   });
 
-  // A block the old parent owns after the moved run would end up below the
-  // promoted marker and leave the parent: detached as code under a bare marker, or
-  // moved out under a wider one. Shift-Tab then leaves bytes and numbers alone.
-  it.each([
-    ["1. parent\n\n   9.\n\n      body", "9."],
-    ["1. parent\n\n   9. x\n\n   body", "9. x"],
-    ["- parent\n\n  - x\n\n  body", "- x"],
-    ["9. parent\n\n   1. x\n\n   body", "1. x"],
-  ])("Shift-Tab in %j keeps the parent's later block under it", (doc, line) => {
+  // A block the old parent owns after the moved run would end up below the bare
+  // promoted marker, which the blank line closes, so the block would leave the
+  // list as code (it stayed in the list under 1.6.4). Shift-Tab leaves bytes and
+  // numbers alone there.
+  it("Shift-Tab on a bare item keeps the parent's later block in the list", () => {
+    const doc = "1. parent\n\n   9.\n\n      body";
     expect(blockOwner(doc, "body")).toEqual(["Paragraph", 0]);
-    const view = mount(doc, EditorSelection.cursor(doc.indexOf(line) + line.length));
+    const view = mount(doc, EditorSelection.cursor(doc.indexOf("9.") + 2));
     try {
       outdentListItem(view);
       expect(view.state.doc.toString()).toBe(doc);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // A content-bearing promoted item keeps main's behaviour: the parent's later
+  // block goes under the promoted item and stays in the list.
+  it.each([
+    ["1. parent\n\n   9. x\n\n   body", "9. x", "1. parent\n\n2. x\n\n   body", "2. x"],
+    [
+      "- parent\n  - child\n\n  more text",
+      "- child",
+      "- parent\n- child\n\n  more text",
+      "- child",
+    ],
+  ])("Shift-Tab in %j re-homes the later block under the promoted item", (doc, line, out, owner) => {
+    const view = mount(doc, EditorSelection.cursor(doc.indexOf(line) + line.length));
+    try {
+      expect(outdentListItem(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(out);
+      const needle = out.includes("body") ? "body" : "more";
+      expect(blockOwner(out, needle)).toEqual(["Paragraph", out.indexOf(owner)]);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // Main's known gap, kept as is (TODO.md "list: 本文を持つ item で marker 行を消す
+  // 既存の経路", case e): a wider promoted marker (`10.`) moves the content column
+  // past the block, which then leaves the list. Same bytes on main 216a6b66.
+  it("Shift-Tab that widens the marker keeps main's bytes", () => {
+    const doc = "9. parent\n\n   1. x\n\n   body";
+    const view = mount(doc, EditorSelection.cursor(doc.indexOf("1. x") + 4));
+    try {
+      expect(outdentListItem(view)).toBe(true);
+      const out = view.state.doc.toString();
+      expect(out).toBe("9. parent\n\n10. x\n\n   body");
+      expect(blockOwner(out, "body")).toEqual(["Paragraph", -1]);
     } finally {
       view.destroy();
     }

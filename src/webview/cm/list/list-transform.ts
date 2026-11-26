@@ -750,13 +750,6 @@ export function planOutdentItem(state: EditorState, headPos: number): ListEditPl
   if (parent === null) {
     return { kind: "noop" }; // top-level — nothing to promote to
   }
-  // A block the parent owns after the moved run (the item and its following
-  // siblings, i.e. the rest of `item`'s list) would land below the promoted marker
-  // and leave the parent: as code under a bare marker, or outside a wider one. No
-  // safe in-place promotion exists, so leave the document and numbering alone.
-  if (item.parent?.nextSibling != null) {
-    return { kind: "noop" };
-  }
   const parentMark = listMarkOf(parent);
   if (parentMark === null) {
     return { kind: "noop" };
@@ -803,10 +796,17 @@ export function planOutdentItem(state: EditorState, headPos: number): ListEditPl
       return { kind: "noop" };
     }
     changes.push({ from: mark.from, to: markerLine.to, insert: newMarker });
+    const bareMarker = parseListMark(newMarker.trim()) !== null;
+    // A block the parent owns after the moved run (the rest of `item`'s list) would
+    // land below the bare promoted marker, which a blank line closes: the block
+    // would leave the list as code. No safe in-place promotion, so no edit.
+    if (bareMarker && item.parent?.nextSibling != null) {
+      return { kind: "noop" };
+    }
     // A bare promoted marker must keep its first forced child directly below it.
     const firstForced = followingListItems(item)[0];
     let liftedChars = 0;
-    if (firstForced !== undefined && parseListMark(newMarker.trim()) !== null) {
+    if (firstForced !== undefined && bareMarker) {
       const gap = blankGapBetween(
         state,
         markerLine.number,
