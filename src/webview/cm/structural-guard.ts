@@ -133,8 +133,14 @@ function hasUnescapedPipe(text: string): boolean {
   return false;
 }
 
-/** @lezer/markdown 1.8.1's `delimiterLine` regex, VERBATIM (the `[>\s]*` head is absent in 1.6.4 and present in 1.8.1). */
-const TABLE_DELIMITER_LINE = /^[>\s]*\|?(\s*:?-+:?\s*\|)+(\s*:?-+:?\s*)?$/;
+/** @lezer/markdown 1.8.1's `delimiterLine` regex
+ *  `/^[>\s]*\|?(\s*:?-+:?\s*\|)+(\s*:?-+:?\s*)?$/` (the `[>\s]*` head is new in 1.8.1),
+ *  respelled to match the same lines. Upstream's head overlaps the first cell's `\s*`, so a
+ *  long indented non-delimiter line backtracks quadratically, and this runs on every edited
+ *  line. Here the head takes all leading `>` / whitespace and the first cell starts at its
+ *  optional `|` (whitespace before it is the head's, and `[>\s]*\s*` is `[>\s]*`).
+ *  Equivalence with the installed regex is checked in cm-lezer-table-internals-tripwire. */
+const TABLE_DELIMITER_LINE = /^[>\s]*(?:\|\s*)?:?-+:?\s*\|(?:\s*:?-+:?\s*\|)*(?:\s*:?-+:?\s*)?$/;
 
 /** Is this line delimiter-SHAPED? One read of the raw text is enough: the regex opens with
  *  `[>\s]*`, which absorbs any leading whitespace and `>` quote marker, so it answers the
@@ -145,7 +151,7 @@ const TABLE_DELIMITER_LINE = /^[>\s]*\|?(\s*:?-+:?\s*\|)+(\s*:?-+:?\s*)?$/;
  *  no more self-contained than the `hasPipe`/`parseRow` offsets above.
  *  ⚠️ If upstream changes the regex, cm-lezer-table-internals-tripwire.test.ts goes red:
  *  re-derive how each call site reads the line then, rather than assuming one read. */
-function isTableDelimiterShaped(text: string): boolean {
+export function isTableDelimiterShaped(text: string): boolean {
   return TABLE_DELIMITER_LINE.test(text);
 }
 

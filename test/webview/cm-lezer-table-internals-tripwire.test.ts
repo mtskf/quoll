@@ -10,23 +10,64 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { isTableDelimiterShaped } from "../../src/webview/cm/structural-guard.js";
 
 const require_ = createRequire(import.meta.url);
 const distPath = require_.resolve("@lezer/markdown");
 const dist = readFileSync(distPath, "utf8");
 
 describe("@lezer/markdown table internals the guard mirrors", () => {
-  it("still ships the delimiterLine regex the mirror copies verbatim", () => {
+  it("still ships the delimiterLine regex the mirror is equivalent to", () => {
     expect(dist).toContain(
       "const delimiterLine = /^[>\\s]*\\|?(\\s*:?-+:?\\s*\\|)+(\\s*:?-+:?\\s*)?$/;"
     );
+  });
+
+  // The mirror is rewritten without the upstream regex's overlapping `[>\s]*` /
+  // `\s*` quantifiers (which backtrack quadratically on a long indent), so it is
+  // checked for the same answers against the regex read out of the installed dist.
+  it("answers like the shipped delimiterLine regex on every short line", () => {
+    const source = /const delimiterLine = \/(.*)\/;/.exec(dist)?.[1];
+    expect(source).toBeDefined();
+    const upstream = new RegExp(source ?? "");
+    const alphabet = [" ", "\t", ">", "|", ":", "-", "x", "\u00a0"];
+    let lines = [""];
+    let checked = 0;
+    let delimiters = 0;
+    const mismatches: string[] = [];
+    for (let len = 0; len <= 5; len++) {
+      for (const line of lines) {
+        for (const prefix of ["", "   ", "> ", "\t> > "]) {
+          const text = prefix + line;
+          const want = upstream.test(text);
+          if (isTableDelimiterShaped(text) !== want) {
+            mismatches.push(text);
+          }
+          checked++;
+          delimiters += want ? 1 : 0;
+        }
+      }
+      lines = lines.flatMap((l) => alphabet.map((c) => l + c));
+    }
+    expect(mismatches).toEqual([]);
+    expect(checked).toBeGreaterThan(100_000);
+    expect(delimiters).toBeGreaterThan(1_000);
+  });
+
+  it("rejects a long indented non-delimiter line in linear time", () => {
+    // The upstream spelling takes seconds here (quadratic backtracking on the indent).
+    const text = `${" ".repeat(50_000)}plain prose`;
+    const start = performance.now();
+    expect(isTableDelimiterShaped(text)).toBe(false);
+    expect(isTableDelimiterShaped(`${" ".repeat(50_000)}|---|`)).toBe(true);
+    expect(performance.now() - start).toBeLessThan(200);
   });
 
   it("still applies that regex to the RAW peeked line in endLeaf", () => {
     // endLeaf tests `cx.peekLine()` raw while TableParser.nextLine tests
     // `line.text.slice(line.pos)`. `isTableDelimiterShaped` reads the raw line ONCE because the
     // 1.8.1 regex's `[>\s]*` head absorbs the leading whitespace both call sites differ by.
-    // This test pins the regex verbatim: if it goes red, re-derive how each site reads the line.
+    // The first test pins the regex text: if it goes red, re-derive how each site reads the line.
     expect(dist).toMatch(/let next = cx\.peekLine\(\);\s*\n\s*return delimiterLine\.test\(next\)/);
     expect(dist).toContain("delimiterLine.test(lineText = line.text.slice(line.pos))");
   });
