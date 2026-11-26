@@ -11,12 +11,7 @@ import {
   listContinuationKeymap,
 } from "../../../src/webview/cm/list/list-continuation-keymap.js";
 import { quollMarkdownLanguage } from "../../../src/webview/cm/markdown.js";
-import {
-  blockOwner,
-  itemAncestry,
-  parentMarkOf,
-  topLevelListCount,
-} from "../helpers/list-structure.js";
+import { blockOwner, itemAncestry, parentMarkOf } from "../helpers/list-structure.js";
 import { settledMount } from "../helpers/settled-view.js";
 
 function mount(
@@ -193,12 +188,12 @@ describe("continueListOnEnter — ordered renumber", () => {
     }
   });
 
-  // The bare new item goes after `b`'s paragraph, so the lazy line stays with `b`.
+  // Enter on `a`: the followers renumber across `b`'s lazy line.
   it("renumbers across a lazy-continuation line (tree siblings, not a line scan)", () => {
-    const view = caretAtEndOf(mount("1. a\n2. b\nlazy line\n3. c", at(0)), 2);
+    const view = caretAtEndOf(mount("1. a\n2. b\nlazy line\n3. c", at(0)), 1);
     try {
       expect(continueListOnEnter(view)).toBe(true);
-      expect(view.state.doc.toString()).toBe("1. a\n2. b\nlazy line\n3. \n4. c");
+      expect(view.state.doc.toString()).toBe("1. a\n2. \n3. b\nlazy line\n4. c");
     } finally {
       view.destroy();
     }
@@ -421,54 +416,46 @@ describe("continueListOnEnter — split keeps the item's children nested", () =>
   });
 
   // A bare new marker cannot own a lazy line below it (an empty item has no
-  // paragraph to continue), so the paragraph's lazy lines would leave the list.
-  // The new item goes after the caret line's paragraph instead; an indented
-  // continuation line is the item's own and still moves under the new marker.
+  // paragraph to continue), so a bare new item would strand the caret line's lazy
+  // lines wherever it went. Enter makes no edit then; the input's ownership stays.
   it.each([
-    // [doc, result, caret, start of the item that holds `body`]
-    ["  1. x\n    body", "  1. x\n    body\n  2. ", 21, 0],
-    ["- x\nbody\n- y", "- x\nbody\n- \n- y", 11, 0],
-    ["- x\nbody\n\n  - child", "- x\nbody\n\n- \n  - child", 12, 0],
-    ["- x\n  body", "- x\n- \n  body", 6, 4],
-  ] as const)("Enter at the end of `x` in %j keeps the paragraph in the list", (doc, out, caret, owner) => {
+    ["  1. x\n    body", "body"],
+    ["- x\nbody\n- y", "body"],
+    ["1.   x\n         - y\nlazy", "lazy"],
+    ["1.   x\n         - y\nlazy\n   2. z", "lazy"],
+    ["- x\nbody\n\n  - child", "body"],
+  ])("Enter at the end of `x` in %j makes no edit", (doc, lazy) => {
+    expect(blockOwner(doc, lazy)).toEqual(["Paragraph", 0]);
     const view = mount(doc, at(doc.indexOf("x") + 1));
     try {
       expect(continueListOnEnter(view)).toBe(true);
-      expect(view.state.doc.toString()).toBe(out);
-      expect(view.state.selection.main.head).toBe(caret);
-      expect(blockOwner(out, "body")).toEqual(["Paragraph", owner]);
-      expect(topLevelListCount(out)).toBe(1);
+      expect(view.state.doc.toString()).toBe(doc);
     } finally {
       view.destroy();
     }
   });
 
-  // With a marker-width change, only the own lines below the insertion point move
-  // to the new item and are shifted; lines kept above it stay as they are.
-  it("keeps a mixed paragraph whole when the new marker changes the content column", () => {
-    const doc = "1.   x\n         - y\nlazy";
-    const view = mount(doc, at(doc.indexOf("x") + 1));
+  // An indented continuation line is the item's own, so it moves under the new marker.
+  it("moves an indented continuation line under the new item", () => {
+    const view = mount("- x\n  body", at(3));
     try {
       expect(continueListOnEnter(view)).toBe(true);
       const out = view.state.doc.toString();
-      expect(out).toBe("1.   x\n         - y\nlazy\n2. ");
-      expect(view.state.selection.main.head).toBe(out.length);
-      expect(blockOwner(out, "- y")).toEqual(["Paragraph", 0]);
-      expect(blockOwner(out, "lazy")).toEqual(["Paragraph", 0]);
+      expect(out).toBe("- x\n- \n  body");
+      expect(blockOwner(out, "body")).toEqual(["Paragraph", 4]);
     } finally {
       view.destroy();
     }
   });
 
-  it("shifts only the child below the gap when the marker widens after a lazy line", () => {
-    const doc = "9. x\nbody\n\n   - child";
+  it("shifts the child below the gap when the marker widens (`9.` → `10.`)", () => {
+    const doc = "9. x\n\n   - child";
     const view = mount(doc, at(doc.indexOf("x") + 1));
     try {
       expect(continueListOnEnter(view)).toBe(true);
       const out = view.state.doc.toString();
-      expect(out).toBe("9. x\nbody\n\n10. \n    - child");
+      expect(out).toBe("9. x\n\n10. \n    - child");
       expect(view.state.selection.main.head).toBe(out.indexOf("10. ") + 4);
-      expect(blockOwner(out, "body")).toEqual(["Paragraph", 0]);
       expect(parentMarkOf(out, "child")).toBe("10.");
     } finally {
       view.destroy();
