@@ -77,13 +77,23 @@ describe("continueListOnEnter — bare-marker empty check under a budget miss", 
     expect(pressEnter(doc, 2)).toBe("- \n- \n\npara");
     expect(eofRequests).toBe(1);
   });
+});
 
-  it("exits an empty `- ` when only the judging parse misses", () => {
-    // The EOF parse still proves the item empty, so the miss must not leave a
-    // second empty marker behind.
-    const doc = "- \n\npara";
-    missWhen = (state, upto) => upto === state.doc.line(2).to;
-    expect(pressEnter(doc, 2)).toBe("\n\npara");
+describe("continueListOnEnter — marker-line decisions request no EOF parse", () => {
+  // Only an edit that lands needs the tree past the caret line.
+  it.each([
+    ["exits an empty task", "- [ ] \n\npara", "- [ ] ".length, "\n\npara"],
+    ["defers inside the checkbox", "- [x] a\n\npara", "- [".length, "- [\nx] a\n\npara"],
+  ])("%s", (_label, doc, caret, out) => {
+    let eofRequests = 0;
+    missWhen = (state, upto) => {
+      if (upto >= state.doc.length) {
+        eofRequests++;
+      }
+      return false;
+    };
+    expect(pressEnter(doc, caret)).toBe(out);
+    expect(eofRequests).toBe(0);
   });
 });
 
@@ -98,6 +108,25 @@ describe("continueListOnEnter — EOF budget miss across a marker-width change",
   ])("does not orphan the body (%s)", (_label, doc, caret) => {
     missWhen = (state, upto) => upto >= state.doc.length;
     expect(pressEnter(doc, caret)).toBe(doc);
+  });
+
+  // A node after the item within the bounded lookahead proves it closed, so its
+  // own lines shift from that tree; only the renumber (it needs EOF) is skipped.
+  const tail = "para line of some text here\n\n".repeat(1000);
+  it.each([
+    ["a heading right below", `9. a\n# H\n${tail}`, `9. a\n10. \n# H\n${tail}`],
+    ["a body, then a heading", `9. a\n   body\n# H\n${tail}`, `9. a\n10. \n    body\n# H\n${tail}`],
+  ])("still inserts `10. ` when a bounded parse closes the item (%s)", (_l, doc, out) => {
+    missWhen = (state, upto) => upto >= state.doc.length;
+    expect(pressEnter(doc, 4)).toBe(out);
+  });
+
+  it("does not shift a body the bounded parse cannot see the end of", () => {
+    // The body runs past the lookahead, so no node after the item proves it
+    // closed: shifting the visible part only would split the body.
+    missWhen = (state, upto) => upto >= state.doc.length;
+    const doc = `9. a\n${"   body\n".repeat(3000)}# H\n${tail}`;
+    expect(pressEnter(doc, 4)).toBe(doc);
   });
 
   it("still inserts when the content column does not move (`- a`)", () => {

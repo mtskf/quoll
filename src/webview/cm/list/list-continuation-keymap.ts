@@ -84,20 +84,40 @@ function resolveListItemThrough(
   return item;
 }
 
-/** Whether the bare marker at `markFrom` (on line `lineNo`) heads an EMPTY item,
- *  judged on the command's EOF item, or — when that parse missed its budget — on
- *  a tree parsed through the next line: all `isEmptyItem` needs, since a bare
- *  item's body starts there or not at all. A miss on both cannot tell empty from
- *  body-owning, so it keeps the list. */
-function bareItemIsEmpty(
-  state: EditorState,
-  markFrom: number,
-  lineNo: number,
-  eofItem: SyntaxNode | null
-): boolean {
+/** Whether the bare marker at `markFrom` (on line `lineNo`) heads an EMPTY item.
+ *  The caret-bounded tree stops at the marker line, so parse through the next
+ *  line — all `isEmptyItem` needs, since a bare item's body starts there or not
+ *  at all — and never to EOF (a large unparsed tail must not cost the budget).
+ *  A budget miss cannot tell empty from body-owning, so it keeps the list. */
+function bareItemIsEmpty(state: EditorState, markFrom: number, lineNo: number): boolean {
   const upto = state.doc.line(Math.min(lineNo + 1, state.doc.lines)).to;
-  const item = eofItem ?? resolveListItemThrough(state, markFrom, upto);
+  const item = resolveListItemThrough(state, markFrom, upto);
   return item !== null && isEmptyItem(state, item);
+}
+
+/** How far past the caret line `closedItemWithin` parses, in characters. A
+ *  10 KB GFM parse took about 1.5 ms in Node (2026-11-26), far inside the 50 ms
+ *  budget, and it covers any item a person edits by hand; a longer body stays
+ *  unproven and fails closed. */
+const CLOSURE_LOOKAHEAD = 10_000;
+
+/** On an EOF budget miss, the ListItem at `markFrom` from a tree parsed
+ *  CLOSURE_LOOKAHEAD past the caret line — but only when that tree holds a node
+ *  after the item or one of its ancestors: the parser has moved past the item, so
+ *  every line it owns is there and its shift can be computed. Null when that is
+ *  not proven, or when the bound reaches EOF (the parse that just missed). */
+function closedItemWithin(state: EditorState, markFrom: number, from: number): SyntaxNode | null {
+  const upto = state.doc.lineAt(Math.min(from + CLOSURE_LOOKAHEAD, state.doc.length)).to;
+  if (upto >= state.doc.length) {
+    return null;
+  }
+  const item = resolveListItemThrough(state, markFrom, upto);
+  for (let n = item; n !== null; n = n.parent) {
+    if (n.nextSibling !== null) {
+      return item;
+    }
+  }
+  return null;
 }
 
 export const continueListOnEnter: Command = (view) => {
@@ -152,14 +172,13 @@ export const continueListOnEnter: Command = (view) => {
     return false;
   }
   const indent = state.doc.sliceString(caretLine.from, mark.from);
-  // Resolved ONCE from an EOF-bounded tree and used by every decision below: the
-  // caret-bounded `item` sees neither its own lines below the caret nor the
-  // following siblings. Null on a budget miss — each decision then fails closed.
-  const eofItem = resolveListItemThrough(state, mark.from, state.doc.length);
+  // Marker-line decisions first, on local trees only: a task's emptiness and the
+  // caret eligibility below read the caret-bounded `item`, a bare marker's
+  // emptiness the next line. No EOF parse until an edit is known to land.
   const lineContent = markerLineContent(state, mark);
   const empty =
     lineContent === null
-      ? bareItemIsEmpty(state, mark.from, caretLine.number, eofItem)
+      ? bareItemIsEmpty(state, mark.from, caretLine.number)
       : isEmptyItem(state, item);
   if (empty) {
     // Empty item → remove the whole marker line, exiting the list. Uniform across
@@ -193,6 +212,12 @@ export const continueListOnEnter: Command = (view) => {
     return bare;
   }
   const at = bare ? caretLine.to : head;
+  // The edit lands, so resolve the item past the caret line — the caret-bounded
+  // `item` sees neither its own lines below nor the following siblings. One EOF
+  // parse serves shift and renumber; on a miss, a bounded parse that proves the
+  // item closed still serves the shift, and the renumber (it needs EOF) is skipped.
+  const eofItem = resolveListItemThrough(state, mark.from, state.doc.length);
+  const ownItem = eofItem ?? closedItemWithin(state, mark.from, caretLine.to);
   // The tail can add marker padding. Use the complete new line so the item's
   // own lines move to the column where the split content begins.
   const tail = state.doc.sliceString(at, caretLine.to);
@@ -202,21 +227,21 @@ export const continueListOnEnter: Command = (view) => {
     state.tabSize
   );
   if (
-    eofItem === null &&
+    ownItem === null &&
     newContentCol !==
       contentColumnFromMarkerLine(caretLine.text, mark.to - caretLine.from, state.tabSize)
   ) {
-    // Budget miss and the new marker moves the content column (`9.` → `10. `):
-    // inserting without shifting the body would drop it out of the list, so do
-    // nothing — but consume Enter, since upstream would strip the marker.
+    // The item's lines are unknown and the new marker moves the content column
+    // (`9.` → `10. `): inserting without shifting a body would drop it out of the
+    // list, so do nothing — but consume Enter, since upstream would strip the marker.
     return true;
   }
   const insert = `\n${indent}${markerStr}`;
   const caret = at + insert.length;
   const changes: ChangeSpec[] = [{ from: at, insert }];
   // All edits below sit past `at`, so the caret is unaffected.
-  if (eofItem !== null) {
-    changes.push(...shiftOwnLines(state, eofItem, newContentCol));
+  if (ownItem !== null) {
+    changes.push(...shiftOwnLines(state, ownItem, newContentCol));
   }
   if (ordered) {
     // Keep the contiguous ordered run sequential.
