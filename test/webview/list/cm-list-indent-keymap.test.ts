@@ -11,7 +11,12 @@ import {
   listIndentKeymap,
   outdentListItem,
 } from "../../../src/webview/cm/list/list-indent-keymap.js";
-import { itemAncestry, parentMarkOf, topLevelListCount } from "../helpers/list-structure.js";
+import {
+  blockOwner,
+  itemAncestry,
+  parentMarkOf,
+  topLevelListCount,
+} from "../helpers/list-structure.js";
 import { settledMount, settledView } from "../helpers/settled-view.js";
 
 function mount(
@@ -602,21 +607,6 @@ describe("outdentListItem", () => {
     }
   });
 
-  // A bare nested `9.` before a blank line owns nothing: `body` belongs to the
-  // parent item (CommonMark), though Lezer 1.8.1 spans `9.` over it. Outdent
-  // takes the empty-item path and must leave `body`'s indent alone.
-  it("outdents a bare marker without moving the paragraph after its blank line", () => {
-    const view = mount("1. parent\n\n   9.\n\n      body", EditorSelection.cursor(0));
-    view.dispatch({ selection: EditorSelection.cursor(view.state.doc.line(3).to) });
-    try {
-      expect(outdentListItem(view)).toBe(true);
-      expect(view.state.doc.toString()).toBe("1. parent\n\n2. \n\n      body");
-      expect(view.state.selection.main.head).toBe(view.state.doc.line(3).to);
-    } finally {
-      view.destroy();
-    }
-  });
-
   // (test-analyzer-3) tab-indented nested item outdent: a tab that ends exactly
   //     at the item's marker column is removed whole when the destination is
   //     column 0 (the straddling case lives in "across tab-indented lines").
@@ -1030,6 +1020,25 @@ describe("indent / outdent keep a bare marker's first block directly below it", 
       expect(itemAncestry(out, out.indexOf("body"))).toEqual([out.indexOf("10.")]);
       expect(itemAncestry(out, out.indexOf("tail"))).toEqual([out.indexOf("11.")]);
       expect(topLevelListCount(out)).toBe(1);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // A block the old parent owns after the moved run would end up below the
+  // promoted marker and leave the parent: detached as code under a bare marker, or
+  // moved out under a wider one. Shift-Tab then leaves bytes and numbers alone.
+  it.each([
+    ["1. parent\n\n   9.\n\n      body", "9."],
+    ["1. parent\n\n   9. x\n\n   body", "9. x"],
+    ["- parent\n\n  - x\n\n  body", "- x"],
+    ["9. parent\n\n   1. x\n\n   body", "1. x"],
+  ])("Shift-Tab in %j keeps the parent's later block under it", (doc, line) => {
+    expect(blockOwner(doc, "body")).toEqual(["Paragraph", 0]);
+    const view = mount(doc, EditorSelection.cursor(doc.indexOf(line) + line.length));
+    try {
+      outdentListItem(view);
+      expect(view.state.doc.toString()).toBe(doc);
     } finally {
       view.destroy();
     }

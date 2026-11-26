@@ -46,3 +46,19 @@ export function itemAncestry(doc: string, pos: number): number[] {
   }
   return out;
 }
+
+/** The block holding `needle` in a fresh parse of `doc` (its node name) and the
+ *  start of the list item that owns it, or -1 when the block is outside any item. */
+export function blockOwner(doc: string, needle: string): [string, number] {
+  let n: SyntaxNode | null = gfmParser.parse(doc).resolveInner(doc.indexOf(needle), 1);
+  while (
+    n !== null &&
+    n.parent !== null &&
+    n.parent.name !== "ListItem" &&
+    n.parent.name !== "Document"
+  ) {
+    n = n.parent;
+  }
+  const owner = n?.parent?.name === "ListItem" ? n.parent.from : -1;
+  return [n?.name ?? "", owner];
+}

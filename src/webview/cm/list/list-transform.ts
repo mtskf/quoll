@@ -750,6 +750,13 @@ export function planOutdentItem(state: EditorState, headPos: number): ListEditPl
   if (parent === null) {
     return { kind: "noop" }; // top-level — nothing to promote to
   }
+  // A block the parent owns after the moved run (the item and its following
+  // siblings, i.e. the rest of `item`'s list) would land below the promoted marker
+  // and leave the parent: as code under a bare marker, or outside a wider one. No
+  // safe in-place promotion exists, so leave the document and numbering alone.
+  if (item.parent?.nextSibling != null) {
+    return { kind: "noop" };
+  }
   const parentMark = listMarkOf(parent);
   if (parentMark === null) {
     return { kind: "noop" };
