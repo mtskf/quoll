@@ -92,20 +92,20 @@ function resolveListItemThrough(
   return item;
 }
 
-/** Whether the item's marker-line paragraph continues below the caret line with
- *  a lazy line: a line of the paragraph that is not among `ownLines` (sorted). A
- *  bare marker cannot own a lazy line, so a bare new item would strand it. One
- *  pass over `ownLines`, so linear. */
-function paragraphHasLazyLine(
+/** The last line of the item's marker-line paragraph when it continues below the
+ *  caret line with a lazy line (a line of the paragraph not among `ownLines`,
+ *  sorted), else null. A bare marker cannot own a lazy line, so a bare new item
+ *  above it would strand it. One pass over `ownLines`, so linear. */
+function lazyParagraphEnd(
   state: EditorState,
   item: SyntaxNode,
   caretLineNo: number,
   ownLines: readonly number[]
-): boolean {
+): number | null {
   const mark = listMarkOf(item);
   const content = mark === null ? null : markerLineContent(state, mark);
   if (content === null) {
-    return false;
+    return null;
   }
   const last = state.doc.lineAt(content.to).number;
   let own = 0;
@@ -117,11 +117,14 @@ function paragraphHasLazyLine(
       own++;
     }
   }
-  return own !== last - caretLineNo;
+  return own === last - caretLineNo ? null : last;
 }
 
 /** Blank in Lezer's and CommonMark's sense: ASCII spaces and tabs only. */
 const ASCII_BLANK = /^[ \t]*$/;
+
+/** Text that is only blank lines (the document's tail after a block). */
+const TRAILING_BLANKS = /^[ \t\n]*$/;
 
 /** The item to judge a bare marker's emptiness on: one whose tree shows the line
  *  below the marker line, which is all `isEmptyItem` needs (a bare item's body
@@ -306,16 +309,28 @@ export const continueListOnEnter: Command = (view) => {
   }
   // The new line (marker + tail) goes after any blank lines above the item's first
   // own line, so that line stays directly below it. A lazy line of the caret line's
-  // paragraph would be stranded below a bare marker wherever it goes, so then no
-  // edit is made (moving the marker past the paragraph lands it next to whatever
-  // follows, each neighbour with its own column rules).
+  // paragraph cannot sit below a bare marker, so then there are two outcomes:
+  //   - the paragraph runs to the document's end (only blank lines, such as the
+  //     file's trailing newline, may follow): nothing follows, so the new item goes
+  //     right after the paragraph and the paragraph stays whole in this item (no
+  //     own line lies below, so nothing is shifted);
+  //   - anything follows it: no edit. Placing the item after the paragraph puts it
+  //     next to that neighbour (a sibling, a child, an indented line), and each
+  //     needs its own column reasoning against Lezer's rules.
   let insertAt = at;
+  let shiftFrom: SyntaxNode | null = ownItem;
   if (newBare && ownItem !== null) {
     const { ownLines } = classifyItemLines(state, ownItem, oldContentCol);
-    if (paragraphHasLazyLine(state, ownItem, caretLine.number, ownLines)) {
-      return true;
+    const lazyEnd = lazyParagraphEnd(state, ownItem, caretLine.number, ownLines);
+    if (lazyEnd !== null) {
+      const end = state.doc.line(lazyEnd).to;
+      if (!TRAILING_BLANKS.test(state.doc.sliceString(end))) {
+        return true;
+      }
+      insertAt = end;
+      shiftFrom = null;
     }
-    const firstOwn = ownLines[0];
+    const firstOwn = lazyEnd === null ? ownLines[0] : undefined;
     if (firstOwn !== undefined) {
       const gap = blankGapBetween(state, caretLine.number, firstOwn);
       if (gap === null) {
@@ -334,8 +349,8 @@ export const continueListOnEnter: Command = (view) => {
       ]
     : [{ from: at, insert }];
   // All edits below sit past `insertAt`, so the caret is unaffected.
-  if (ownItem !== null) {
-    changes.push(...shiftOwnLines(state, ownItem, newContentCol));
+  if (shiftFrom !== null) {
+    changes.push(...shiftOwnLines(state, shiftFrom, newContentCol));
   }
   if (ordered) {
     // Keep the contiguous ordered run sequential.

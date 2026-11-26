@@ -11,7 +11,12 @@ import {
   listContinuationKeymap,
 } from "../../../src/webview/cm/list/list-continuation-keymap.js";
 import { quollMarkdownLanguage } from "../../../src/webview/cm/markdown.js";
-import { blockOwner, itemAncestry, parentMarkOf } from "../helpers/list-structure.js";
+import {
+  blockOwner,
+  itemAncestry,
+  parentMarkOf,
+  topLevelItemCounts,
+} from "../helpers/list-structure.js";
 import { settledMount } from "../helpers/settled-view.js";
 
 function mount(
@@ -416,15 +421,38 @@ describe("continueListOnEnter — split keeps the item's children nested", () =>
   });
 
   // A bare new marker cannot own a lazy line below it (an empty item has no
-  // paragraph to continue), so a bare new item would strand the caret line's lazy
-  // lines wherever it went. Enter makes no edit then; the input's ownership stays.
+  // paragraph to continue). When the lazy paragraph runs to the end of the
+  // document, nothing follows, so the new item goes at the end and the paragraph
+  // stays whole in item 1. No own line lies below, so nothing is shifted.
   it.each([
-    ["  1. x\n    body", "body"],
+    ["- x\nbody", "- x\nbody\n- ", "body"],
+    ["1. x\nbody", "1. x\nbody\n2. ", "body"],
+    ["  1. x\n    body", "  1. x\n    body\n  2. ", "body"],
+    ["1.   x\n         - y\nlazy", "1.   x\n         - y\nlazy\n2. ", "lazy"],
+    // A trailing newline (blank lines only) does not count as something following.
+    ["- x\nbody\n", "- x\nbody\n- \n", "body"],
+  ])("Enter at the end of `x` in %j adds the item at the document end", (doc, out, lazy) => {
+    const view = mount(doc, at(doc.indexOf("x") + 1));
+    try {
+      expect(continueListOnEnter(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(out);
+      expect(view.state.selection.main.head).toBe(out.trimEnd().length + 1);
+      expect(blockOwner(out, lazy)).toEqual(["Paragraph", 0]);
+      expect(topLevelItemCounts(out)).toEqual([2]);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // When anything follows the lazy paragraph, placing the new item there puts it
+  // next to that neighbour, whose ownership would need its own column reasoning;
+  // that placement is unsafe, so Enter makes no edit and the input stays as is.
+  it.each([
     ["- x\nbody\n- y", "body"],
-    ["1.   x\n         - y\nlazy", "lazy"],
+    ["1. x\nbody\n2. y", "body"],
     ["1.   x\n         - y\nlazy\n   2. z", "lazy"],
     ["- x\nbody\n\n  - child", "body"],
-  ])("Enter at the end of `x` in %j makes no edit", (doc, lazy) => {
+  ])("Enter at the end of `x` in %j makes no edit (something follows)", (doc, lazy) => {
     expect(blockOwner(doc, lazy)).toEqual(["Paragraph", 0]);
     const view = mount(doc, at(doc.indexOf("x") + 1));
     try {

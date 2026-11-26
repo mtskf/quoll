@@ -62,3 +62,18 @@ export function blockOwner(doc: string, needle: string): [string, number] {
   const owner = n?.parent?.name === "ListItem" ? n.parent.from : -1;
   return [n?.name ?? "", owner];
 }
+
+/** The number of direct items in each top-level list of a fresh parse of `doc`. */
+export function topLevelItemCounts(doc: string): number[] {
+  const out: number[] = [];
+  for (let n = gfmParser.parse(doc).topNode.firstChild; n !== null; n = n.nextSibling) {
+    if (n.name === "BulletList" || n.name === "OrderedList") {
+      let items = 0;
+      for (let c = n.firstChild; c !== null; c = c.nextSibling) {
+        items += c.name === "ListItem" ? 1 : 0;
+      }
+      out.push(items);
+    }
+  }
+  return out;
+}
