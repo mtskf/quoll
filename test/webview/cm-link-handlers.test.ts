@@ -136,6 +136,35 @@ describe("tryOpenLinkAt — safe URLs", () => {
   });
 });
 
+// A single `\` before `>)` in an angle destination is the pre-0.1.86 paste
+// output. CommonMark (1.8.1) reads that `>` as escaped and runs the destination
+// to a later `>`, so the click would open a changed target; 1.6.4 ended the link
+// at the first `)`. That ambiguous legacy shape is inert. A valid escaped `>`
+// inside the destination still opens.
+describe("tryOpenLinkAt — escaped `>` in an angle destination", () => {
+  function click(doc: string): {
+    handled: boolean;
+    posted: Array<{ type: string; href?: string }>;
+  } {
+    const state = stateOf(doc);
+    const posted: Array<{ type: string; href?: string }> = [];
+    const host = { postMessage: (m: { type: string; href?: string }) => posted.push(m) };
+    return { handled: tryOpenLinkAt(state, posOf(doc, "[t]") + 1, host, noScroll), posted };
+  }
+
+  it("does not open the legacy `<…\\>)` form whose destination runs to a later `>`", () => {
+    const { handled, posted } = click("see [t](<https://example.test/a(b)\\>) then >)");
+    expect(handled).toBe(false);
+    expect(posted).toEqual([]);
+  });
+
+  it("opens a destination with an escaped interior `>`", () => {
+    const { handled, posted } = click("see [t](<https://example.test/a\\>b>)");
+    expect(handled).toBe(true);
+    expect(posted[0]?.href).toBe("https://example.test/a>b");
+  });
+});
+
 // ---- open-link (relative .md) branch ----
 //
 // Mirrors the "safe URLs" fixture convention: the doc is prefixed with

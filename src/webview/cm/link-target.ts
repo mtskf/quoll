@@ -66,6 +66,7 @@
 // single-source-of-truth WITHIN the webview, not across the boundary.
 
 import { isAllowedUrl } from "../../markdown/url-allowlist.js";
+import { decodeMarkdownDestination } from "../../markdown/url-decode.js";
 import { MAX_HREF_LENGTH } from "../../shared/protocol.js";
 import { slugifyHeadingText } from "./headings.js";
 
@@ -242,6 +243,20 @@ function fragmentSlug(rawFragment: string): string {
     decodedFragment = rawFragment;
   }
   return slugifyHeadingText(decodedFragment);
+}
+
+/** Classify a link destination as written in the source (`raw`, the URL node's
+ *  text), for the click and the pointer cursor alike. An angle destination with an
+ *  escaped `>` right before `)` (`<…\>)`) is the pre-0.1.86 paste output: under
+ *  CommonMark (Lezer 1.8.1) that `>` is escaped and the destination runs on to a
+ *  later `>`, so opening it would open a different target than the one saved
+ *  (1.6.4 ended the link at the first `)`). That ambiguous legacy shape is inert.
+ *  A valid escaped `>` elsewhere (`<a\>b>`) is classified as usual. */
+export function classifyLinkDestination(raw: string): LinkTarget {
+  if (raw.startsWith("<") && raw.includes("\\>)")) {
+    return { kind: "no-action" };
+  }
+  return classifyLinkTarget(decodeMarkdownDestination(raw));
 }
 
 /** Classify an already-decoded link destination. Gate ORDER is load-bearing and
