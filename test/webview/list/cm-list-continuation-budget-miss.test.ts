@@ -1,8 +1,10 @@
 // @vitest-environment happy-dom
-// Budget-miss arms of continueListOnEnter's bare-marker empty check, pinned
-// without wall-clock: `ensureSyntaxTree` is mocked (module-wide, hence this
-// dedicated file) to return null for chosen parse targets and to delegate the
-// rest with a generous budget.
+// Budget-miss arms of continueListOnEnter, pinned as a decision table (which
+// document each branch returns, and which parse requests it makes) without
+// wall-clock: `ensureSyntaxTree` is mocked (module-wide, hence this dedicated
+// file) to return null for chosen parse targets and to delegate the rest with a
+// generous budget. Misses are injected independently per request, so not every
+// row is a sequence the real editor reaches.
 
 import { defaultKeymap } from "@codemirror/commands";
 import type * as Language from "@codemirror/language";
@@ -58,24 +60,27 @@ describe("continueListOnEnter — bare-marker empty check under a budget miss", 
     expect(pressEnter(doc, "- a\n- ".length)).toBe(`- a\n\n\n${tail}`);
   });
 
-  it("keeps the marker (no orphaned body) when the judging parse misses", () => {
-    // Miss only the next-line-bounded parse that judges emptiness (line 2's
-    // end); the caret-line and EOF parses still succeed.
-    const doc = "-\n  text\n\npara";
-    missWhen = (state, upto) => upto === state.doc.line(2).to;
-    expect(pressEnter(doc, 1)).toBe("-\n- \n  text\n\npara");
+  it("exits a bare marker on the last line with no further request", () => {
+    // No line below, so the caret-bounded item is complete: judged as is.
+    missWhen = (state, upto) => upto >= state.doc.length;
+    expect(pressEnter("- a\n- ", "- a\n- ".length)).toBe("- a\n");
   });
 
-  it("parses to EOF once, so a later success cannot overrule an earlier miss", () => {
-    // Next-line and the first EOF request miss; any later EOF request would
-    // succeed. One EOF verdict feeds every decision, so the miss keeps the
-    // list (a second marker, nothing deleted) instead of mixing two trees.
-    const doc = "- \n\npara";
+  // Emptiness unknown: neither exit (could orphan a body) nor continue (could
+  // add a marker under an empty item), and nothing more is requested.
+  it.each([
+    ["a body-owning marker", "-\n  text\n\npara", 1],
+    ["an empty marker", "- \n\npara", 2],
+  ])("makes no edit when the judging parse misses (%s)", (_label, doc, caret) => {
     let eofRequests = 0;
-    missWhen = (state, upto) =>
-      upto === state.doc.line(2).to || (upto >= state.doc.length && eofRequests++ === 0);
-    expect(pressEnter(doc, 2)).toBe("- \n- \n\npara");
-    expect(eofRequests).toBe(1);
+    missWhen = (state, upto) => {
+      if (upto >= state.doc.length) {
+        eofRequests++;
+      }
+      return upto === state.doc.line(2).to;
+    };
+    expect(pressEnter(doc, caret)).toBe(doc);
+    expect(eofRequests).toBe(0);
   });
 });
 
@@ -122,10 +127,31 @@ describe("continueListOnEnter — EOF budget miss across a marker-width change",
   });
 
   it("does not shift a body the bounded parse cannot see the end of", () => {
-    // The body runs past the lookahead, so no node after the item proves it
-    // closed: shifting the visible part only would split the body.
+    // No node after the item in the tree the request returned, so nothing
+    // proves it closed: shifting the visible part only would split the body.
     missWhen = (state, upto) => upto >= state.doc.length;
     const doc = `9. a\n${"   body\n".repeat(3000)}# H\n${tail}`;
+    expect(pressEnter(doc, 4)).toBe(doc);
+  });
+
+  // The closure request stops at the last complete line within the ceiling, so a
+  // long final line cannot push it to EOF (the parse that just missed).
+  const longLine = "x".repeat(30_000);
+  it.each([
+    ["a heading right below", `9. a\n# H\n${longLine}`, `9. a\n10. \n# H\n${longLine}`],
+    [
+      "a body, then a heading",
+      `9. a\n   body\n# H\n${longLine}`,
+      `9. a\n10. \n    body\n# H\n${longLine}`,
+    ],
+  ])("inserts `10. ` before a long final line (%s)", (_l, doc, out) => {
+    missWhen = (state, upto) => upto >= state.doc.length;
+    expect(pressEnter(doc, 4)).toBe(out);
+  });
+
+  it("makes no edit when only a long final line follows the item", () => {
+    missWhen = (state, upto) => upto >= state.doc.length;
+    const doc = `9. a\n${longLine}`;
     expect(pressEnter(doc, 4)).toBe(doc);
   });
 

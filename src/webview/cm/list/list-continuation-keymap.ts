@@ -6,6 +6,10 @@
 // sequential. On an EMPTY marker line Enter removes the marker, exiting the list;
 // a bare marker line that owns a body below (`-\n  text`) continues instead.
 //
+// PARSE BUDGET: an insert that changes the content column needs a tree that shows
+// the item closed; without one, Enter is consumed and the document is not
+// changed. A bare marker whose emptiness cannot be judged is consumed the same way.
+//
 // TRIGGER / DEFER: the command runs on EVERY Enter, so the hot path stays cheap
 // (a plain-paragraph caret is rejected after a caret-line-bounded parse). It
 // DEFERS (returns false → the default Enter / fencedCodeEnterKeymap runs) for:
@@ -84,31 +88,40 @@ function resolveListItemThrough(
   return item;
 }
 
-/** Whether the bare marker at `markFrom` (on line `lineNo`) heads an EMPTY item.
- *  The caret-bounded tree stops at the marker line, so parse through the next
- *  line — all `isEmptyItem` needs, since a bare item's body starts there or not
- *  at all — and never to EOF (a large unparsed tail must not cost the budget).
- *  A budget miss cannot tell empty from body-owning, so it keeps the list. */
-function bareItemIsEmpty(state: EditorState, markFrom: number, lineNo: number): boolean {
-  const upto = state.doc.line(Math.min(lineNo + 1, state.doc.lines)).to;
-  const item = resolveListItemThrough(state, markFrom, upto);
-  return item !== null && isEmptyItem(state, item);
+/** The item to judge a bare marker's emptiness on: one whose tree shows the line
+ *  below the marker line, which is all `isEmptyItem` needs (a bare item's body
+ *  starts there or not at all). On the last line the caret-bounded `item` is
+ *  already complete, so no parse is requested. Null = that parse missed its
+ *  budget (unknown). */
+function bareItemThroughLineBelow(
+  state: EditorState,
+  item: SyntaxNode,
+  markFrom: number,
+  lineNo: number
+): SyntaxNode | null {
+  if (lineNo === state.doc.lines) {
+    return item; // no line below: the caret-bounded item is already complete
+  }
+  return resolveListItemThrough(state, markFrom, state.doc.line(lineNo + 1).to);
 }
 
-/** How far past the caret line `closedItemWithin` parses, in characters. A
- *  10 KB GFM parse took about 1.5 ms in Node (2026-11-26), far inside the 50 ms
- *  budget, and it covers any item a person edits by hand; a longer body stays
- *  unproven and fails closed. */
+/** How far past the caret line `closedItemWithin` places its request, in
+ *  characters. It bounds the request position, not the tree: after an EOF miss
+ *  the returned tree can reach further, holding everything the missed attempt
+ *  already parsed. A 10 KB GFM parse took about 1.5 ms in Node (2026-11-26), far
+ *  inside the 50 ms budget. */
 const CLOSURE_LOOKAHEAD = 10_000;
 
-/** On an EOF budget miss, the ListItem at `markFrom` from a tree parsed
- *  CLOSURE_LOOKAHEAD past the caret line — but only when that tree holds a node
- *  after the item or one of its ancestors: the parser has moved past the item, so
- *  every line it owns is there and its shift can be computed. Null when that is
- *  not proven, or when the bound reaches EOF (the parse that just missed). */
+/** On an EOF budget miss, the ListItem at `markFrom` from a tree requested
+ *  through the last complete line end within CLOSURE_LOOKAHEAD of `from` — never
+ *  EOF, the parse that just missed — but only when that tree holds a node after
+ *  the item or one of its ancestors: the parser has moved past the item, so every
+ *  line it owns is there and its shift can be computed. Null otherwise. */
 function closedItemWithin(state: EditorState, markFrom: number, from: number): SyntaxNode | null {
-  const upto = state.doc.lineAt(Math.min(from + CLOSURE_LOOKAHEAD, state.doc.length)).to;
-  if (upto >= state.doc.length) {
+  const cap = from + CLOSURE_LOOKAHEAD;
+  const last = state.doc.lineAt(Math.min(cap, state.doc.length));
+  const upto = last.to <= cap && last.to < state.doc.length ? last.to : last.from - 1;
+  if (upto <= from) {
     return null;
   }
   const item = resolveListItemThrough(state, markFrom, upto);
@@ -172,14 +185,21 @@ export const continueListOnEnter: Command = (view) => {
     return false;
   }
   const indent = state.doc.sliceString(caretLine.from, mark.from);
-  // Marker-line decisions first, on local trees only: a task's emptiness and the
+  // Marker-line decision first, on local trees only: a task's emptiness and the
   // caret eligibility below read the caret-bounded `item`, a bare marker's
-  // emptiness the next line. No EOF parse until an edit is known to land.
+  // emptiness the line below. Three outcomes: empty → exit; unknown → no edit;
+  // otherwise continue. No EOF parse until an edit is known to land.
   const lineContent = markerLineContent(state, mark);
-  const empty =
+  const judged =
     lineContent === null
-      ? bareItemIsEmpty(state, mark.from, caretLine.number)
-      : isEmptyItem(state, item);
+      ? bareItemThroughLineBelow(state, item, mark.from, caretLine.number)
+      : item;
+  if (judged === null) {
+    // Emptiness unknown: neither exit (could orphan a body) nor continue (could
+    // add a marker under an empty item). Consume Enter, no edit.
+    return true;
+  }
+  const empty = isEmptyItem(state, judged);
   if (empty) {
     // Empty item → remove the whole marker line, exiting the list. Uniform across
     // nesting: no outdent (outdentListItem shifts whitespace only and would leave
