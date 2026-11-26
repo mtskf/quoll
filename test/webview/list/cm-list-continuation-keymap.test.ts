@@ -656,6 +656,21 @@ describe("continueListOnEnter — bare marker line that owns a body below", () =
     expect(pressEnter(doc, doc.indexOf("\n"))).toBe(expected);
   });
 
+  // A blank line BETWEEN two body paragraphs does not end the item (only one right
+  // after the marker does), so widening `9.` shifts both, and they reparse under
+  // the new item. Needs the patched @lezer/markdown 1.8.1 (stock ends it at the blank).
+  it("shifts every paragraph of a multi-paragraph body when `9. ` widens", () => {
+    const out = pressEnter("9. \n   first\n\n   second", 3);
+    expect(out).toBe("9. \n10. \n    first\n\n    second");
+    const reparsed = EditorState.create({ doc: out, extensions: [quollMarkdownLanguage()] });
+    const tree = ensureSyntaxTree(reparsed, out.length, 10_000);
+    let node = tree?.resolveInner(out.indexOf("second"), 1) ?? null;
+    while (node !== null && node.name !== "ListItem") {
+      node = node.parent;
+    }
+    expect(node?.from).toBe(out.indexOf("10."));
+  });
+
   // No representable next marker (9-digit cap): consume Enter without an edit
   // rather than fall through to upstream, which strips the marker.
   it("consumes Enter on a 9-digit bare marker that owns a body", () => {
@@ -702,8 +717,8 @@ describe("continueListOnEnter — bare marker line that owns a body below", () =
     ["- \n- b", 2, "\n- b"],
     // A blank line right after a bare marker ends the item (CommonMark: a bare
     // item starts with at most one blank line), so the body below is a separate
-    // paragraph and stays untouched — even though Lezer 1.8.1 parses it inside
-    // the item. Continuing there would detach it as indented code.
+    // paragraph and stays untouched. Continuing there would detach it as
+    // indented code.
     ["9.\n\n   body", 2, "\n\n   body"],
     ["-\n\n  body", 1, "\n\n  body"],
   ])("a truly empty item %j still exits the list", (doc, caret, expected) => {

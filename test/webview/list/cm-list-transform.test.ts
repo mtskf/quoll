@@ -100,14 +100,27 @@ describe("renumberRun", () => {
   });
 
   // `body` sits after a blank line, so it is a paragraph of the parent list, not
-  // of the bare `9.` (Lezer 1.8.1 still spans the item over it). Widening `9.`
-  // must not shift it: a fourth space would turn it into indented code.
+  // of the bare `9.`. Widening `9.` must not shift it: a fourth space would turn
+  // it into indented code.
   it("leaves a paragraph after a bare marker's blank line alone (9. -> 10.)", () => {
     const view = mount("8. first\n9.\n\n   body", EditorSelection.cursor(0));
     try {
       const a = resolveItemAtLine(view.state, 1);
       view.dispatch({ changes: renumberRun(view.state, a, 10) });
       expect(view.state.doc.toString()).toBe("8. first\n10.\n\n   body");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // A blank line between two body paragraphs does not end the item, so widening
+  // `9. ` shifts both. Needs the patched @lezer/markdown 1.8.1.
+  it("shifts every paragraph of a multi-paragraph body (9. -> 10.)", () => {
+    const view = mount("8. prev\n9. \n   first\n\n   second", EditorSelection.cursor(0));
+    try {
+      const a = resolveItemAtLine(view.state, 1);
+      view.dispatch({ changes: renumberRun(view.state, a, 10) });
+      expect(view.state.doc.toString()).toBe("8. prev\n10. \n    first\n\n    second");
     } finally {
       view.destroy();
     }

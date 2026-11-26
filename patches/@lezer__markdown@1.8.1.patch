@@ -1,8 +1,37 @@
 diff --git a/dist/index.cjs b/dist/index.cjs
-index 4a361b0d03d5ed263f09e3eeebbbc2f1b6375ec8..f378e7df383ec07d22d14fcd28aa3c230658b4c0 100644
+index 4a361b0d03d5ed263f09e3eeebbbc2f1b6375ec8..c4b8aa0eda1940212e006f280dc8cd1e3f5ba862 100644
 --- a/dist/index.cjs
 +++ b/dist/index.cjs
-@@ -1573,7 +1573,7 @@ function parseURL(text, start, offset) {
+@@ -268,8 +268,9 @@ const DefaultSkipMarkup = {
+         return true;
+     },
+     [Type.ListItem](bl, _cx, line) {
+-        if (line.next < 0 ? bl.blankFirstLine && bl.children.length == 1 : line.indent < line.baseIndent + bl.value)
++        if (line.next < 0 ? bl.blankFirstLine : line.indent < line.baseIndent + bl.value)
+             return false;
++        bl.blankFirstLine = false;
+         line.moveBaseColumn(line.baseIndent + bl.value);
+         return true;
+     },
+@@ -525,7 +526,7 @@ const DefaultBlockParsers = {
+         cx.startContext(Type.ListItem, line.basePos, newBase - line.baseIndent);
+         cx.addNode(Type.ListMark, cx.lineStart + line.pos, cx.lineStart + line.pos + size);
+         line.moveBaseColumn(newBase);
+-        cx.block.blankFirstLine = newBase >= line.text.length;
++        cx.block.blankFirstLine = line.skipSpace(line.basePos) == line.text.length;
+         return null;
+     },
+     OrderedList(cx, line) {
+@@ -538,7 +539,7 @@ const DefaultBlockParsers = {
+         cx.startContext(Type.ListItem, line.basePos, newBase - line.baseIndent);
+         cx.addNode(Type.ListMark, cx.lineStart + line.pos, cx.lineStart + line.pos + size);
+         line.moveBaseColumn(newBase);
+-        cx.block.blankFirstLine = newBase == line.text.length;
++        cx.block.blankFirstLine = line.skipSpace(line.basePos) == line.text.length;
+         return null;
+     },
+     ATXHeading(cx, line) {
+@@ -1573,7 +1574,7 @@ function parseURL(text, start, offset) {
                  return elt(Type.URL, start + offset, pos + 1 + offset);
              if (ch == 60 && !esc || ch == 10 /* '<\n' */)
                  return false;
@@ -12,10 +41,39 @@ index 4a361b0d03d5ed263f09e3eeebbbc2f1b6375ec8..f378e7df383ec07d22d14fcd28aa3c23
          return null;
      }
 diff --git a/dist/index.js b/dist/index.js
-index bcaae772b1e92dd3f279b5c0b6607a3df0a2b20a..26c9d09b466b46f2a8e464bee061ffc09315f6dc 100644
+index bcaae772b1e92dd3f279b5c0b6607a3df0a2b20a..c35ca49ff515d7430f7e9767e8913b7f861de678 100644
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -1571,7 +1571,7 @@ function parseURL(text, start, offset) {
+@@ -266,8 +266,9 @@ const DefaultSkipMarkup = {
+         return true;
+     },
+     [Type.ListItem](bl, _cx, line) {
+-        if (line.next < 0 ? bl.blankFirstLine && bl.children.length == 1 : line.indent < line.baseIndent + bl.value)
++        if (line.next < 0 ? bl.blankFirstLine : line.indent < line.baseIndent + bl.value)
+             return false;
++        bl.blankFirstLine = false;
+         line.moveBaseColumn(line.baseIndent + bl.value);
+         return true;
+     },
+@@ -523,7 +524,7 @@ const DefaultBlockParsers = {
+         cx.startContext(Type.ListItem, line.basePos, newBase - line.baseIndent);
+         cx.addNode(Type.ListMark, cx.lineStart + line.pos, cx.lineStart + line.pos + size);
+         line.moveBaseColumn(newBase);
+-        cx.block.blankFirstLine = newBase >= line.text.length;
++        cx.block.blankFirstLine = line.skipSpace(line.basePos) == line.text.length;
+         return null;
+     },
+     OrderedList(cx, line) {
+@@ -536,7 +537,7 @@ const DefaultBlockParsers = {
+         cx.startContext(Type.ListItem, line.basePos, newBase - line.baseIndent);
+         cx.addNode(Type.ListMark, cx.lineStart + line.pos, cx.lineStart + line.pos + size);
+         line.moveBaseColumn(newBase);
+-        cx.block.blankFirstLine = newBase == line.text.length;
++        cx.block.blankFirstLine = line.skipSpace(line.basePos) == line.text.length;
+         return null;
+     },
+     ATXHeading(cx, line) {
+@@ -1571,7 +1572,7 @@ function parseURL(text, start, offset) {
                  return elt(Type.URL, start + offset, pos + 1 + offset);
              if (ch == 60 && !esc || ch == 10 /* '<\n' */)
                  return false;

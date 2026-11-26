@@ -401,9 +401,9 @@ function contentColumnAfterMove(
  *  `QuoteMark` (in a blockquote, the next line's) starts on the line directly
  *  below the marker line. A bare item may start with at most one blank line —
  *  the marker line itself — so a block after a further blank line belongs to
- *  the enclosing block (CommonMark), even though Lezer 1.8.1 spans the item over
- *  it. Compares LINES, not `item.to` or a parse bound: a tree parsed only
- *  through the next line can still hold later nodes. */
+ *  the enclosing block (CommonMark; stock Lezer 1.8.1 still spans `9.\n\n   x`,
+ *  the patched build does not). Compares LINES, not `item.to` or a parse bound:
+ *  a tree parsed only through the next line can still hold later nodes. */
 function bareMarkerOwnsBody(state: EditorState, mark: SyntaxNode): boolean {
   const below = state.doc.lineAt(mark.from).number + 1;
   for (let c = mark.nextSibling; c !== null; c = c.nextSibling) {

@@ -22,7 +22,7 @@ overrides:
   mocha>glob: ^14.0.3
 
 patchedDependencies:
-  '@lezer/markdown@1.8.1': a4f6ddec8b66e46d28dc8b0fde2ba831e92164b7cc04850abc37c3dcbf1de5a4
+  '@lezer/markdown@1.8.1': 373e58e5e9e6bc8806d6c6915a99328e30746842378cec44a0595d99e0ff6266
 
 importers:
 
@@ -57,7 +57,7 @@ importers:
         version: 1.2.3
       '@lezer/markdown':
         specifier: 1.8.1
-        version: 1.8.1(patch_hash=a4f6ddec8b66e46d28dc8b0fde2ba831e92164b7cc04850abc37c3dcbf1de5a4)
+        version: 1.8.1(patch_hash=373e58e5e9e6bc8806d6c6915a99328e30746842378cec44a0595d99e0ff6266)
     devDependencies:
       '@biomejs/biome':
         specifier: ^2.4.15
@@ -2936,7 +2936,7 @@ snapshots:
       '@codemirror/state': 6.6.0
       '@codemirror/view': 6.43.0
       '@lezer/common': 1.5.2
-      '@lezer/markdown': 1.8.1(patch_hash=a4f6ddec8b66e46d28dc8b0fde2ba831e92164b7cc04850abc37c3dcbf1de5a4)
+      '@lezer/markdown': 1.8.1(patch_hash=373e58e5e9e6bc8806d6c6915a99328e30746842378cec44a0595d99e0ff6266)
 
   '@codemirror/language@6.12.3':
     dependencies:
@@ -3185,7 +3185,7 @@ snapshots:
     dependencies:
       '@lezer/common': 1.5.2
 
-  '@lezer/markdown@1.8.1(patch_hash=a4f6ddec8b66e46d28dc8b0fde2ba831e92164b7cc04850abc37c3dcbf1de5a4)':
+  '@lezer/markdown@1.8.1(patch_hash=373e58e5e9e6bc8806d6c6915a99328e30746842378cec44a0595d99e0ff6266)':
     dependencies:
       '@lezer/common': 1.5.2
       '@lezer/highlight': 1.2.3
