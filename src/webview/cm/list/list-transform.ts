@@ -164,7 +164,12 @@ function firstNonWsColumn(state: EditorState, lineNumber: number): number | null
  *  Note the marker line itself sits at the MARKER column (< content column by
  *  construction — e.g. `  - ddd` marker col 2 < content col 4), so it is
  *  bucketed by position (line 1) rather than by the column test — a naive
- *  "col >= content" test would wrongly exclude it from the item's own lines. */
+ *  "col >= content" test would wrongly exclude it from the item's own lines.
+ *
+ *  A bare marker that owns no body (`bareMarkerOwnsBody`) has no own lines even
+ *  when Lezer spans it over a blank line and the text after it: that text
+ *  belongs to the enclosing block (CommonMark), so moving the item must not
+ *  drag it. */
 export function classifyItemLines(
   state: EditorState,
   item: SyntaxNode,
@@ -174,6 +179,14 @@ export function classifyItemLines(
   const last = state.doc.lineAt(Math.max(item.from, item.to - 1)).number;
   const markerLine = first;
   const ownLines: number[] = [];
+  const mark = listMarkOf(item);
+  if (
+    mark !== null &&
+    markerLineContent(state, mark) === null &&
+    !bareMarkerOwnsBody(state, mark)
+  ) {
+    return { markerLine, ownLines };
+  }
   for (let n = first + 1; n <= last; n++) {
     const col = firstNonWsColumn(state, n);
     if (col !== null && col >= contentCol) {
@@ -384,9 +397,26 @@ function contentColumnAfterMove(
   return contentColumnFromMarkerLine(text, newMarkCol + newMarker.length, state.tabSize);
 }
 
+/** Whether the bare marker `mark` owns a body: its first sibling other than a
+ *  `QuoteMark` (in a blockquote, the next line's) starts on the line directly
+ *  below the marker line. A bare item may start with at most one blank line —
+ *  the marker line itself — so a block after a further blank line belongs to
+ *  the enclosing block (CommonMark), even though Lezer 1.8.1 spans the item over
+ *  it. Compares LINES, not `item.to` or a parse bound: a tree parsed only
+ *  through the next line can still hold later nodes. */
+function bareMarkerOwnsBody(state: EditorState, mark: SyntaxNode): boolean {
+  const below = state.doc.lineAt(mark.from).number + 1;
+  for (let c = mark.nextSibling; c !== null; c = c.nextSibling) {
+    if (c.name !== "QuoteMark") {
+      return state.doc.lineAt(c.from).number === below;
+    }
+  }
+  return false;
+}
+
 /** True when the item has no continuable content: a bare `- ` / `1. ` that
- *  owns no later lines either (`-\n  text` / `-\n  - child` are NOT empty — the
- *  Enter and outdent empty arms would delete or strand that body), a
+ *  owns no body (`bareMarkerOwnsBody`; `-\n  text` / `-\n  - child` are NOT
+ *  empty — the Enter and outdent empty arms would delete or strand that body), a
  *  content-less bare task marker (`- [ ]`, which the grammar leaves as a 3-byte
  *  Paragraph), or a `Task` node with only whitespace after its 3-byte
  *  `TaskMarker` (`- [ ] ` / `- [x] ` — the just-typed empty task, which the
@@ -399,9 +429,7 @@ export function isEmptyItem(state: EditorState, item: SyntaxNode): boolean {
   const mark = listMarkOf(item);
   const content = mark === null ? null : markerLineContent(state, mark);
   if (content === null) {
-    // Bare marker line: empty only if the item ends on it. `item.to` rather than
-    // `mark.nextSibling`, which in a blockquote is the next line's QuoteMark.
-    return mark === null || item.to <= state.doc.lineAt(mark.from).to;
+    return mark === null || !bareMarkerOwnsBody(state, mark);
   }
   if (isContentlessTaskParagraph(state, content)) {
     return true;

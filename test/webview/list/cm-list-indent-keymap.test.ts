@@ -601,6 +601,21 @@ describe("outdentListItem", () => {
     }
   });
 
+  // A bare nested `9.` before a blank line owns nothing: `body` belongs to the
+  // parent item (CommonMark), though Lezer 1.8.1 spans `9.` over it. Outdent
+  // takes the empty-item path and must leave `body`'s indent alone.
+  it("outdents a bare marker without moving the paragraph after its blank line", () => {
+    const view = mount("1. parent\n\n   9.\n\n      body", EditorSelection.cursor(0));
+    view.dispatch({ selection: EditorSelection.cursor(view.state.doc.line(3).to) });
+    try {
+      expect(outdentListItem(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("1. parent\n\n2. \n\n      body");
+      expect(view.state.selection.main.head).toBe(view.state.doc.line(3).to);
+    } finally {
+      view.destroy();
+    }
+  });
+
   // (test-analyzer-3) tab-indented nested item outdent: a tab that ends exactly
   //     at the item's marker column is removed whole when the destination is
   //     column 0 (the straddling case lives in "across tab-indented lines").
