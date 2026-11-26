@@ -128,10 +128,10 @@ describe("the fenced-code field keeps its own narrower guard", () => {
     "utf8"
   );
 
-  it("imports only the shared frontier term, never the shared structural guard", () => {
+  it("imports only the frontier term and the table-shape arm, never the shared structural guard", () => {
     // The fenced field composes the shared frontier predicate (`frontierIncomplete`) with
-    // its OWN structural predicate (`fencedCollapseSpec.docChangePlan`), so its one import
-    // from the shared guard must name `frontierIncomplete` alone: importing
+    // its OWN structural predicate (`fencedCollapseSpec.docChangePlan`), so its import from
+    // the shared guard must name only `frontierIncomplete` and the table-shape arm: importing
     // `touchesStructuralReparse` or `requiresFullBoundedRebuild` would put its in-fence hot
     // path behind the wider shared STRUCTURAL.
     // ⚠️ Assert the IMPORT FORM, not the bare path: the file also carries the literal
@@ -143,7 +143,9 @@ describe("the fenced-code field keeps its own narrower guard", () => {
         /import\s*(?:type\s*)?\{([^}]*)\}\s*from "\.\.\/structural-guard\.js"/g
       ),
     ].map((m) => m[1].trim());
-    expect(imports).toEqual(["frontierIncomplete"]);
+    // `tableRowShapeChanged` is allowed: the field applies it only to TOP-LEVEL edits
+    // (`topLevelBoundaryRisk`), so in-fence typing stays bounded.
+    expect(imports).toEqual(["frontierIncomplete, tableRowShapeChanged"]);
   });
 
   it("keeps an ATX / Setext / underscore-free regex, unlike the shared one", () => {

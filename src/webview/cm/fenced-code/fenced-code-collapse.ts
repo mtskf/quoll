@@ -28,7 +28,7 @@ import {
 } from "../collapse/line-collapse-field.js";
 import { leadingFrontmatterEnd } from "../frontmatter/detect.js";
 import { linkReferenceRisk } from "../link-reference-risk.js";
-import { frontierIncomplete } from "../structural-guard.js";
+import { frontierIncomplete, tableRowShapeChanged } from "../structural-guard.js";
 import { fencedCollapseTarget } from "./fenced-code-collapse-state.js";
 import { FencedCollapseToggleWidget } from "./fenced-code-collapse-widget.js";
 
@@ -121,10 +121,11 @@ const ATX_HEADING = /^[ \t]*#{1,6}(?:[ \t]|$)/;
  *     — is narrow: it fires only when the user actually types or deletes a `>`.
  *  Fires when the edit changes the LINE COUNT (a newline inserted/deleted), OR flips a
  *  changed line's blankness in EITHER direction (delete-to-blank, or type-into-the-blank),
- *  OR adds/removes a `>`, changes leading `[ \t]*`, makes or unmakes an ATX heading, or
- *  touches a possible link-reference run. Indent changes, a heading appearing or vanishing
- *  (it ends a lazy list paragraph), and reference formation/dissolution can change whether
- *  a far indented fence continues a list. All are conservative supersets (e.g. a newline
+ *  OR adds/removes a `>`, changes leading `[ \t]*`, makes or unmakes an ATX heading,
+ *  changes a line's table shape (the shared `tableRowShapeChanged`), or touches a possible
+ *  link-reference run. Indent changes, a heading appearing or vanishing (it ends a lazy
+ *  list paragraph), a table forming or dissolving (it closes the list too), and reference
+ *  formation/dissolution can change whether a far indented fence continues a list. All are conservative supersets (e.g. a newline
  *  splitting non-blank prose, or a `>` typed in plain prose, reshapes nothing — a safe
  *  over-trigger).
  *  Link-reference presence also over-triggers on line-start links/code and malformed
@@ -166,11 +167,12 @@ function topLevelBoundaryRisk(
       !gtDelta &&
       oldBlank === newBlank &&
       ATX_HEADING.test(oldText) === ATX_HEADING.test(newText) &&
+      !tableRowShapeChanged(oldText, newText) &&
       !indentDelta &&
       !linkReferenceRisk(tr.startState, fromA) &&
       !linkReferenceRisk(tr.state, fromB)
     ) {
-      return; // boundary-inert: no line/blank/heading/indent/terminator/reference change
+      return; // boundary-inert: no line/blank/heading/table/indent/terminator/reference change
     }
     risk = true;
   });
