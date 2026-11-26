@@ -11,13 +11,13 @@ import {
   listContinuationKeymap,
 } from "../../../src/webview/cm/list/list-continuation-keymap.js";
 import { quollMarkdownLanguage } from "../../../src/webview/cm/markdown.js";
-import { itemAncestry, parentMarkOf, topLevelListCount } from "../helpers/list-structure.js";
+import { itemAncestry, parentMarkOf } from "../helpers/list-structure.js";
 import { settledMount } from "../helpers/settled-view.js";
 
 function mount(
   doc: string,
   selection: EditorSelection | SelectionRange,
-  opts: { readOnly?: boolean; withHistory?: boolean; withKeymap?: boolean; tabSize?: number } = {}
+  opts: { readOnly?: boolean; withHistory?: boolean; withKeymap?: boolean } = {}
 ): EditorView {
   const parent = document.createElement("div");
   document.body.appendChild(parent);
@@ -32,7 +32,6 @@ function mount(
       EditorState.readOnly.of(opts.readOnly ?? false),
       ...(opts.withHistory ? [history()] : []),
       ...(opts.withKeymap ? [listContinuationKeymap()] : []),
-      ...(opts.tabSize === undefined ? [] : [EditorState.tabSize.of(opts.tabSize)]),
     ],
   });
   return settledMount({ state, parent });
@@ -396,61 +395,15 @@ describe("continueListOnEnter — split keeps the item's children nested", () =>
     }
   });
 
-  // A checkbox-only marker line is content, so the item owns a later
-  // blank-separated body and is not empty: Enter continues instead of deleting
-  // the line, and the body goes to the new item.
-  it.each([
-    ["- [ ] \n\n  body", "- [ ] \n- [ ] \n\n  body", 7],
-    ["1. [ ]\n\n   body\n2. x", "1. [ ]\n2. [ ] \n\n   body\n3. x", 7],
-    ["- [ ] \n\n  > body", "- [ ] \n- [ ] \n\n  > body", 7],
-  ] as const)("Enter at the end of %j continues the list", (doc, out, newItem) => {
-    const view = mount(doc, at(doc.indexOf("\n")));
-    try {
-      expect(continueListOnEnter(view)).toBe(true);
-      expect(view.state.doc.toString()).toBe(out);
-      expect(itemAncestry(out, out.indexOf("body"))).toEqual([newItem]);
-      expect(topLevelListCount(out)).toBe(1);
-    } finally {
-      view.destroy();
-    }
-  });
-
-  // Lezer expands tabs at 4-column stops whatever the editor's tabSize is, so the
-  // ownership columns are measured that way: with tabSize 2 a tab-indented body
-  // still reaches the content column of `1. [ ] ` (column 3) and stays owned.
-  it("keeps a tab-indented body owned under a 2-column editor tabSize", () => {
-    const doc = "1. [ ] \n\n\tbody";
-    const view = mount(doc, at(doc.indexOf("\n")), { tabSize: 2 });
-    try {
-      expect(continueListOnEnter(view)).toBe(true);
-      const out = view.state.doc.toString();
-      expect(out.startsWith("1. [ ] \n2. [ ] \n")).toBe(true);
-      expect(itemAncestry(out, out.indexOf("body"))).toEqual([out.indexOf("2.")]);
-      expect(topLevelListCount(out)).toBe(1);
-    } finally {
-      view.destroy();
-    }
-  });
-
-  // A caret inside or before the checkbox must not split it, for the Paragraph
-  // shape (`- [ ]`, no trailing space) as for the Task shape.
-  it.each([1, 2, 3, 4])("defers Enter at %i inside `- [ ]` that owns a body", (caret) => {
-    const doc = "- [ ]\n\n  body";
-    const view = mount(doc, at(caret));
-    try {
-      expect(continueListOnEnter(view)).toBe(false);
-      expect(view.state.doc.toString()).toBe(doc);
-    } finally {
-      view.destroy();
-    }
-  });
-
-  // After a blank line there is no lazy continuation: a first block below the
-  // content column has closed the item, so the checkbox-only task is empty.
+  // A checkbox-only line is judged on the line alone, so Enter exits the task.
+  // The last row keeps main's known gap: the item owns `body` after the blank
+  // line, but Enter still exits and the body leaves the list (TODO.md "list: 本文を
+  // 持つ item で marker 行を消す既存の…経路", case c).
   it.each([
     ["- [ ] \n\npara", "\n\npara"],
     ["- [ ] \n\n> body", "\n\n> body"],
     ["  - [ ] \n\n  para", "\n\n  para"],
+    ["- [ ] \n\n  body", "\n\n  body"],
   ])("Enter at the end of %j exits the empty task", (doc, out) => {
     const view = mount(doc, at(doc.indexOf("\n")));
     try {

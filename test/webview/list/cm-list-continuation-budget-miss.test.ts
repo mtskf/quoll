@@ -104,10 +104,8 @@ describe("continueListOnEnter — marker-line decisions request no EOF parse", (
   });
 });
 
-describe("continueListOnEnter — checkbox-only ownership read from bounded text", () => {
-  it("makes no edit when the blank gap below runs past the lookahead", () => {
-    // The first non-blank line below is out of reach, so ownership is unknown:
-    // neither exit (could orphan a body) nor continue. No parse is requested.
+describe("continueListOnEnter — checkbox-only task", () => {
+  it("exits with no parse request past the marker line", () => {
     let requests = 0;
     missWhen = (state, upto) => {
       if (upto > state.doc.line(1).to) {
@@ -116,7 +114,7 @@ describe("continueListOnEnter — checkbox-only ownership read from bounded text
       return false;
     };
     const doc = `- [ ] ${"\n".repeat(20_000)}para`;
-    expect(pressEnter(doc, "- [ ] ".length)).toBe(doc);
+    expect(pressEnter(doc, "- [ ] ".length)).toBe(`${"\n".repeat(20_000)}para`);
     expect(requests).toBe(0);
   });
 });

@@ -505,7 +505,8 @@ export function checkboxEndOf(state: EditorState, content: SyntaxNode): number |
  *  checkbox-only item owns whatever the tree puts in it, blank lines or not
  *  (`- [ ]\n\n  body` is not empty), so the tree must reach the item's first
  *  block below. Takes the ITEM (deriving `content` internally) so the planners
- *  share it with Enter. */
+ *  share it with Enter. Enter uses only the bare arm: it has no tree past the
+ *  caret line, so it judges a checkbox-only line on the line alone. */
 export function isEmptyItem(state: EditorState, item: SyntaxNode): boolean {
   const mark = listMarkOf(item);
   const content = mark === null ? null : markerLineContent(state, mark);

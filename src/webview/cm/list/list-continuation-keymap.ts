@@ -36,14 +36,7 @@
 
 import { isolateHistory } from "@codemirror/commands";
 import { ensureSyntaxTree } from "@codemirror/language";
-import {
-  type ChangeSpec,
-  countColumn,
-  EditorSelection,
-  type EditorState,
-  type Line,
-  Prec,
-} from "@codemirror/state";
+import { type ChangeSpec, EditorSelection, type EditorState, Prec } from "@codemirror/state";
 import { type Command, keymap } from "@codemirror/view";
 
 import { leadingFrontmatterEnd } from "../frontmatter/detect.js";
@@ -64,7 +57,6 @@ import {
 import {
   caretInBlockquote,
   caretInCode,
-  indentLength,
   listItemAt,
   listMarkOf,
   type SyntaxNode,
@@ -118,40 +110,6 @@ function bareItemThroughLineBelow(
     return item; // no line below: the caret-bounded item is already complete
   }
   return resolveListItemThrough(state, markFrom, state.doc.line(lineNo + 1).to);
-}
-
-/** Lezer expands a tab to the next multiple of 4 columns, ignoring `tabSize`. */
-const LEZER_TAB_SIZE = 4;
-
-/** Whether a checkbox-only item owns a block below its marker line `markerLine`,
- *  read from the text alone: past a blank line there is no lazy continuation, so
- *  the first non-blank line below belongs to the item exactly when it starts at
- *  or past the item's content column (CommonMark list-item continuation). The line
- *  directly below cannot be a lazy line either, since a checkbox-only paragraph
- *  would then not be checkbox-only. Enter defers inside blockquotes before this,
- *  so no container prefix precedes the item's lines here.
- *
- *  Columns use 4-column tab stops, as Lezer does whatever the editor's tabSize.
- *  The scan stops CLOSURE_LOOKAHEAD characters past the marker line: null when no
- *  non-blank line starts within that, so ownership is unknown. */
-function checkboxItemOwnsBlockBelow(
-  state: EditorState,
-  markerLine: Line,
-  markerEnd: number
-): boolean | null {
-  const contentCol = contentColumnFromMarkerLine(markerLine.text, markerEnd, LEZER_TAB_SIZE);
-  const cap = markerLine.to + CLOSURE_LOOKAHEAD;
-  for (let n = markerLine.number + 1; n <= state.doc.lines; n++) {
-    const line = state.doc.line(n);
-    if (line.from > cap) {
-      return null;
-    }
-    const ws = indentLength(line.text);
-    if (ws < line.text.length) {
-      return countColumn(line.text, LEZER_TAB_SIZE, ws) >= contentCol;
-    }
-  }
-  return false;
 }
 
 /** How far past the caret line `closedItemWithin` places its request, in
@@ -234,12 +192,10 @@ export const continueListOnEnter: Command = (view) => {
     return false;
   }
   const indent = state.doc.sliceString(caretLine.from, mark.from);
-  // Marker-line decision first, on local evidence only: the caret eligibility
-  // below and a content line's emptiness read the caret-bounded `item`; a bare
-  // marker's emptiness a tree through the line below; a checkbox-only line's the
-  // text below (`checkboxItemOwnsBlockBelow`, no parse). Three outcomes: empty →
-  // exit; unknown → no edit; otherwise continue. No EOF parse until an edit is
-  // known to land.
+  // Marker-line decision first, on local evidence only: a bare marker's emptiness
+  // reads a tree through the line below; a content line is empty only when it is
+  // checkbox-only (the line alone). Three outcomes: empty → exit; unknown → no
+  // edit; otherwise continue. No EOF parse until an edit is known to land.
   const lineContent = markerLineContent(state, mark);
   const judged =
     lineContent === null
@@ -250,14 +206,12 @@ export const continueListOnEnter: Command = (view) => {
     // add a marker under an empty item). Consume Enter, no edit.
     return true;
   }
-  const owned =
-    lineContent !== null && isCheckboxOnly(state, lineContent)
-      ? checkboxItemOwnsBlockBelow(state, caretLine, mark.to - caretLine.from)
-      : undefined;
-  if (owned === null) {
-    return true; // the first block below is out of reach: unknown, so no edit
-  }
-  const empty = owned === undefined ? isEmptyItem(state, judged) : !owned;
+  // A checkbox-only line is judged on the line alone, as on main: Enter exits even
+  // when the item owns a block after a blank line (TODO.md "list: 本文を持つ item で
+  // marker 行を消す既存の…経路", case c). Not `isEmptyItem`: its later-block test
+  // would depend on how far the caret-bounded tree happens to reach.
+  const empty =
+    lineContent === null ? isEmptyItem(state, judged) : isCheckboxOnly(state, lineContent);
   if (empty) {
     // Empty item → remove the whole marker line, exiting the list. Uniform across
     // nesting: no outdent (outdentListItem shifts whitespace only and would leave
