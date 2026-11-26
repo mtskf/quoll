@@ -1016,4 +1016,22 @@ describe("indent / outdent keep a bare marker's first block directly below it", 
       view.destroy();
     }
   });
+
+  // A checkbox-only marker line is content, not a bare marker, so the item owns a
+  // later blank-separated body. Shift-Tab takes the non-empty path: the checkbox
+  // stays and the body moves with the promoted item.
+  it("Shift-Tab keeps a checkbox-only item's later body under it", () => {
+    const doc = "9. p\n   1. [ ]\n\n      body\n10. tail";
+    const view = mount(doc, EditorSelection.cursor(doc.indexOf("]") + 1));
+    try {
+      expect(outdentListItem(view)).toBe(true);
+      const out = view.state.doc.toString();
+      expect(out).toBe("9. p\n10. [ ]\n\n    body\n11. tail");
+      expect(itemAncestry(out, out.indexOf("body"))).toEqual([out.indexOf("10.")]);
+      expect(itemAncestry(out, out.indexOf("tail"))).toEqual([out.indexOf("11.")]);
+      expect(topLevelListCount(out)).toBe(1);
+    } finally {
+      view.destroy();
+    }
+  });
 });

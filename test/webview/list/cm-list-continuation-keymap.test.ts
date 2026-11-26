@@ -11,7 +11,7 @@ import {
   listContinuationKeymap,
 } from "../../../src/webview/cm/list/list-continuation-keymap.js";
 import { quollMarkdownLanguage } from "../../../src/webview/cm/markdown.js";
-import { itemAncestry, parentMarkOf } from "../helpers/list-structure.js";
+import { itemAncestry, parentMarkOf, topLevelListCount } from "../helpers/list-structure.js";
 import { settledMount } from "../helpers/settled-view.js";
 
 function mount(
@@ -390,6 +390,24 @@ describe("continueListOnEnter — split keeps the item's children nested", () =>
       if (held !== null) {
         expect(itemAncestry(out, out.indexOf(held))).toContain(newItem);
       }
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // A checkbox-only marker line is content, so the item owns a later
+  // blank-separated body and is not empty: Enter continues instead of deleting
+  // the line, and the body goes to the new item.
+  it.each([
+    ["- [ ] \n\n  body", "- [ ] \n- [ ] \n\n  body", 7],
+    ["1. [ ]\n\n   body\n2. x", "1. [ ]\n2. [ ] \n\n   body\n3. x", 7],
+  ] as const)("Enter at the end of %j continues the list", (doc, out, newItem) => {
+    const view = mount(doc, at(doc.indexOf("\n")));
+    try {
+      expect(continueListOnEnter(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(out);
+      expect(itemAncestry(out, out.indexOf("body"))).toEqual([newItem]);
+      expect(topLevelListCount(out)).toBe(1);
     } finally {
       view.destroy();
     }

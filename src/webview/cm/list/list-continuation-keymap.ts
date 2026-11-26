@@ -47,6 +47,7 @@ import {
   classifyItemLines,
   contentColumnFromMarkerLine,
   continuationMarkerFor,
+  isCheckboxOnly,
   isEmptyItem,
   parseListMark,
   renumberRun,
@@ -94,21 +95,32 @@ function resolveListItemThrough(
 /** Blank in Lezer's and CommonMark's sense: ASCII spaces and tabs only. */
 const ASCII_BLANK = /^[ \t]*$/;
 
-/** The item to judge a bare marker's emptiness on: one whose tree shows the line
- *  below the marker line, which is all `isEmptyItem` needs (a bare item's body
- *  starts there or not at all). On the last line the caret-bounded `item` is
- *  already complete, so no parse is requested. Null = that parse missed its
- *  budget (unknown). */
-function bareItemThroughLineBelow(
+/** The item to judge marker-line emptiness on, from a tree that shows line
+ *  `target`: the line below a bare marker (its body starts there or not at all),
+ *  or the first non-blank line below a checkbox-only line (it can own a block
+ *  after blank lines). With no such line the caret-bounded `item` is already
+ *  complete, so no parse is requested. Null = that parse missed its budget
+ *  (unknown). */
+function itemThroughLine(
   state: EditorState,
   item: SyntaxNode,
   markFrom: number,
-  lineNo: number
+  target: number | null
 ): SyntaxNode | null {
-  if (lineNo === state.doc.lines) {
-    return item; // no line below: the caret-bounded item is already complete
+  if (target === null) {
+    return item;
   }
-  return resolveListItemThrough(state, markFrom, state.doc.line(lineNo + 1).to);
+  return resolveListItemThrough(state, markFrom, state.doc.line(target).to);
+}
+
+/** The first line after `lineNo` that is not ASCII-blank, or null. */
+function firstNonBlankBelow(state: EditorState, lineNo: number): number | null {
+  for (let n = lineNo + 1; n <= state.doc.lines; n++) {
+    if (!ASCII_BLANK.test(state.doc.line(n).text)) {
+      return n;
+    }
+  }
+  return null;
 }
 
 /** How far past the caret line `closedItemWithin` places its request, in
@@ -191,15 +203,23 @@ export const continueListOnEnter: Command = (view) => {
     return false;
   }
   const indent = state.doc.sliceString(caretLine.from, mark.from);
-  // Marker-line decision first, on local trees only: a task's emptiness and the
-  // caret eligibility below read the caret-bounded `item`, a bare marker's
-  // emptiness the line below. Three outcomes: empty → exit; unknown → no edit;
+  // Marker-line decision first, on local trees only: the caret eligibility below
+  // and a content line's emptiness read the caret-bounded `item`; a bare marker's
+  // emptiness the line below; a checkbox-only line's the first non-blank line
+  // below (`itemThroughLine`). Three outcomes: empty → exit; unknown → no edit;
   // otherwise continue. No EOF parse until an edit is known to land.
   const lineContent = markerLineContent(state, mark);
   const judged =
     lineContent === null
-      ? bareItemThroughLineBelow(state, item, mark.from, caretLine.number)
-      : item;
+      ? itemThroughLine(
+          state,
+          item,
+          mark.from,
+          caretLine.number < state.doc.lines ? caretLine.number + 1 : null
+        )
+      : isCheckboxOnly(state, lineContent)
+        ? itemThroughLine(state, item, mark.from, firstNonBlankBelow(state, caretLine.number))
+        : item;
   if (judged === null) {
     // Emptiness unknown: neither exit (could orphan a body) nor continue (could
     // add a marker under an empty item). Consume Enter, no edit.

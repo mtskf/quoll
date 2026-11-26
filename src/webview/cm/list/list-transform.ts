@@ -473,33 +473,42 @@ function liftGap(
   ];
 }
 
-/** True when the item has no continuable content: a bare `- ` / `1. ` that
- *  owns no body (`bareMarkerOwnsBody`; `-\n  text` / `-\n  - child` are NOT
- *  empty — the Enter and outdent empty arms would delete or strand that body), a
- *  content-less bare task marker (`- [ ]`, which the grammar leaves as a 3-byte
- *  Paragraph), or a `Task` node with only whitespace after its 3-byte
- *  `TaskMarker` (`- [ ] ` / `- [x] ` — the just-typed empty task, which the
- *  grammar emits as a `Task`, not a content-less Paragraph). Re-homed from
- *  `list-continuation-keymap.ts`'s private helper to take the ITEM (deriving
- *  `content` internally) rather than the content node, so callers besides
- *  Enter-continuation (planners) can share it without re-deriving `content`
- *  themselves. */
+/** A marker-line content node that is only a checkbox: a content-less task
+ *  paragraph (`- [ ]`, which the grammar leaves as a 3-byte Paragraph) or a `Task`
+ *  with only spaces / tabs after its 3-byte `TaskMarker` (`- [ ] ` / `- [x] `, the
+ *  just-typed empty task). Unlike a bare marker this is content, so the item is not
+ *  blank-first and can own blocks after a blank line. */
+export function isCheckboxOnly(state: EditorState, content: SyntaxNode): boolean {
+  if (isContentlessTaskParagraph(state, content)) {
+    return true;
+  }
+  if (content.name !== "Task") {
+    return false;
+  }
+  const marker = findTaskMarker(state, content);
+  if (marker === null) {
+    return false;
+  }
+  const rest = state.doc.sliceString(marker.to, content.to);
+  return indentLength(rest) === rest.length;
+}
+
+/** True when the item has no continuable content: a bare `- ` / `1. ` that owns
+ *  no body (`bareMarkerOwnsBody`; `-\n  text` / `-\n  - child` are NOT empty —
+ *  the Enter and outdent empty arms would delete or strand that body), or a
+ *  checkbox-only marker line (`isCheckboxOnly`) whose item owns no later block.
+ *  The two differ: a bare marker owns only a block directly below it, while a
+ *  checkbox-only item owns whatever the tree puts in it, blank lines or not
+ *  (`- [ ]\n\n  body` is not empty), so the tree must reach the item's first
+ *  block below. Takes the ITEM (deriving `content` internally) so the planners
+ *  share it with Enter. */
 export function isEmptyItem(state: EditorState, item: SyntaxNode): boolean {
   const mark = listMarkOf(item);
   const content = mark === null ? null : markerLineContent(state, mark);
   if (content === null) {
     return mark === null || !bareMarkerOwnsBody(state, mark);
   }
-  if (isContentlessTaskParagraph(state, content)) {
-    return true;
-  }
-  if (content.name === "Task") {
-    const marker = findTaskMarker(state, content);
-    if (marker !== null && state.doc.sliceString(marker.to, content.to).trim() === "") {
-      return true;
-    }
-  }
-  return false;
+  return isCheckboxOnly(state, content) && content.nextSibling === null;
 }
 
 /** The marker + trailing space Enter-continuation would insert to continue
