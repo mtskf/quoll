@@ -6,9 +6,10 @@
 // sequential. On an EMPTY marker line Enter removes the marker, exiting the list;
 // a bare marker line that owns a body below (`-\n  text`) continues instead.
 //
-// PARSE BUDGET: an insert that changes the content column needs a tree that shows
-// the item closed; without one, Enter is consumed and the document is not
-// changed. A bare marker whose emptiness cannot be judged is consumed the same way.
+// PARSE BUDGET: an insert that changes the content column, or that puts a bare
+// new marker above a blank line, needs a tree that shows the item closed; without
+// one, Enter is consumed and the document is not changed. A bare marker whose
+// emptiness cannot be judged is consumed the same way.
 //
 // TRIGGER / DEFER: the command runs on EVERY Enter, so the hot path stays cheap
 // (a plain-paragraph caret is rejected after a caret-line-bounded parse). It
@@ -42,6 +43,8 @@ import { leadingFrontmatterEnd } from "../frontmatter/detect.js";
 import { markerLineContent } from "../task-checkbox/task-marker-shape.js";
 import { findTaskMarker } from "./list-geometry.js";
 import {
+  blankGapBetween,
+  classifyItemLines,
   contentColumnFromMarkerLine,
   continuationMarkerFor,
   isEmptyItem,
@@ -231,7 +234,9 @@ export const continueListOnEnter: Command = (view) => {
     // consume Enter without an edit; content-bearing items keep the default Enter.
     return bare;
   }
-  const at = bare ? caretLine.to : head;
+  // A whitespace-only split tail stays on the caret line: the new line is then
+  // just the marker, the one shape the bare-marker rule below has to handle.
+  const at = bare || state.doc.sliceString(head, caretLine.to).trim() === "" ? caretLine.to : head;
   // The edit lands, so resolve the item past the caret line — the caret-bounded
   // `item` sees neither its own lines below nor the following siblings. One EOF
   // parse serves shift and renumber; on a miss, a bounded parse that proves the
@@ -246,20 +251,44 @@ export const continueListOnEnter: Command = (view) => {
     indent.length + markerStr.indexOf(" "),
     state.tabSize
   );
+  const oldContentCol = contentColumnFromMarkerLine(
+    caretLine.text,
+    mark.to - caretLine.from,
+    state.tabSize
+  );
+  // An empty tail makes the new line a bare marker, which owns only a block
+  // directly below it (`blankGapBetween`): the item's first own line must not sit
+  // after a blank line.
+  const newBare = tail === "" && parseListMark(markerStr.trim()) !== null;
+  const nextLine = caretLine.number < state.doc.lines ? state.doc.line(caretLine.number + 1) : null;
   if (
     ownItem === null &&
-    newContentCol !==
-      contentColumnFromMarkerLine(caretLine.text, mark.to - caretLine.from, state.tabSize)
+    (newContentCol !== oldContentCol || (newBare && nextLine?.text.trim() === ""))
   ) {
-    // The item's lines are unknown and the new marker moves the content column
-    // (`9.` → `10. `): inserting without shifting a body would drop it out of the
-    // list, so do nothing — but consume Enter, since upstream would strip the marker.
+    // The item's lines are unknown and the insert could strand them: the new
+    // marker moves the content column (`9.` → `10. `), or a bare new marker would
+    // sit above a blank line. Do nothing — but consume Enter, since upstream would
+    // strip the marker.
     return true;
   }
+  // The new marker goes after any blank lines above the item's first own line, so
+  // that line stays directly below it.
+  let insertAt = at;
+  const firstOwn =
+    newBare && ownItem !== null
+      ? classifyItemLines(state, ownItem, oldContentCol).ownLines[0]
+      : undefined;
+  if (firstOwn !== undefined) {
+    const gap = blankGapBetween(state, caretLine.number, firstOwn);
+    if (gap === null) {
+      return true; // text in the gap: nothing safe to move, so no edit
+    }
+    insertAt = gap.to;
+  }
   const insert = `\n${indent}${markerStr}`;
-  const caret = at + insert.length;
-  const changes: ChangeSpec[] = [{ from: at, insert }];
-  // All edits below sit past `at`, so the caret is unaffected.
+  const caret = insertAt + insert.length;
+  const changes: ChangeSpec[] = [{ from: insertAt, insert }];
+  // All edits below sit past `insertAt`, so the caret is unaffected.
   if (ownItem !== null) {
     changes.push(...shiftOwnLines(state, ownItem, newContentCol));
   }

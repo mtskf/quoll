@@ -155,6 +155,14 @@ describe("continueListOnEnter — EOF budget miss across a marker-width change",
     expect(pressEnter(doc, 4)).toBe(doc);
   });
 
+  it("makes no edit when a bare new marker would sit above a blank line", () => {
+    // Without the item's lines the blank-separated body cannot be kept under the
+    // new marker (a bare marker owns only a block directly below it).
+    missWhen = (state, upto) => upto >= state.doc.length;
+    const doc = "- a\n\n  - child";
+    expect(pressEnter(doc, 3)).toBe(doc);
+  });
+
   it("still inserts when the content column does not move (`- a`)", () => {
     missWhen = (state, upto) => upto >= state.doc.length;
     expect(pressEnter("- a\n  body", 3)).toBe("- a\n- \n  body");

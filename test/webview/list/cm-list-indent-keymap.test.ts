@@ -11,6 +11,7 @@ import {
   listIndentKeymap,
   outdentListItem,
 } from "../../../src/webview/cm/list/list-indent-keymap.js";
+import { parentMarkOf, topLevelListCount } from "../helpers/list-structure.js";
 import { settledMount, settledView } from "../helpers/settled-view.js";
 
 function mount(
@@ -960,5 +961,43 @@ describe("listIndentKeymap — registration + precedence", () => {
     expect(Object.keys(mod).sort()).toEqual(
       ["indentListItem", "listIndentKeymap", "outdentListItem"].sort()
     );
+  });
+});
+
+// CommonMark closes a bare item at a blank line right after its marker, so a list
+// edit that leaves a bare marker above the block it must own moves the blank lines
+// above the marker in the same transaction. Each case re-parses the result.
+describe("indent / outdent keep a bare marker's first block directly below it", () => {
+  it.each([
+    ["- a\n-\n\n- b", "- a\n\n-\n  - b", "b", "-"],
+    ["1. a\n2.\n\n3. b\n4. c", "1. a\n\n2.\n   1. b\n3. c", "1. b", "2."],
+  ])("Tab nests %j under the bare destination", (doc, out, needle, parent) => {
+    const view = mount(doc, EditorSelection.cursor(doc.indexOf(needle.slice(-1)) + 1));
+    try {
+      expect(indentListItem(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(out);
+      expect(parentMarkOf(out, needle)).toBe(parent);
+      expect(topLevelListCount(out)).toBe(1);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it.each([
+    ["- p\n  -\n\n  - b", "- p\n\n- \n  - b", "-"],
+    ["9. p\n   1.\n\n   2. b\n10. tail", "9. p\n\n10. \n    1. b\n11. tail", "10."],
+  ])("Shift-Tab on the bare item in %j keeps its forced child", (doc, out, parent) => {
+    const view = mount(doc, EditorSelection.cursor(doc.indexOf("\n") + 1));
+    try {
+      expect(outdentListItem(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(out);
+      expect(parentMarkOf(out, "b")).toBe(parent);
+      expect(topLevelListCount(out)).toBe(1);
+      expect(view.state.selection.main.head).toBe(
+        out.indexOf(`\n${parent} \n`) + parent.length + 2
+      );
+    } finally {
+      view.destroy();
+    }
   });
 });

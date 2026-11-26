@@ -11,6 +11,7 @@ import {
   listContinuationKeymap,
 } from "../../../src/webview/cm/list/list-continuation-keymap.js";
 import { quollMarkdownLanguage } from "../../../src/webview/cm/markdown.js";
+import { parentMarkOf } from "../helpers/list-structure.js";
 import { settledMount } from "../helpers/settled-view.js";
 
 function mount(
@@ -351,6 +352,35 @@ describe("continueListOnEnter — split keeps the item's children nested", () =>
       }
     });
   }
+
+  // A bare marker owns only a block directly below it (CommonMark), so an empty
+  // split tail must not leave the item's blank-separated body under a new bare
+  // marker: the blank lines go above the new marker instead.
+  it.each([
+    ["9. a\n\n   - child", "9. a\n\n10. \n    - child", "10."],
+    ["- a\n\n  - child", "- a\n\n- \n  - child", "-"],
+  ])("Enter at the end of %j keeps the blank-separated body under the new item", (doc, out, parent) => {
+    const view = mount(doc, at(doc.indexOf("\n")));
+    try {
+      expect(continueListOnEnter(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(out);
+      expect(view.state.selection.main.head).toBe(out.indexOf(" \n") + 1);
+      expect(parentMarkOf(out, "child")).toBe(parent);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("leaves the doc untouched when a non-blank line sits in that gap", () => {
+    const doc = "- a\nlazy\n\n  - child";
+    const view = mount(doc, at(3));
+    try {
+      expect(continueListOnEnter(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(doc);
+    } finally {
+      view.destroy();
+    }
+  });
 
   it("does not shift a lazy-continuation line (not structurally the item's)", () => {
     const view = mount("9. abcd\nlazy", at(5));

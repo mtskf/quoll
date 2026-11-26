@@ -180,11 +180,7 @@ export function classifyItemLines(
   const markerLine = first;
   const ownLines: number[] = [];
   const mark = listMarkOf(item);
-  if (
-    mark !== null &&
-    markerLineContent(state, mark) === null &&
-    !bareMarkerOwnsBody(state, mark)
-  ) {
+  if (mark !== null && isBodilessBareMarker(state, mark)) {
     return { markerLine, ownLines };
   }
   for (let n = first + 1; n <= last; n++) {
@@ -412,6 +408,54 @@ function bareMarkerOwnsBody(state: EditorState, mark: SyntaxNode): boolean {
     }
   }
   return false;
+}
+
+/** A bare marker (nothing after it on its line) that owns no body below. */
+function isBodilessBareMarker(state: EditorState, mark: SyntaxNode): boolean {
+  return markerLineContent(state, mark) === null && !bareMarkerOwnsBody(state, mark);
+}
+
+/** The blank lines strictly between lines `upper` and `lower`, as the span from
+ *  the end of `upper` to the end of the last of them (empty when the two lines
+ *  are adjacent). Null when one of them is not blank: nothing can be moved.
+ *
+ *  THE BARE-MARKER RULE shared by every list edit: CommonMark ends a bare item at
+ *  a blank line right after its marker, so a bare marker owns only a block
+ *  DIRECTLY below it. An edit that leaves a bare marker on `upper` above the block
+ *  it must own on `lower` moves this gap ABOVE the marker (Enter inserts the new
+ *  marker after the gap; Tab / Shift-Tab use `liftGap`). A null gap makes the edit
+ *  a no-op: the document and its numbering stay as they were. */
+export function blankGapBetween(
+  state: EditorState,
+  upper: number,
+  lower: number
+): { from: number; to: number } | null {
+  for (let n = upper + 1; n < lower; n++) {
+    if (firstNonWsColumn(state, n) !== null) {
+      return null;
+    }
+  }
+  return { from: state.doc.line(upper).to, to: state.doc.line(Math.max(upper, lower - 1)).to };
+}
+
+/** Changes that move `gap` (from `blankGapBetween(state, upper, …)`) from below
+ *  line `upper` to directly above it: `gap.to - gap.from` chars land before the
+ *  line. */
+function liftGap(
+  state: EditorState,
+  upper: number,
+  gap: { from: number; to: number }
+): ChangeSpec[] {
+  if (gap.from === gap.to) {
+    return [];
+  }
+  return [
+    { from: gap.from, to: gap.to },
+    {
+      from: state.doc.line(upper).from,
+      insert: `${state.doc.sliceString(gap.from + 1, gap.to)}\n`,
+    },
+  ];
 }
 
 /** True when the item has no continuable content: a bare `- ` / `1. ` that
@@ -723,13 +767,29 @@ export function planOutdentItem(state: EditorState, headPos: number): ListEditPl
       return { kind: "noop" };
     }
     changes.push({ from: mark.from, to: markerLine.to, insert: newMarker });
+    // A bare promoted marker must keep its first forced child directly below it.
+    const firstForced = followingListItems(item)[0];
+    let liftedChars = 0;
+    if (firstForced !== undefined && parseListMark(newMarker.trim()) !== null) {
+      const gap = blankGapBetween(
+        state,
+        markerLine.number,
+        state.doc.lineAt(firstForced.from).number
+      );
+      if (gap === null) {
+        return { kind: "noop" };
+      }
+      changes.push(...liftGap(state, markerLine.number, gap));
+      liftedChars = gap.to - gap.from;
+    }
     // Caret right after the synthesized marker, in POST-transform coords: the
-    // marker-line shift is the only change ahead of it, so offset by the chars
-    // that shift removed (on a tab-indented line chars != columns, and a column
-    // count would overshoot the shortened line → RangeError in dispatch).
+    // marker-line shift and a lifted gap are the only changes ahead of it, so
+    // offset by the chars that shift removed (on a tab-indented line chars !=
+    // columns, and a column count would overshoot the shortened line → RangeError
+    // in dispatch) and by the gap moved above the marker.
     const removedChars =
       markerShift === null ? 0 : markerShift.to - markerShift.from - markerShift.insert.length;
-    selection = EditorSelection.cursor(mark.from - removedChars + newMarker.length);
+    selection = EditorSelection.cursor(mark.from - removedChars + liftedChars + newMarker.length);
   } else {
     // Non-empty: adopt only the marker KIND — replace the ListMark span; the
     // item's content bytes (incl. its own `[ ]`/`[x]`) are untouched.
@@ -899,6 +959,19 @@ export function planIndentItem(state: EditorState, headPos: number): ListEditPla
     return { kind: "noop" }; // doc's first list item — nothing to nest under
   }
 
+  // A bodiless bare destination takes `item` as its first block, which must sit
+  // directly below the destination's marker.
+  const parentMark = listMarkOf(parent);
+  const lift: ChangeSpec[] = [];
+  if (parentMark !== null && isBodilessBareMarker(state, parentMark)) {
+    const upper = state.doc.lineAt(parentMark.from).number;
+    const gap = blankGapBetween(state, upper, state.doc.lineAt(mark.from).number);
+    if (gap === null) {
+      return { kind: "noop" };
+    }
+    lift.push(...liftGap(state, upper, gap));
+  }
+
   const targetCol = contentColumnOf(state, parent);
   const itemMarkCol = columnAt(state, mark.from);
   const markerDelta = targetCol - itemMarkCol;
@@ -916,7 +989,7 @@ export function planIndentItem(state: EditorState, headPos: number): ListEditPla
   }
 
   const newMarker = formatMarker(adopted);
-  const changes: ChangeSpec[] = [];
+  const changes: ChangeSpec[] = lift;
 
   // Marker rewrite (adopt the destination run's kind / continue-number, OR reset
   // to 1 for a new run) — a disjoint ListMark-span replacement.
