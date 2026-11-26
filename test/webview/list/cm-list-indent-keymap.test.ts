@@ -1041,6 +1041,23 @@ describe("indent / outdent keep a bare marker's first block directly below it", 
     }
   });
 
+  // With a forced child, the bare promoted item opens with that child directly
+  // below it, so the blank line does not close it and the parent's later block
+  // goes under the promoted item, as on main.
+  it("Shift-Tab on a bare item with a forced child keeps the parent's later block", () => {
+    const doc = "- p\n\n  -\n  - child\n\n  body";
+    const view = mount(doc, EditorSelection.cursor(doc.indexOf("  -\n") + 3));
+    try {
+      expect(outdentListItem(view)).toBe(true);
+      const out = view.state.doc.toString();
+      expect(out).toBe("- p\n\n- \n  - child\n\n  body");
+      expect(itemAncestry(out, out.indexOf("child"))).toEqual([out.indexOf("- child"), 5]);
+      expect(blockOwner(out, "body")).toEqual(["Paragraph", 5]);
+    } finally {
+      view.destroy();
+    }
+  });
+
   // A content-bearing promoted item keeps main's behaviour: the parent's later
   // block goes under the promoted item and stays in the list.
   it.each([

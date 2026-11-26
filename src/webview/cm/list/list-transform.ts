@@ -799,14 +799,15 @@ export function planOutdentItem(state: EditorState, headPos: number): ListEditPl
     }
     changes.push({ from: mark.from, to: markerLine.to, insert: newMarker });
     const bareMarker = parseListMark(newMarker.trim()) !== null;
-    // A block the parent owns after the moved run (the rest of `item`'s list) would
-    // land below the bare promoted marker, which a blank line closes: the block
-    // would leave the list as code. No safe in-place promotion, so no edit.
-    if (bareMarker && item.parent?.nextSibling != null) {
+    const firstForced = followingListItems(item)[0];
+    // With no forced child, a block the parent owns after the moved run (the rest
+    // of `item`'s list) would land below the bare promoted marker, which a blank
+    // line closes: the block would leave the list as code. No safe in-place
+    // promotion, so no edit. A forced child opens the promoted item instead (below).
+    if (bareMarker && firstForced === undefined && item.parent?.nextSibling != null) {
       return { kind: "noop" };
     }
     // A bare promoted marker must keep its first forced child directly below it.
-    const firstForced = followingListItems(item)[0];
     let liftedChars = 0;
     if (firstForced !== undefined && bareMarker) {
       const gap = blankGapBetween(
