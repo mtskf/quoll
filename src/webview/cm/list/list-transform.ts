@@ -44,13 +44,18 @@ import {
   type SelectionRange,
 } from "@codemirror/state";
 
-import { isContentlessTaskParagraph } from "../task-checkbox/task-marker-shape.js";
+import {
+  isContentlessTaskParagraph,
+  markerLineContent,
+} from "../task-checkbox/task-marker-shape.js";
 import { columnAt, findTaskMarker, isTaskItem } from "./list-geometry.js";
 import {
   caretInCode,
   destinationForIndent,
   destinationForOutdent,
+  enclosingListItem,
   followingListItems,
+  indentLength,
   isListNode,
   lastListItemOf,
   listMarkOf,
@@ -92,8 +97,9 @@ export function formatMarker(shape: ListMarkShape): string {
   return shape.kind === "bullet" ? shape.glyph : `${shape.number}${shape.delim}`;
 }
 
-/** Column where the item's content begins (its `ListMark`'s next sibling), with
- *  a fallback for an empty/malformed item so it is NEVER null: `markCol +
+/** Column where the item's content begins (its `markerLineContent`), with a
+ *  fallback for an empty/malformed item — including one whose content starts on
+ *  a later line — so it is NEVER null: `markCol +
  *  markerLen + 1` (the CommonMark implied single-space content indent — the
  *  same convention `list-geometry.ts`'s `ownMarkerWidth` uses for an empty
  *  item's hang). */
@@ -103,8 +109,8 @@ export function contentColumnOf(state: EditorState, item: SyntaxNode): number {
     return columnAt(state, item.from);
   }
   const markCol = columnAt(state, mark.from);
-  const content = mark.nextSibling;
-  if (content === null || content.from === content.to) {
+  const content = markerLineContent(state, mark);
+  if (content === null) {
     return markCol + (mark.to - mark.from) + 1;
   }
   return columnAt(state, content.from);
@@ -130,13 +136,13 @@ export function contentColumnFromMarkerLine(
 }
 
 /** First non-whitespace column of `line`, or `null` when the line is blank /
- *  whitespace-only. */
+ *  only ASCII spaces / tabs (`indentLength`: a U+00A0 line is text). */
 function firstNonWsColumn(state: EditorState, lineNumber: number): number | null {
   const line = state.doc.line(lineNumber);
-  if (line.text.trim() === "") {
+  const wsLen = indentLength(line.text);
+  if (wsLen === line.text.length) {
     return null;
   }
-  const wsLen = line.text.length - line.text.trimStart().length;
   return columnAt(state, line.from + wsLen);
 }
 
@@ -159,7 +165,12 @@ function firstNonWsColumn(state: EditorState, lineNumber: number): number | null
  *  Note the marker line itself sits at the MARKER column (< content column by
  *  construction — e.g. `  - ddd` marker col 2 < content col 4), so it is
  *  bucketed by position (line 1) rather than by the column test — a naive
- *  "col >= content" test would wrongly exclude it from the item's own lines. */
+ *  "col >= content" test would wrongly exclude it from the item's own lines.
+ *
+ *  A bare marker that owns no body (`bareMarkerOwnsBody`) has no own lines even
+ *  when Lezer spans it over a blank line and the text after it: that text
+ *  belongs to the enclosing block (CommonMark), so moving the item must not
+ *  drag it. */
 export function classifyItemLines(
   state: EditorState,
   item: SyntaxNode,
@@ -169,6 +180,10 @@ export function classifyItemLines(
   const last = state.doc.lineAt(Math.max(item.from, item.to - 1)).number;
   const markerLine = first;
   const ownLines: number[] = [];
+  const mark = listMarkOf(item);
+  if (mark !== null && isBodilessBareMarker(state, mark)) {
+    return { markerLine, ownLines };
+  }
   for (let n = first + 1; n <= last; n++) {
     const col = firstNonWsColumn(state, n);
     if (col !== null && col >= contentCol) {
@@ -334,11 +349,13 @@ function shiftLine(
 }
 
 /** Move the item's own lines using CommonMark marker padding on both sides
- *  of a split or renumber so nested content keeps its relative indentation. */
+ *  of a split or renumber so nested content keeps its relative indentation.
+ *  Line `skipLine` (none by default) is left alone: its caller sets it itself. */
 export function shiftOwnLines(
   state: EditorState,
   item: SyntaxNode,
-  newContentCol: number
+  newContentCol: number,
+  skipLine = 0
 ): ChangeSpec[] {
   const mark = listMarkOf(item);
   if (mark === null) {
@@ -356,7 +373,7 @@ export function shiftOwnLines(
   }
   const changes: ChangeSpec[] = [];
   for (const lineNo of classifyItemLines(state, item, boundary).ownLines) {
-    const change = shiftLine(state, item, lineNo, boundary, delta);
+    const change = lineNo === skipLine ? null : shiftLine(state, item, lineNo, boundary, delta);
     if (change !== null) {
       changes.push(change);
     }
@@ -379,30 +396,126 @@ function contentColumnAfterMove(
   return contentColumnFromMarkerLine(text, newMarkCol + newMarker.length, state.tabSize);
 }
 
-/** True when the item has no continuable content: a bare `- ` / `1. `, a
- *  content-less bare task marker (`- [ ]`, which the grammar leaves as a 3-byte
- *  Paragraph), or a `Task` node with only whitespace after its 3-byte
- *  `TaskMarker` (`- [ ] ` / `- [x] ` — the just-typed empty task, which the
- *  grammar emits as a `Task`, not a content-less Paragraph). Re-homed from
- *  `list-continuation-keymap.ts`'s private helper to take the ITEM (deriving
- *  `content` internally) rather than the content node, so callers besides
- *  Enter-continuation (planners) can share it without re-deriving `content`
- *  themselves. */
-export function isEmptyItem(state: EditorState, item: SyntaxNode): boolean {
-  const content = listMarkOf(item)?.nextSibling ?? null;
-  if (content === null || content.from === content.to) {
-    return true;
-  }
-  if (isContentlessTaskParagraph(state, content)) {
-    return true;
-  }
-  if (content.name === "Task") {
-    const marker = findTaskMarker(state, content);
-    if (marker !== null && state.doc.sliceString(marker.to, content.to).trim() === "") {
-      return true;
+/** Whether the bare marker `mark` owns a body: its first sibling other than a
+ *  `QuoteMark` (in a blockquote, the next line's) starts on the line directly
+ *  below the marker line. A bare item may start with at most one blank line —
+ *  the marker line itself — so a block after a further blank line belongs to
+ *  the enclosing block (CommonMark; stock Lezer 1.8.1 still spans `9.\n\n   x`,
+ *  the patched build does not). Compares LINES, not `item.to` or a parse bound:
+ *  a tree parsed only through the next line can still hold later nodes. */
+function bareMarkerOwnsBody(state: EditorState, mark: SyntaxNode): boolean {
+  const below = state.doc.lineAt(mark.from).number + 1;
+  for (let c = mark.nextSibling; c !== null; c = c.nextSibling) {
+    if (c.name !== "QuoteMark") {
+      return state.doc.lineAt(c.from).number === below;
     }
   }
   return false;
+}
+
+/** A bare marker (nothing after it on its line) that owns no body below. */
+function isBodilessBareMarker(state: EditorState, mark: SyntaxNode): boolean {
+  return markerLineContent(state, mark) === null && !bareMarkerOwnsBody(state, mark);
+}
+
+/** The blank lines strictly between lines `upper` and `lower`, as the span from
+ *  the end of `upper` to the end of the last of them (empty when the two lines
+ *  are adjacent). Null when one of them is not blank: nothing can be moved.
+ *
+ *  THE BARE-MARKER RULE shared by every list edit: CommonMark ends a bare item at
+ *  a blank line right after its marker, so a bare marker owns only a block
+ *  DIRECTLY below it. An edit that leaves a bare marker on `upper` above the block
+ *  it must own on `lower` moves this gap ABOVE the marker (Enter inserts the new
+ *  marker after the gap; Tab / Shift-Tab use `liftGap`). A null gap makes the edit
+ *  a no-op: the document and its numbering stay as they were. */
+export function blankGapBetween(
+  state: EditorState,
+  upper: number,
+  lower: number
+): { from: number; to: number } | null {
+  for (let n = upper + 1; n < lower; n++) {
+    if (firstNonWsColumn(state, n) !== null) {
+      return null;
+    }
+  }
+  return { from: state.doc.line(upper).to, to: state.doc.line(Math.max(upper, lower - 1)).to };
+}
+
+/** Changes that move `gap` (from `blankGapBetween(state, upper, …)`) from below
+ *  line `upper` to directly above it: `gap.to - gap.from` chars land before the
+ *  line. `owner` is the item that holds line `upper` once the edit lands. Null when
+ *  the lift is unsafe: a bare marker of `owner` or one of its ancestors sits on the
+ *  line above, owning `upper` as its directly-below first block, and the lifted
+ *  blank would close it. No other placement is tried; the edit is then a no-op. */
+function liftGap(
+  state: EditorState,
+  upper: number,
+  gap: { from: number; to: number },
+  owner: SyntaxNode | null
+): ChangeSpec[] | null {
+  if (gap.from === gap.to) {
+    return [];
+  }
+  for (let n = owner; n !== null; n = enclosingListItem(n)) {
+    const mark = listMarkOf(n);
+    if (
+      mark !== null &&
+      state.doc.lineAt(mark.from).number === upper - 1 &&
+      markerLineContent(state, mark) === null
+    ) {
+      return null;
+    }
+  }
+  return [
+    { from: gap.from, to: gap.to },
+    {
+      from: state.doc.line(upper).from,
+      insert: `${state.doc.sliceString(gap.from + 1, gap.to)}\n`,
+    },
+  ];
+}
+
+/** A marker-line content node that is only a checkbox: a content-less task
+ *  paragraph (`- [ ]`, which the grammar leaves as a 3-byte Paragraph) or a `Task`
+ *  with only spaces / tabs after its 3-byte `TaskMarker` (`- [ ] ` / `- [x] `, the
+ *  just-typed empty task). Unlike a bare marker this is content, so the item is not
+ *  blank-first and can own blocks after a blank line. */
+export function isCheckboxOnly(state: EditorState, content: SyntaxNode): boolean {
+  const end = checkboxEndOf(state, content);
+  if (end === null) {
+    return false;
+  }
+  const rest = state.doc.sliceString(end, content.to);
+  return indentLength(rest) === rest.length;
+}
+
+/** The end of the checkbox that opens marker-line `content`: a `Task`'s 3-byte
+ *  `TaskMarker`, or the whole content-less task paragraph (`- [ ]`). Null when the
+ *  content does not open with a checkbox. */
+export function checkboxEndOf(state: EditorState, content: SyntaxNode): number | null {
+  if (isContentlessTaskParagraph(state, content)) {
+    return content.to;
+  }
+  return content.name === "Task" ? (findTaskMarker(state, content)?.to ?? null) : null;
+}
+
+/** True when the item has no continuable content: a bare `- ` / `1. ` that owns
+ *  no body (`bareMarkerOwnsBody`; `-\n  text` / `-\n  - child` are NOT empty —
+ *  the Enter and outdent empty arms would delete or strand that body), or a
+ *  checkbox-only marker line (`isCheckboxOnly`) whose item owns no later block.
+ *  The two differ: a bare marker owns only a block directly below it, while a
+ *  checkbox-only item owns whatever the tree puts in it, blank lines or not
+ *  (`- [ ]\n\n  body` is not empty), so the tree must reach the item's first
+ *  block below. Takes the ITEM (deriving `content` internally) so the planners
+ *  share it with Enter. Enter uses only the bare arm: it has no tree past the
+ *  caret line, so it judges a checkbox-only line on the line alone. */
+export function isEmptyItem(state: EditorState, item: SyntaxNode): boolean {
+  const mark = listMarkOf(item);
+  const content = mark === null ? null : markerLineContent(state, mark);
+  if (content === null) {
+    return mark === null || !bareMarkerOwnsBody(state, mark);
+  }
+  return isCheckboxOnly(state, content) && content.nextSibling === null;
 }
 
 /** The marker + trailing space Enter-continuation would insert to continue
@@ -522,7 +635,7 @@ export function renumberRun(
 }
 
 /** The parse tree budget (ms) used to reach EOF. Matches `renumberRun` /
- *  `resolveAtEof` — big lists resolve within this on the seed path. */
+ *  `resolveListItemThrough` — big lists resolve within this on the seed path. */
 const EOF_BUDGET = 50;
 
 /** Dev-only signal that a planner fell back to a no-op because
@@ -543,7 +656,7 @@ export function warnBudgetMiss(where: string, state: EditorState): void {
 }
 
 /** Re-resolve the innermost `ListItem` for the line containing `headPos` from an
- *  EOF-bounded tree (mirrors `list-continuation-keymap.ts`'s `resolveAtEof`,
+ *  EOF-bounded tree (mirrors `list-continuation-keymap.ts`'s `resolveListItemThrough`,
  *  kept private here so the planner owns its resolution). The caret-line-bounded
  *  tree that `listItemAt` builds truncates the item's forced-children and
  *  destination followers (they live BELOW the caret), so the planner MUST parse
@@ -685,13 +798,40 @@ export function planOutdentItem(state: EditorState, headPos: number): ListEditPl
       return { kind: "noop" };
     }
     changes.push({ from: mark.from, to: markerLine.to, insert: newMarker });
+    const bareMarker = parseListMark(newMarker.trim()) !== null;
+    const firstForced = followingListItems(item)[0];
+    // With no forced child, a block the parent owns after the moved run (the rest
+    // of `item`'s list) would land below the bare promoted marker, which a blank
+    // line closes: the block would leave the list as code. No safe in-place
+    // promotion, so no edit. A forced child opens the promoted item instead (below).
+    if (bareMarker && firstForced === undefined && item.parent?.nextSibling != null) {
+      return { kind: "noop" };
+    }
+    // A bare promoted marker must keep its first forced child directly below it.
+    let liftedChars = 0;
+    if (firstForced !== undefined && bareMarker) {
+      const gap = blankGapBetween(
+        state,
+        markerLine.number,
+        state.doc.lineAt(firstForced.from).number
+      );
+      // The promoted item lands beside `parent`, inside `parent`'s own owner.
+      const lift =
+        gap === null ? null : liftGap(state, markerLine.number, gap, enclosingListItem(parent));
+      if (gap === null || lift === null) {
+        return { kind: "noop" };
+      }
+      changes.push(...lift);
+      liftedChars = gap.to - gap.from;
+    }
     // Caret right after the synthesized marker, in POST-transform coords: the
-    // marker-line shift is the only change ahead of it, so offset by the chars
-    // that shift removed (on a tab-indented line chars != columns, and a column
-    // count would overshoot the shortened line → RangeError in dispatch).
+    // marker-line shift and a lifted gap are the only changes ahead of it, so
+    // offset by the chars that shift removed (on a tab-indented line chars !=
+    // columns, and a column count would overshoot the shortened line → RangeError
+    // in dispatch) and by the gap moved above the marker.
     const removedChars =
       markerShift === null ? 0 : markerShift.to - markerShift.from - markerShift.insert.length;
-    selection = EditorSelection.cursor(mark.from - removedChars + newMarker.length);
+    selection = EditorSelection.cursor(mark.from - removedChars + liftedChars + newMarker.length);
   } else {
     // Non-empty: adopt only the marker KIND — replace the ListMark span; the
     // item's content bytes (incl. its own `[ ]`/`[x]`) are untouched.
@@ -861,6 +1001,20 @@ export function planIndentItem(state: EditorState, headPos: number): ListEditPla
     return { kind: "noop" }; // doc's first list item — nothing to nest under
   }
 
+  // A bodiless bare destination takes `item` as its first block, which must sit
+  // directly below the destination's marker.
+  const parentMark = listMarkOf(parent);
+  const lift: ChangeSpec[] = [];
+  if (parentMark !== null && isBodilessBareMarker(state, parentMark)) {
+    const upper = state.doc.lineAt(parentMark.from).number;
+    const gap = blankGapBetween(state, upper, state.doc.lineAt(mark.from).number);
+    const moved = gap === null ? null : liftGap(state, upper, gap, enclosingListItem(parent));
+    if (moved === null) {
+      return { kind: "noop" };
+    }
+    lift.push(...moved);
+  }
+
   const targetCol = contentColumnOf(state, parent);
   const itemMarkCol = columnAt(state, mark.from);
   const markerDelta = targetCol - itemMarkCol;
@@ -878,7 +1032,7 @@ export function planIndentItem(state: EditorState, headPos: number): ListEditPla
   }
 
   const newMarker = formatMarker(adopted);
-  const changes: ChangeSpec[] = [];
+  const changes: ChangeSpec[] = lift;
 
   // Marker rewrite (adopt the destination run's kind / continue-number, OR reset
   // to 1 for a new run) — a disjoint ListMark-span replacement.

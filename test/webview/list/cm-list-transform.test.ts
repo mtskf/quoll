@@ -1,11 +1,13 @@
 // @vitest-environment happy-dom
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { syntaxTree } from "@codemirror/language";
+import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
 import { EditorSelection, EditorState, type SelectionRange } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
+import { Parser as CmarkParser } from "commonmark";
 import { describe, expect, it } from "vitest";
 import {
   classifyItemLines,
+  contentColumnOf,
   continuationMarkerFor,
   formatMarker,
   isEmptyItem,
@@ -92,6 +94,33 @@ describe("renumberRun", () => {
       // so its child "   - child" gains one leading space -> "    - child".
       view.dispatch({ changes: renumberRun(view.state, a, 10) });
       expect(view.state.doc.toString()).toBe("8. a\n10. b\n    - child\n");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // `body` sits after a blank line, so it is a paragraph of the parent list, not
+  // of the bare `9.`. Widening `9.` must not shift it: a fourth space would turn
+  // it into indented code.
+  it("leaves a paragraph after a bare marker's blank line alone (9. -> 10.)", () => {
+    const view = mount("8. first\n9.\n\n   body", EditorSelection.cursor(0));
+    try {
+      const a = resolveItemAtLine(view.state, 1);
+      view.dispatch({ changes: renumberRun(view.state, a, 10) });
+      expect(view.state.doc.toString()).toBe("8. first\n10.\n\n   body");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // A blank line between two body paragraphs does not end the item, so widening
+  // `9. ` shifts both. Needs the patched @lezer/markdown 1.8.1.
+  it("shifts every paragraph of a multi-paragraph body (9. -> 10.)", () => {
+    const view = mount("8. prev\n9. \n   first\n\n   second", EditorSelection.cursor(0));
+    try {
+      const a = resolveItemAtLine(view.state, 1);
+      view.dispatch({ changes: renumberRun(view.state, a, 10) });
+      expect(view.state.doc.toString()).toBe("8. prev\n10. \n    first\n\n    second");
     } finally {
       view.destroy();
     }
@@ -223,6 +252,68 @@ describe("isEmptyItem", () => {
       view.destroy();
     }
   });
+
+  // A bare marker line whose item owns later lines is NOT empty: both consumers'
+  // empty arms (Enter deletes the marker line, outdent skips the body shift)
+  // would destroy that body. The `> ` case puts a QuoteMark, not the body, right
+  // after the ListMark.
+  it.each([
+    "-\n  text",
+    "-\n  - child",
+    "> -\n>   text",
+  ])("is false when the item owns a continuation body (%j)", (doc) => {
+    const view = mount(doc, EditorSelection.cursor(0));
+    try {
+      // The marker `-` is the first ListMark in every doc; walk up to its item.
+      const mark = syntaxTree(view.state).resolveInner(doc.indexOf("-"), 1);
+      const item = mark.parent;
+      expect(mark.name).toBe("ListMark");
+      expect(item?.name).toBe("ListItem");
+      expect(isEmptyItem(view.state, item as NonNullable<typeof item>)).toBe(false);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // The true side: a bare marker line that owns nothing below, including inside
+  // a blockquote, mid-list, and before a blank line (`-\n\n  text` — an item may
+  // start with at most one blank line, so `text` is not its body, even though
+  // Lezer's item span covers it).
+  it.each([
+    ["> -", 1],
+    ["> - a\n> -", 2],
+    ["- a\n-\n- b", 2],
+    ["-\n\n  text", 1],
+  ] as const)("is true for a bare marker line that owns nothing below (%j line %i)", (doc, lineNo) => {
+    const view = mount(doc, EditorSelection.cursor(0));
+    try {
+      const line = view.state.doc.line(lineNo);
+      const mark = syntaxTree(view.state).resolveInner(line.from + line.text.indexOf("-"), 1);
+      const item = mark.parent;
+      expect(mark.name).toBe("ListMark");
+      expect(item?.name).toBe("ListItem");
+      expect(isEmptyItem(view.state, item as NonNullable<typeof item>)).toBe(true);
+    } finally {
+      view.destroy();
+    }
+  });
+});
+
+describe("contentColumnOf — empty marker line", () => {
+  // `> -\n>   - child`: the marker line has no content node, and nextSibling is
+  // the continuation line's QuoteMark at col 0. The content column must come
+  // from the marker line (markCol 2 + 1 + 1), not from that other line.
+  it("uses the implied single-space column, not a later line's node", () => {
+    const view = mount("> -\n>   - child\n", EditorSelection.cursor(0));
+    try {
+      // Probe at the `-` (offset 2): line 1's first non-ws char is the `>`.
+      const item = syntaxTree(view.state).resolveInner(2, 1).parent;
+      expect(item?.name).toBe("ListItem");
+      expect(contentColumnOf(view.state, item!)).toBe(4);
+    } finally {
+      view.destroy();
+    }
+  });
 });
 
 describe("classifyItemLines", () => {
@@ -289,6 +380,113 @@ describe("ListEditPlan discriminant", () => {
       expect(plan.kind).toBe("noop");
     } finally {
       view.destroy();
+    }
+  });
+});
+
+// Generated shapes around a bare marker line, judged against commonmark.js: an
+// item is empty exactly when CommonMark gives it no children. Lezer 1.8.1 spans a
+// bare item over a blank line and the paragraph after it, so a rule read off
+// `item.to` disagrees on a large share of these. Link reference definitions as
+// the body are left out on purpose: Lezer gives `9.\n   [x]: /url` a
+// LinkReference child on the next line and the editor must keep that line,
+// while commonmark.js consumes the definition and reports no child.
+describe("bare marker emptiness — commonmark.js shape table", () => {
+  const markers = ["-", "9.", "1)", "*"];
+  const pads = ["", " ", "   "];
+  // Lines after the marker line; `C` becomes spaces up to the content column.
+  const tails = [
+    null,
+    "",
+    " \t",
+    " ",
+    "Cbody",
+    "body",
+    "C- child",
+    "C> quote",
+    "C```\nCcode\nC```",
+    "C    code",
+    "\nCbody",
+    " \nCbody",
+    "\n\nCbody",
+    " \nCbody",
+    "\nC- child",
+    "\nbody",
+    "C[ ] task",
+    "\nC[ ] task",
+  ];
+  const contexts = [
+    { before: "", lead: "", only: null },
+    { before: "- a\n", lead: "", only: ["-"] },
+    { before: "8. a\n", lead: "", only: ["9."] },
+    { before: "1. parent\n", lead: "   ", only: null },
+    { before: "1. parent\n\n", lead: "   ", only: null },
+    { before: "", lead: "> ", only: null },
+  ];
+
+  type CmarkNode = ReturnType<CmarkParser["parse"]>;
+
+  /** The innermost commonmark.js item starting on `lineNo`, or null. */
+  function cmarkItem(node: CmarkNode, lineNo: number): CmarkNode | null {
+    let found: CmarkNode | null = null;
+    for (let c = node.firstChild; c !== null; c = c.next) {
+      found = cmarkItem(c, lineNo) ?? found;
+    }
+    if (found === null && node.type === "item" && node.sourcepos[0][0] === lineNo) {
+      return node;
+    }
+    return found;
+  }
+
+  const rows: { doc: string; markFrom: number; markerLine: number; empty: boolean }[] = [];
+  for (const cx of contexts) {
+    for (const marker of markers) {
+      if (cx.only !== null && !cx.only.includes(marker)) {
+        continue;
+      }
+      for (const pad of pads) {
+        for (const tail of tails) {
+          const contentCol = " ".repeat(marker.length + 1);
+          const tailLines = (tail === null ? [] : tail.split("\n")).map((l) => {
+            const body = l.replace(/^C/, contentCol);
+            if (body === "") {
+              return cx.lead === "> " ? ">" : "";
+            }
+            return cx.lead + body;
+          });
+          const doc = cx.before + [cx.lead + marker + pad, ...tailLines].join("\n");
+          const markerLine = cx.before.split("\n").length;
+          const markFrom = cx.before.length + cx.lead.length;
+          const cm = cmarkItem(new CmarkParser().parse(doc), markerLine);
+          if (cm !== null) {
+            rows.push({ doc, markFrom, markerLine, empty: cm.firstChild === null });
+          }
+        }
+      }
+    }
+  }
+
+  it("generates the expected number of shapes", () => {
+    expect(rows.length).toBe(756);
+  });
+
+  it.each(rows)("isEmptyItem matches commonmark.js for %j", ({
+    doc,
+    markFrom,
+    markerLine,
+    empty,
+  }) => {
+    const state = EditorState.create({ doc, extensions: [markdown({ base: markdownLanguage })] });
+    const tree = ensureSyntaxTree(state, state.doc.length, 10_000);
+    let item = tree?.resolveInner(markFrom, 1) ?? null;
+    while (item !== null && item.name !== "ListItem") {
+      item = item.parent;
+    }
+    expect(item?.from).toBe(markFrom);
+    const listItem = item as NonNullable<typeof item>;
+    expect(isEmptyItem(state, listItem)).toBe(empty);
+    if (empty) {
+      expect(classifyItemLines(state, listItem)).toEqual({ markerLine, ownLines: [] });
     }
   });
 });

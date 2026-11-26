@@ -1,7 +1,7 @@
 // @vitest-environment node
 //
 // The TABLE-DELIM arm mirrors @lezer/markdown's PRIVATE table internals, and
-// package.json declares `@lezer/markdown: "^1.6.4"` — a CARET range. A doc comment naming
+// package.json declares `@lezer/markdown: "^1.8.1"` — a CARET range. A doc comment naming
 // a version cannot stop a `pnpm update` from changing the thing being mirrored, so this
 // test asserts the mirrored facts against the INSTALLED dist and reds on drift. It is
 // deliberately a source-text assertion: the internals are not exported, so there is no
@@ -10,23 +10,66 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { isTableDelimiterShaped } from "../../src/webview/cm/structural-guard.js";
 
 const require_ = createRequire(import.meta.url);
 const distPath = require_.resolve("@lezer/markdown");
 const dist = readFileSync(distPath, "utf8");
 
 describe("@lezer/markdown table internals the guard mirrors", () => {
-  it("still ships the delimiterLine regex the mirror copies verbatim", () => {
-    expect(dist).toContain("const delimiterLine = /^\\|?(\\s*:?-+:?\\s*\\|)+(\\s*:?-+:?\\s*)?$/;");
+  // patches/@lezer__markdown@1.8.1.patch respells upstream's delimiterLine (whose
+  // overlapping `[>\s]*` / `\s*` quantifiers backtrack quadratically on a long
+  // indent) in both builds, the same way as the mirror in structural-guard.ts.
+  it("ships the patched delimiterLine in both builds", () => {
+    const esm = readFileSync(join(dirname(distPath), "index.js"), "utf8");
+    const patched =
+      "const delimiterLine = /^[>\\s]*(?:\\|\\s*)?:?-+:?\\s*\\|(?:\\s*:?-+:?\\s*\\|)*(?:\\s*:?-+:?\\s*)?$/;";
+    expect(dist).toContain(patched);
+    expect(esm).toContain(patched);
+  });
+
+  // The oracle is upstream's ORIGINAL 1.8.1 spelling, as a literal: the dist now
+  // carries the respelling, so reading it from there would compare it with itself.
+  it("answers like upstream's original delimiterLine regex on every short line", () => {
+    const upstream = /^[>\s]*\|?(\s*:?-+:?\s*\|)+(\s*:?-+:?\s*)?$/;
+    const alphabet = [" ", "\t", ">", "|", ":", "-", "x", "\u00a0"];
+    let lines = [""];
+    let checked = 0;
+    let delimiters = 0;
+    const mismatches: string[] = [];
+    for (let len = 0; len <= 5; len++) {
+      for (const line of lines) {
+        for (const prefix of ["", "   ", "> ", "\t> > "]) {
+          const text = prefix + line;
+          const want = upstream.test(text);
+          if (isTableDelimiterShaped(text) !== want) {
+            mismatches.push(text);
+          }
+          checked++;
+          delimiters += want ? 1 : 0;
+        }
+      }
+      lines = lines.flatMap((l) => alphabet.map((c) => l + c));
+    }
+    expect(mismatches).toEqual([]);
+    expect(checked).toBeGreaterThan(100_000);
+    expect(delimiters).toBeGreaterThan(1_000);
+  });
+
+  it("rejects a long indented non-delimiter line in linear time", () => {
+    // The upstream spelling takes seconds here (quadratic backtracking on the indent).
+    const text = `${" ".repeat(50_000)}plain prose`;
+    const start = performance.now();
+    expect(isTableDelimiterShaped(text)).toBe(false);
+    expect(isTableDelimiterShaped(`${" ".repeat(50_000)}|---|`)).toBe(true);
+    expect(performance.now() - start).toBeLessThan(200);
   });
 
   it("still applies that regex to the RAW peeked line in endLeaf", () => {
-    // This asymmetry — endLeaf tests `cx.peekLine()` raw while TableParser.nextLine tests
-    // `line.text.slice(line.pos)` — is why `isTableDelimiterShaped` reads the line BOTH ways
-    // before deciding it is delimiter-shaped. ⚠️ Against the 1.6.4 regex above the raw read
-    // is currently SUBSUMED by the stripped one (proof in that function's doc comment), so
-    // deleting it reds nothing — which is exactly why THIS test, pinning the regex verbatim,
-    // is the notice to re-derive both reads rather than to drop one.
+    // endLeaf tests `cx.peekLine()` raw while TableParser.nextLine tests
+    // `line.text.slice(line.pos)`. `isTableDelimiterShaped` reads the raw line ONCE because the
+    // 1.8.1 regex's `[>\s]*` head absorbs the leading whitespace both call sites differ by.
+    // The patched-regex test pins its text: if it goes red, re-derive how each site reads the line.
     expect(dist).toMatch(/let next = cx\.peekLine\(\);\s*\n\s*return delimiterLine\.test\(next\)/);
     expect(dist).toContain("delimiterLine.test(lineText = line.text.slice(line.pos))");
   });
@@ -68,10 +111,10 @@ describe("@lezer/markdown table internals the guard mirrors", () => {
     const manifest = JSON.parse(
       readFileSync(join(dirname(distPath), "..", "package.json"), "utf8")
     ) as { version: string };
-    // The mirrors were derived from 1.6.4. A bump is not forbidden, but it must be a
+    // The mirrors were re-derived from 1.8.1 (first derived from 1.6.4). A bump is not forbidden, but it must be a
     // CONSCIOUS edit here — the four assertions above are what actually check the
     // behaviour, and this line is what makes an unnoticed bump visible in the diff.
-    expect(manifest.version).toBe("1.6.4");
+    expect(manifest.version).toBe("1.8.1");
   });
 });
 
@@ -85,10 +128,10 @@ describe("the fenced-code field keeps its own narrower guard", () => {
     "utf8"
   );
 
-  it("imports only the shared frontier term, never the shared structural guard", () => {
+  it("imports only the frontier term and the table-shape arm, never the shared structural guard", () => {
     // The fenced field composes the shared frontier predicate (`frontierIncomplete`) with
-    // its OWN structural predicate (`fencedCollapseSpec.docChangePlan`), so its one import
-    // from the shared guard must name `frontierIncomplete` alone: importing
+    // its OWN structural predicate (`fencedCollapseSpec.docChangePlan`), so its import from
+    // the shared guard must name only `frontierIncomplete` and the table-shape arm: importing
     // `touchesStructuralReparse` or `requiresFullBoundedRebuild` would put its in-fence hot
     // path behind the wider shared STRUCTURAL.
     // ⚠️ Assert the IMPORT FORM, not the bare path: the file also carries the literal
@@ -100,7 +143,9 @@ describe("the fenced-code field keeps its own narrower guard", () => {
         /import\s*(?:type\s*)?\{([^}]*)\}\s*from "\.\.\/structural-guard\.js"/g
       ),
     ].map((m) => m[1].trim());
-    expect(imports).toEqual(["frontierIncomplete"]);
+    // `tableRowShapeChanged` is allowed: the field applies it only to TOP-LEVEL edits
+    // (`topLevelBoundaryRisk`), so in-fence typing stays bounded.
+    expect(imports).toEqual(["frontierIncomplete, tableRowShapeChanged"]);
   });
 
   it("keeps an ATX / Setext / underscore-free regex, unlike the shared one", () => {

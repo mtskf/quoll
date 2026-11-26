@@ -1,9 +1,9 @@
 // @vitest-environment happy-dom
 
-import { history, undo } from "@codemirror/commands";
+import { defaultKeymap, history, undo } from "@codemirror/commands";
 import { ensureSyntaxTree } from "@codemirror/language";
 import { EditorSelection, EditorState, type SelectionRange } from "@codemirror/state";
-import { type EditorView, runScopeHandlers } from "@codemirror/view";
+import { EditorView, keymap, runScopeHandlers } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -11,6 +11,12 @@ import {
   listContinuationKeymap,
 } from "../../../src/webview/cm/list/list-continuation-keymap.js";
 import { quollMarkdownLanguage } from "../../../src/webview/cm/markdown.js";
+import {
+  blockOwner,
+  itemAncestry,
+  parentMarkOf,
+  topLevelItemCounts,
+} from "../helpers/list-structure.js";
 import { settledMount } from "../helpers/settled-view.js";
 
 function mount(
@@ -187,11 +193,12 @@ describe("continueListOnEnter — ordered renumber", () => {
     }
   });
 
+  // Enter on `a`: the followers renumber across `b`'s lazy line.
   it("renumbers across a lazy-continuation line (tree siblings, not a line scan)", () => {
-    const view = caretAtEndOf(mount("1. a\n2. b\nlazy line\n3. c", at(0)), 2);
+    const view = caretAtEndOf(mount("1. a\n2. b\nlazy line\n3. c", at(0)), 1);
     try {
       expect(continueListOnEnter(view)).toBe(true);
-      expect(view.state.doc.toString()).toBe("1. a\n2. b\n3. \nlazy line\n4. c");
+      expect(view.state.doc.toString()).toBe("1. a\n2. \n3. b\nlazy line\n4. c");
     } finally {
       view.destroy();
     }
@@ -351,6 +358,162 @@ describe("continueListOnEnter — split keeps the item's children nested", () =>
       }
     });
   }
+
+  // A bare marker owns only a block directly below it (CommonMark), so an empty
+  // split tail must not leave the item's blank-separated body under a new bare
+  // marker: the blank lines go above the new marker instead.
+  it.each([
+    ["9. a\n\n   - child", "9. a\n\n10. \n    - child", "10."],
+    ["- a\n\n  - child", "- a\n\n- \n  - child", "-"],
+  ])("Enter at the end of %j keeps the blank-separated body under the new item", (doc, out, parent) => {
+    const view = mount(doc, at(doc.indexOf("\n")));
+    try {
+      expect(continueListOnEnter(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(out);
+      expect(view.state.selection.main.head).toBe(out.indexOf(" \n") + 1);
+      expect(parentMarkOf(out, "child")).toBe(parent);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // Only ASCII spaces and tabs are blank: a U+00A0 tail is content, so it moves
+  // to the new item (which then owns the blank-separated body as usual), and a
+  // space/tab tail is carried onto the new bare line.
+  it.each([
+    // [doc, result, offset of the new item, caret, text the new item must hold];
+    // the caret starts right after `a`.
+    ["- a\u00a0", "- a\n- \u00a0", 4, 6, "\u00a0"],
+    ["- a\u00a0\n\n  - child", "- a\n- \u00a0\n\n  - child", 4, 6, "child"],
+    ["- a  ", "- a\n-   ", 4, 6, null],
+    ["9. a \n\n   - child", "9. a\n\n10.  \n    - child", 6, 10, "child"],
+  ] as const)("Enter after `a` in %j splits at the caret", (doc, out, newItem, caret, held) => {
+    const view = mount(doc, at(doc.indexOf("a") + 1));
+    try {
+      expect(continueListOnEnter(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(out);
+      expect(view.state.selection.main.head).toBe(caret);
+      if (held !== null) {
+        expect(itemAncestry(out, out.indexOf(held))).toContain(newItem);
+      }
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // A checkbox-only line is judged on the line alone, so Enter exits the task.
+  // The last row keeps main's known gap: the item owns `body` after the blank
+  // line, but Enter still exits and the body leaves the list (TODO.md "list: 本文を
+  // 持つ item で marker 行を消す既存の…経路", case c).
+  it.each([
+    ["- [ ] \n\npara", "\n\npara"],
+    ["- [ ] \n\n> body", "\n\n> body"],
+    ["  - [ ] \n\n  para", "\n\n  para"],
+    ["- [ ] \n\n  body", "\n\n  body"],
+  ])("Enter at the end of %j exits the empty task", (doc, out) => {
+    const view = mount(doc, at(doc.indexOf("\n")));
+    try {
+      expect(continueListOnEnter(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(out);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // Enter at a line end whose paragraph continues below (a lazy or an indented
+  // line): the rest of the paragraph goes to the new item, its next line set to
+  // the new content column. Pinned through the real Enter keymap.
+  function enter(doc: string, caret: number): EditorView {
+    const view = mount(doc, at(caret), { withKeymap: true, withHistory: true });
+    runScopeHandlers(
+      view,
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+      "editor"
+    );
+    return view;
+  }
+
+  it.each([
+    // [doc, caret, result, caret after, text held, start of the item holding it, items per top list]
+    ["- x\nbody", 3, "- x\n- \n  body", 6, "body", 4, [2]],
+    ["- x\nbody\n- y", 3, "- x\n- \n  body\n- y", 6, "body", 4, [3]],
+    ["- x\n      y", 3, "- x\n- \n  y", 6, "y", 4, [2]],
+    ["- x  \nbody", 3, "- x\n-   \n  body", 6, "body", 4, [2]],
+    ["9. x\nbody\n10. y", 4, "9. x\n10. \n    body\n11. y", 9, "body", 5, [3]],
+    ["- x\n\tbody", 3, "- x\n- \n  body", 6, "body", 4, [2]],
+    ["- p\n  - x\nbody\n  - q", 9, "- p\n  - x\n  - \n    body\n  - q", 14, "body", 12, [1]],
+  ] as const)("Enter in %j at %i gives the rest of the paragraph to the new item", (doc, caret, out, after, held, owner, counts) => {
+    const view = enter(doc, caret);
+    try {
+      expect(view.state.doc.toString()).toBe(out);
+      expect(view.state.selection.main.head).toBe(after);
+      expect(blockOwner(out, held)).toEqual(["Paragraph", owner]);
+      expect(topLevelItemCounts(out)).toEqual([...counts]);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("nests the new item among the inner items (`- p` / `- x` / `- q`)", () => {
+    const out = "- p\n  - x\n  - \n    body\n  - q";
+    expect(itemAncestry(out, out.indexOf("q"))).toEqual([out.indexOf("- q"), 0]);
+    expect(itemAncestry(out, out.indexOf("x"))).toEqual([6, 0]);
+  });
+
+  it("one undo restores the paragraph", () => {
+    const view = enter("- x\nbody\n- y", 3);
+    try {
+      expect(view.state.doc.toString()).toBe("- x\n- \n  body\n- y");
+      expect(undo(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("- x\nbody\n- y");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // Refused: the rest of the paragraph would not stay one Paragraph of the new
+  // item (it starts a block once it opens an item, or a child list follows), so
+  // Enter makes no edit and leaves the caret.
+  it.each([
+    ["- x\n[a]: b\nbody\n- z", 3],
+    ["- x\n      # h\nbody", 3],
+    ["1.   x\n         - y", 6],
+    ["- x\n2. y", 3],
+  ] as const)("Enter in %j at %i makes no edit", (doc, caret) => {
+    const view = enter(doc, caret);
+    try {
+      expect(view.state.doc.toString()).toBe(doc);
+      expect(view.state.selection.main.head).toBe(caret);
+    } finally {
+      view.destroy();
+    }
+  });
+  // An indented continuation line is the item's own, so it moves under the new marker.
+  it("moves an indented continuation line under the new item", () => {
+    const view = mount("- x\n  body", at(3));
+    try {
+      expect(continueListOnEnter(view)).toBe(true);
+      const out = view.state.doc.toString();
+      expect(out).toBe("- x\n- \n  body");
+      expect(blockOwner(out, "body")).toEqual(["Paragraph", 4]);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("shifts the child below the gap when the marker widens (`9.` → `10.`)", () => {
+    const doc = "9. x\n\n   - child";
+    const view = mount(doc, at(doc.indexOf("x") + 1));
+    try {
+      expect(continueListOnEnter(view)).toBe(true);
+      const out = view.state.doc.toString();
+      expect(out).toBe("9. x\n\n10. \n    - child");
+      expect(view.state.selection.main.head).toBe(out.indexOf("10. ") + 4);
+      expect(parentMarkOf(out, "child")).toBe("10.");
+    } finally {
+      view.destroy();
+    }
+  });
 
   it("does not shift a lazy-continuation line (not structurally the item's)", () => {
     const view = mount("9. abcd\nlazy", at(5));
@@ -597,6 +760,132 @@ describe("continueListOnEnter — empty marker line exits the list", () => {
     } finally {
       view.destroy();
     }
+  });
+});
+
+// A bare marker line whose item owns a body on the next lines is not an empty
+// item: exiting would delete the marker and orphan the body. Enter continues the
+// list from the marker-line end instead, through the WHOLE Enter stack — the
+// upstream markdownKeymap Enter (insertNewlineContinueMarkup) deletes the marker
+// line for these inputs, so Quoll must not fall through to it.
+describe("continueListOnEnter — bare marker line that owns a body below", () => {
+  function pressEnter(doc: string, caret: number, filler = ""): string {
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    // A plain EditorView (not settledMount): with a large `filler` the initial
+    // parse stops short of the caret, so listItemAt works on a tree cut at the
+    // caret line — the partial-parse state the empty check must not trust.
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc: filler + doc,
+        extensions: [quollMarkdownLanguage(), listContinuationKeymap(), keymap.of(defaultKeymap)],
+      }),
+    });
+    try {
+      const head = filler.length + caret;
+      // Build the caret-bounded tree with a generous budget so the handler's own
+      // 50ms probe hits the cache: otherwise a loaded machine misses the budget,
+      // Enter is delegated, and the test measures wall-clock instead of the contract.
+      ensureSyntaxTree(view.state, view.state.doc.lineAt(head).to, 10_000);
+      view.dispatch({ selection: EditorSelection.cursor(head) });
+      runScopeHandlers(view, new KeyboardEvent("keydown", { key: "Enter" }), "editor");
+      return view.state.doc.sliceString(filler.length);
+    } finally {
+      view.destroy();
+    }
+  }
+
+  it.each([
+    ["- \n  body", 2, "- \n- \n  body"],
+    ["1.\n   body", 2, "1.\n2. \n   body"],
+    ["-\n  text", 1, "-\n- \n  text"],
+    ["- a\n-\n  text", 5, "- a\n-\n- \n  text"],
+    ["-\n  - child", 1, "-\n- \n  - child"],
+    ["- a\n-\n  ```\n  code\n  ```", 5, "- a\n-\n- \n  ```\n  code\n  ```"],
+  ])("Enter on %j continues the list", (doc, caret, expected) => {
+    expect(pressEnter(doc, caret)).toBe(expected);
+  });
+
+  // The caret may sit anywhere between the marker end and the line end: the
+  // result is the line-end result (the new marker lands at the line end).
+  // Upstream Enter strips the marker for these carets.
+  it.each([
+    ["- \n  body", 1, "- \n- \n  body"],
+    ["1.  \n    body", 2, "1.  \n2. \n    body"],
+    ["1.  \n    body", 3, "1.  \n2. \n    body"],
+  ])("Enter on %j at caret %i in the marker padding continues the list", (doc, caret, expected) => {
+    expect(pressEnter(doc, caret)).toBe(expected);
+    expect(pressEnter(doc, doc.indexOf("\n"))).toBe(expected);
+  });
+
+  // A blank line BETWEEN two body paragraphs does not end the item (only one right
+  // after the marker does), so widening `9.` shifts both, and they reparse under
+  // the new item. Needs the patched @lezer/markdown 1.8.1 (stock ends it at the blank).
+  it("shifts every paragraph of a multi-paragraph body when `9. ` widens", () => {
+    const out = pressEnter("9. \n   first\n\n   second", 3);
+    expect(out).toBe("9. \n10. \n    first\n\n    second");
+    const reparsed = EditorState.create({ doc: out, extensions: [quollMarkdownLanguage()] });
+    const tree = ensureSyntaxTree(reparsed, out.length, 10_000);
+    let node = tree?.resolveInner(out.indexOf("second"), 1) ?? null;
+    while (node !== null && node.name !== "ListItem") {
+      node = node.parent;
+    }
+    expect(node?.from).toBe(out.indexOf("10."));
+  });
+
+  // No representable next marker (9-digit cap): consume Enter without an edit
+  // rather than fall through to upstream, which strips the marker.
+  it("consumes Enter on a 9-digit bare marker that owns a body", () => {
+    const doc = "999999999.\n           body";
+    expect(pressEnter(doc, 10)).toBe(doc);
+  });
+
+  it("keeps deferring a caret before the bare marker end (`1|.`)", () => {
+    const view = mount("1.\n   body", at(1));
+    try {
+      expect(continueListOnEnter(view)).toBe(false);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // Only ASCII spaces and tabs make a line blank (as in Lezer and CommonMark): a
+  // line of indentation + U+00A0 is paragraph text, so the item owns the body
+  // below it. Enter continues, and the body — moved with the item when the
+  // marker widens (`9.` → `10.`) — still belongs to the new item on reparse.
+  it.each([
+    ["8.\n   \u00a0\n   body", "8.\n9. \n   \u00a0\n   body"],
+    ["9.\n   \u00a0\n   body", "9.\n10. \n    \u00a0\n    body"],
+  ])("Enter on %j keeps the U+00A0 line and body in the list", (doc, expected) => {
+    const out = pressEnter(doc, 2);
+    expect(out).toBe(expected);
+    const reparsed = EditorState.create({ doc: out, extensions: [quollMarkdownLanguage()] });
+    const tree = ensureSyntaxTree(reparsed, out.length, 10_000);
+    let node = tree?.resolveInner(out.indexOf("body"), 1) ?? null;
+    while (node !== null && node.name !== "ListItem") {
+      node = node.parent;
+    }
+    expect(node?.from).toBe(out.indexOf("\n") + 1);
+  });
+
+  it("keeps the marker when the tree is parsed only up to the caret line", () => {
+    const filler = "para line of some text here\n\n".repeat(1000);
+    expect(pressEnter("-\n  text", 1, filler)).toBe("-\n- \n  text");
+  });
+
+  it.each([
+    ["- ", 2, ""],
+    ["-", 1, ""],
+    ["- \n- b", 2, "\n- b"],
+    // A blank line right after a bare marker ends the item (CommonMark: a bare
+    // item starts with at most one blank line), so the body below is a separate
+    // paragraph and stays untouched. Continuing there would detach it as
+    // indented code.
+    ["9.\n\n   body", 2, "\n\n   body"],
+    ["-\n\n  body", 1, "\n\n  body"],
+  ])("a truly empty item %j still exits the list", (doc, caret, expected) => {
+    expect(pressEnter(doc, caret)).toBe(expected);
   });
 });
 

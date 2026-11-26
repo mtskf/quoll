@@ -28,7 +28,7 @@ import {
 } from "../collapse/line-collapse-field.js";
 import { leadingFrontmatterEnd } from "../frontmatter/detect.js";
 import { linkReferenceRisk } from "../link-reference-risk.js";
-import { frontierIncomplete } from "../structural-guard.js";
+import { frontierIncomplete, tableRowShapeChanged } from "../structural-guard.js";
 import { fencedCollapseTarget } from "./fenced-code-collapse-state.js";
 import { FencedCollapseToggleWidget } from "./fenced-code-collapse-widget.js";
 
@@ -105,6 +105,9 @@ function touchesStructural(tr: Transaction): boolean {
 }
 
 const BLANK_LINE = /^[ \t]*$/;
+// ATX heading shape. A space OR a tab may follow the `#`s: @lezer/markdown 1.8.1 reads
+// `#\tHeading` as a heading (1.6.4 did not).
+const ATX_HEADING = /^[ \t]*#{1,6}(?:[ \t]|$)/;
 
 /** A block boundary MOVED by a TOP-LEVEL edit in a way STRUCTURAL's per-line-SHAPE check
  *  cannot see. Two shapeless HTML-block terminators are part of this:
@@ -118,9 +121,11 @@ const BLANK_LINE = /^[ \t]*$/;
  *     — is narrow: it fires only when the user actually types or deletes a `>`.
  *  Fires when the edit changes the LINE COUNT (a newline inserted/deleted), OR flips a
  *  changed line's blankness in EITHER direction (delete-to-blank, or type-into-the-blank),
- *  OR adds/removes a `>`, changes leading `[ \t]*`, or touches a possible link-reference
- *  run. Indent changes and reference formation/dissolution can change whether a far
- *  indented fence continues a loose list. All are conservative supersets (e.g. a newline
+ *  OR adds/removes a `>`, changes leading `[ \t]*`, makes or unmakes an ATX heading,
+ *  changes a line's table shape (the shared `tableRowShapeChanged`), or touches a possible
+ *  link-reference run. Indent changes, a heading appearing or vanishing (it ends a lazy
+ *  list paragraph), a table forming or dissolving (it closes the list too), and reference
+ *  formation/dissolution can change whether a far indented fence continues a list. All are conservative supersets (e.g. a newline
  *  splitting non-blank prose, or a `>` typed in plain prose, reshapes nothing — a safe
  *  over-trigger).
  *  Link-reference presence also over-triggers on line-start links/code and malformed
@@ -161,11 +166,13 @@ function topLevelBoundaryRisk(
       !newlineDelta &&
       !gtDelta &&
       oldBlank === newBlank &&
+      ATX_HEADING.test(oldText) === ATX_HEADING.test(newText) &&
+      !tableRowShapeChanged(oldText, newText) &&
       !indentDelta &&
       !linkReferenceRisk(tr.startState, fromA) &&
       !linkReferenceRisk(tr.state, fromB)
     ) {
-      return; // boundary-inert: no line/blank/indent/terminator/reference change
+      return; // boundary-inert: no line/blank/heading/table/indent/terminator/reference change
     }
     risk = true;
   });

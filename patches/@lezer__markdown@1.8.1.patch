@@ -1,0 +1,102 @@
+diff --git a/dist/index.cjs b/dist/index.cjs
+index 4a361b0d03d5ed263f09e3eeebbbc2f1b6375ec8..7b5db5e64cff2ed493d51dde6feeea550b60b984 100644
+--- a/dist/index.cjs
++++ b/dist/index.cjs
+@@ -268,8 +268,9 @@ const DefaultSkipMarkup = {
+         return true;
+     },
+     [Type.ListItem](bl, _cx, line) {
+-        if (line.next < 0 ? bl.blankFirstLine && bl.children.length == 1 : line.indent < line.baseIndent + bl.value)
++        if (line.next < 0 ? bl.blankFirstLine : line.indent < line.baseIndent + bl.value)
+             return false;
++        bl.blankFirstLine = false;
+         line.moveBaseColumn(line.baseIndent + bl.value);
+         return true;
+     },
+@@ -525,7 +526,7 @@ const DefaultBlockParsers = {
+         cx.startContext(Type.ListItem, line.basePos, newBase - line.baseIndent);
+         cx.addNode(Type.ListMark, cx.lineStart + line.pos, cx.lineStart + line.pos + size);
+         line.moveBaseColumn(newBase);
+-        cx.block.blankFirstLine = newBase >= line.text.length;
++        cx.block.blankFirstLine = line.skipSpace(line.basePos) == line.text.length;
+         return null;
+     },
+     OrderedList(cx, line) {
+@@ -538,7 +539,7 @@ const DefaultBlockParsers = {
+         cx.startContext(Type.ListItem, line.basePos, newBase - line.baseIndent);
+         cx.addNode(Type.ListMark, cx.lineStart + line.pos, cx.lineStart + line.pos + size);
+         line.moveBaseColumn(newBase);
+-        cx.block.blankFirstLine = newBase == line.text.length;
++        cx.block.blankFirstLine = line.skipSpace(line.basePos) == line.text.length;
+         return null;
+     },
+     ATXHeading(cx, line) {
+@@ -1573,7 +1574,7 @@ function parseURL(text, start, offset) {
+                 return elt(Type.URL, start + offset, pos + 1 + offset);
+             if (ch == 60 && !esc || ch == 10 /* '<\n' */)
+                 return false;
+-            esc = ch == 92; /* '\\' */
++            esc = !esc && ch == 92; /* '\\' */
+         }
+         return null;
+     }
+@@ -2133,7 +2134,7 @@ function hasPipe(str, start) {
+     }
+     return false;
+ }
+-const delimiterLine = /^[>\s]*\|?(\s*:?-+:?\s*\|)+(\s*:?-+:?\s*)?$/;
++const delimiterLine = /^[>\s]*(?:\|\s*)?:?-+:?\s*\|(?:\s*:?-+:?\s*\|)*(?:\s*:?-+:?\s*)?$/;
+ class TableParser {
+     constructor() {
+         // Null means we haven't seen the second line yet, false means this
+diff --git a/dist/index.js b/dist/index.js
+index bcaae772b1e92dd3f279b5c0b6607a3df0a2b20a..31a2f636c85f3d0382677e6a06ce9b30427891c3 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -266,8 +266,9 @@ const DefaultSkipMarkup = {
+         return true;
+     },
+     [Type.ListItem](bl, _cx, line) {
+-        if (line.next < 0 ? bl.blankFirstLine && bl.children.length == 1 : line.indent < line.baseIndent + bl.value)
++        if (line.next < 0 ? bl.blankFirstLine : line.indent < line.baseIndent + bl.value)
+             return false;
++        bl.blankFirstLine = false;
+         line.moveBaseColumn(line.baseIndent + bl.value);
+         return true;
+     },
+@@ -523,7 +524,7 @@ const DefaultBlockParsers = {
+         cx.startContext(Type.ListItem, line.basePos, newBase - line.baseIndent);
+         cx.addNode(Type.ListMark, cx.lineStart + line.pos, cx.lineStart + line.pos + size);
+         line.moveBaseColumn(newBase);
+-        cx.block.blankFirstLine = newBase >= line.text.length;
++        cx.block.blankFirstLine = line.skipSpace(line.basePos) == line.text.length;
+         return null;
+     },
+     OrderedList(cx, line) {
+@@ -536,7 +537,7 @@ const DefaultBlockParsers = {
+         cx.startContext(Type.ListItem, line.basePos, newBase - line.baseIndent);
+         cx.addNode(Type.ListMark, cx.lineStart + line.pos, cx.lineStart + line.pos + size);
+         line.moveBaseColumn(newBase);
+-        cx.block.blankFirstLine = newBase == line.text.length;
++        cx.block.blankFirstLine = line.skipSpace(line.basePos) == line.text.length;
+         return null;
+     },
+     ATXHeading(cx, line) {
+@@ -1571,7 +1572,7 @@ function parseURL(text, start, offset) {
+                 return elt(Type.URL, start + offset, pos + 1 + offset);
+             if (ch == 60 && !esc || ch == 10 /* '<\n' */)
+                 return false;
+-            esc = ch == 92; /* '\\' */
++            esc = !esc && ch == 92; /* '\\' */
+         }
+         return null;
+     }
+@@ -2131,7 +2132,7 @@ function hasPipe(str, start) {
+     }
+     return false;
+ }
+-const delimiterLine = /^[>\s]*\|?(\s*:?-+:?\s*\|)+(\s*:?-+:?\s*)?$/;
++const delimiterLine = /^[>\s]*(?:\|\s*)?:?-+:?\s*\|(?:\s*:?-+:?\s*\|)*(?:\s*:?-+:?\s*)?$/;
+ class TableParser {
+     constructor() {
+         // Null means we haven't seen the second line yet, false means this

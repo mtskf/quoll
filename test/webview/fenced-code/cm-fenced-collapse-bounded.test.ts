@@ -217,6 +217,20 @@ describe("fencedCodeCollapseField bounded ≡ full", () => {
         { changes: { from: 13, to: 14, insert: ":" } },
       ],
     },
+    // An ATX heading closes the list, promoting the far indented fence without a
+    // marker, indent, newline or blank delta. @lezer/markdown 1.8.1 reads a tab after
+    // the `#` as a heading too (1.6.4 kept `#\tHeading` a lazy paragraph line).
+    ...(["\t", " "] as const).map((sep) => {
+      const tilde = `~~~\n${Array.from({ length: 13 }, (_, i) => `code ${i}`).join("\n")}\n~~~`;
+      return {
+        name: `GF heading: typing \`#\` before ${sep === "\t" ? "a tab" : "a space"} promotes a far fence`,
+        initial: `- item\nx${sep}Heading\nmore\nmore\nmore\n  ${tilde.split("\n").join("\n  ")}`,
+        edits: [
+          { changes: { from: 7, to: 8, insert: "#" } },
+          { changes: { from: 7, to: 8, insert: "x" } },
+        ],
+      };
+    }),
     // Pins that the fence arm of STRUCTURAL is load-bearing: deleting block A's closing
     // ``` leaves it unclosed, so the parser re-pairs with block B's opener — block B (a
     // DISTANT node outside the edit span) vanishes. Without the fence arm, the bounded
@@ -441,6 +455,36 @@ describe("fencedCodeCollapseField bounded ≡ full", () => {
   ];
   for (const c of cases) {
     it(c.name, () => run(c.initial, c.edits));
+  }
+});
+
+// A table forming under a pipe line closes the list (Lezer 1.8.1 also reads an
+// indented raw delimiter), promoting the distant indented fence to top level; its
+// dissolution nests it again. Neither edit touches a marker, indent, newline or
+// blank line, so only the table-shape arm can invalidate the far record.
+it("tracks table formation and dissolution that promote and nest a far fence", () => {
+  const tilde = `~~~\n${Array.from({ length: 13 }, (_, i) => `code ${i}`).join("\n")}\n~~~`;
+  const doc = `- item\nx | y\n |x--|---|\nmore\nmore\nmore\n  ${tilde.split("\n").join("\n  ")}`;
+  const at = doc.indexOf("|x--") + 1;
+  const parent = document.createElement("div");
+  document.body.appendChild(parent);
+  const view = new EditorView({ state: EditorState.create({ doc, extensions: exts() }), parent });
+  try {
+    settledView(view, 10_000);
+    const counts = [rows(view, true).length];
+    assertEquivalent(view);
+    for (const insert of ["-", "x"]) {
+      view.dispatch({ changes: { from: at, to: at + 1, insert } });
+      if (syntaxTreeAvailable(view.state, view.state.doc.length)) {
+        assertEquivalent(view);
+      }
+      settledView(view, 10_000);
+      assertEquivalent(view);
+      counts.push(rows(view, true).length);
+    }
+    expect(counts).toEqual([0, 1, 0]);
+  } finally {
+    view.destroy();
   }
 });
 

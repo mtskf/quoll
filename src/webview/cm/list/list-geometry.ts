@@ -36,7 +36,11 @@
 import type { syntaxTree } from "@codemirror/language";
 import { countColumn, type EditorState } from "@codemirror/state";
 
-import { isContentlessTaskParagraph, TASK_MARKER_RE } from "../task-checkbox/task-marker-shape.js";
+import {
+  isContentlessTaskParagraph,
+  markerLineContent,
+  TASK_MARKER_RE,
+} from "../task-checkbox/task-marker-shape.js";
 
 // `@lezer/common` is a direct dep as of PR #66 (for the lint incremental
 // parser's `TreeFragment`); derive SyntaxNode from syntaxTree's return type
@@ -80,22 +84,27 @@ export type TaskMarkerGeometry = {
   /** End of the `TaskMarker` (taskMarkerFrom + 3). */
   taskMarkerTo: number;
   checked: boolean;
-  /** True when the wrapping list is a `BulletList` — the `- ` folds into the
-   *  checkbox. False for `OrderedList` / grammar drift — the visible prefix
-   *  stays, only `[ ]` folds. */
-  isBullet: boolean;
-  /** The byte from which the RENDERED marker prefix begins: `listMarkFrom` for
-   *  a bullet task (fold `- `), `taskMarkerFrom` otherwise (keep `N. `
-   *  visible). The checkbox replace-start AND the hang prefix-column both
-   *  derive from this single field — the F7 contract. */
+  /** True when the checkbox swallows the bullet: a `BulletList` item whose
+   *  `ListMark` sits on the TaskMarker's own line, so `- [ ]` folds into one
+   *  checkbox (and the bullet gets no dot). False for `OrderedList` / grammar
+   *  drift (keep `N. ` visible), and for a bullet Task on a later line than its
+   *  marker (`-\n  [ ] foo`, `- a\n\n  [ ] b`): there the bullet stays a bullet
+   *  and the checkbox replaces only its own `[ ]`, like an ordered task. */
+  foldsListMark: boolean;
+  /** The byte from which the RENDERED marker prefix begins: `listMarkFrom` when
+   *  `foldsListMark`, `taskMarkerFrom` otherwise. The checkbox replace-start AND
+   *  the hang prefix-column both derive from this single field — the F7
+   *  contract. Always on the TaskMarker's line, so the replace never spans a
+   *  line break. */
   foldFrom: number;
 };
 
 /** Resolve the rendered task-marker geometry for a `Task` node, or null when
  *  it has no valid 3-byte marker (then neither consumer renders a checkbox /
- *  task hang). The fold policy degrades conservatively: a valid marker with a
- *  non-BulletList (ordered) or malformed wrapper keeps the visible prefix
- *  (`foldFrom = taskMarkerFrom`), exactly the pre-PR2 reveal fallback. */
+ *  task hang). One fold rule: the checkbox replaces the TaskMarker's own `[ ]`,
+ *  widened back to the bullet `ListMark` only when that mark is on the same
+ *  line. Everything else — ordered, malformed wrapper, a bullet Task below its
+ *  marker line — keeps the visible prefix (`foldFrom = taskMarkerFrom`). */
 export function resolveTaskMarkerGeometry(
   state: EditorState,
   task: SyntaxNode
@@ -106,17 +115,22 @@ export function resolveTaskMarkerGeometry(
   }
   const listItem = task.parent;
   const listMark = listItem !== null && listItem.name === "ListItem" ? listItem.firstChild : null;
-  const listMarkFrom =
-    listMark !== null && listMark.name === "ListMark" ? listMark.from : marker.from;
-  const isBullet =
-    listItem !== null && listItem.name === "ListItem" && listItem.parent?.name === "BulletList";
+  const validMark = listMark !== null && listMark.name === "ListMark";
+  const listMarkFrom = validMark ? listMark.from : marker.from;
+  // `foldFrom` is either the 3-byte `[ ]` or a ListMark on the same line, so the
+  // replace cannot cross a line break (CodeMirror refuses such a replace and
+  // drops every checkbox in the viewport) — no separate span guard is needed.
+  const foldsListMark =
+    validMark &&
+    listItem?.parent?.name === "BulletList" &&
+    listMark.from >= state.doc.lineAt(marker.from).from;
   return {
     listMarkFrom,
     taskMarkerFrom: marker.from,
     taskMarkerTo: marker.to,
     checked: marker.checked,
-    isBullet,
-    foldFrom: isBullet ? listMarkFrom : marker.from,
+    foldsListMark,
+    foldFrom: foldsListMark ? listMarkFrom : marker.from,
   };
 }
 
@@ -145,14 +159,16 @@ export function resolveContentlessTaskMarkerGeometry(
     return null;
   }
   const middle = state.doc.sliceString(content.from + 1, content.from + 2);
-  const isBullet = listItem.parent?.name === "BulletList";
+  // `content` is marker-line content (isContentlessTaskParagraph), so the
+  // ListMark always shares its line: the bullet folds whenever the list is one.
+  const foldsListMark = listItem.parent?.name === "BulletList";
   return {
     listMarkFrom: listMark.from,
     taskMarkerFrom: content.from,
     taskMarkerTo: content.to,
     checked: middle === "x" || middle === "X",
-    isBullet,
-    foldFrom: isBullet ? listMark.from : content.from,
+    foldsListMark,
+    foldFrom: foldsListMark ? listMark.from : content.from,
   };
 }
 
@@ -290,7 +306,11 @@ function enclosingListItem(listItem: SyntaxNode): SyntaxNode | null {
  *  re-base a child one NEST_STEP past the (wide-checkbox) parent's content
  *  column, identically for content-bearing and content-less task parents. */
 export function isTaskItem(state: EditorState, listItem: SyntaxNode): boolean {
-  const content = listItem.firstChild?.nextSibling ?? null;
+  // Marker-line content only, like the hang (ownMarkerWidth): an ordered Task on
+  // a later line (`1.\n   [ ] foo`) draws its checkbox there, not beside the
+  // marker, so it must not re-base the item's children past a checkbox.
+  const listMark = listItem.firstChild;
+  const content = listMark === null ? null : markerLineContent(state, listMark);
   if (content === null) {
     return false;
   }
@@ -337,10 +357,7 @@ function ownMarkerWidth(state: EditorState, listItem: SyntaxNode): Col | null {
   if (listMark === null || listMark.name !== "ListMark") {
     return null;
   }
-  const content = listMark.nextSibling;
-  if (content === null) {
-    return null; // grammar drift — no content node at all
-  }
+  const content = markerLineContent(state, listMark);
   const markCol = columnAt(state, listMark.from);
 
   // Task content: a real `Task` node, OR a content-less bare-marker Paragraph
@@ -348,10 +365,10 @@ function ownMarkerWidth(state: EditorState, listItem: SyntaxNode): Col | null {
   // checkbox, so both fold the visible prefix into the MARKER column. A
   // `Task`-named node with an invalid marker returns null (F7 fail-closed).
   const taskGeom =
-    content.name === "Task"
+    content?.name === "Task"
       ? resolveTaskMarkerGeometry(state, content)
       : resolveContentlessTaskMarkerGeometry(state, listItem);
-  if (content.name === "Task" && taskGeom === null) {
+  if (content?.name === "Task" && taskGeom === null) {
     return null; // task-shaped but invalid marker → no hang (F7 fail-closed)
   }
   if (taskGeom !== null) {
@@ -372,8 +389,11 @@ function ownMarkerWidth(state: EditorState, listItem: SyntaxNode): Col | null {
   // byte-identical to a canonical `- x` sibling (the marker column is
   // own-independent — `own` cancels in the first-line offset — but matching the
   // sibling keeps the geometry a single, testable value). Keeps hang ↔
-  // fold-gutter in lock-step for empty items.
-  if (content.from === content.to) {
+  // fold-gutter in lock-step for empty items. "Empty" means no content on the
+  // marker line (markerLineContent): since @lezer/markdown 1.7.2 such an item
+  // has no content node there, and its nextSibling may sit on a later line
+  // (`> -\n>   - child`), whose column must not be mixed with this line's.
+  if (content === null) {
     return { ch: 1, glyph: columnAt(state, listMark.to) - markCol, markers: 0 };
   }
 

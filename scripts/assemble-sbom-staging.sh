@@ -11,8 +11,9 @@
 # `pnpm-lock.yaml`, so syft's pnpm-lock cataloger does not match it.
 #
 # package.json + pnpm-lock.yaml + pnpm-workspace.yaml (overrides + release-age
-# cooldown) + .npmrc (hoist/registry policy) are all copied so
-# --frozen-lockfile resolves identically to the real install.
+# cooldown) + .npmrc (hoist/registry policy) + patches/ (the files
+# `patchedDependencies` names; the install fails without them) are all copied
+# so --frozen-lockfile resolves identically to the real install.
 #
 # Usage: scripts/assemble-sbom-staging.sh <stagingDir>
 # Callers pass a dir OUTSIDE the checkout (both workflows use
@@ -129,5 +130,6 @@ rm -rf "$STAGING"
 mkdir -p "$STAGING"
 cp package.json pnpm-lock.yaml pnpm-workspace.yaml "$STAGING"/
 if [ -f .npmrc ]; then cp .npmrc "$STAGING"/; fi
+if [ -d patches ]; then cp -R patches "$STAGING"/; fi
 ( cd "$STAGING" && pnpm install --prod --frozen-lockfile --ignore-scripts )
 rm -f "$STAGING/pnpm-lock.yaml"

@@ -75,7 +75,7 @@ export function isBlankLine(text: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// TABLE-DELIM inputs — mirrors of @lezer/markdown 1.6.4's own table-formation tests
+// TABLE-DELIM inputs — mirrors of @lezer/markdown's own table-formation tests
 // (`hasPipe`, `delimiterLine`, `parseRow`). A GFM `Table` exists in that parser iff a leaf
 // block's first line has an unescaped pipe, a following line is delimiter-shaped, and the
 // two lines' `parseRow` cell counts agree — via `TableParser.nextLine` for the ordinary
@@ -133,28 +133,26 @@ function hasUnescapedPipe(text: string): boolean {
   return false;
 }
 
-/** @lezer/markdown 1.6.4's `delimiterLine` regex, VERBATIM. */
-const TABLE_DELIMITER_LINE = /^\|?(\s*:?-+:?\s*\|)+(\s*:?-+:?\s*)?$/;
+/** @lezer/markdown 1.8.1's `delimiterLine` regex
+ *  `/^[>\s]*\|?(\s*:?-+:?\s*\|)+(\s*:?-+:?\s*)?$/` (the `[>\s]*` head is new in 1.8.1),
+ *  respelled to match the same lines. Upstream's head overlaps the first cell's `\s*`, so a
+ *  long indented non-delimiter line backtracks quadratically, and this runs on every edited
+ *  line. Here the head takes all leading `>` / whitespace and the first cell starts at its
+ *  optional `|` (whitespace before it is the head's, and `[>\s]*\s*` is `[>\s]*`).
+ *  Equivalence with the installed regex is checked in cm-lezer-table-internals-tripwire. */
+const TABLE_DELIMITER_LINE = /^[>\s]*(?:\|\s*)?:?-+:?\s*\|(?:\s*:?-+:?\s*\|)*(?:\s*:?-+:?\s*)?$/;
 
-/** Is this line delimiter-SHAPED? Read BOTH raw (what `endLeaf` tests, on `cx.peekLine()`)
- *  and with leading spaces/tabs stripped (what `TableParser.nextLine` tests, on
- *  `line.text.slice(line.pos)`). Those two reads cover every possible `line.pos` ONLY while
- *  `[0, line.pos)` is WHITESPACE: the regex's sole whitespace sensitivity is its `^\|?`
- *  anchor, so a partially-stripped prefix reads the same as one of the two. On a
- *  CONTAINER-PREFIXED line they do not — `> |---|` is false raw AND false stripped while the
- *  parser, starting past `> `, sees `|---|` and says true. That THIRD value is carried by
- *  SHAPE's container alternation firing on such a line first; the pairing is no more
- *  self-contained than the `hasPipe`/`parseRow` offsets above.
- *  ⚠️ Measured (clause drill, 2026-09-06): against 1.6.4's regex the RAW read is SUBSUMED by
- *  the stripped one — raw-true IMPLIES stripped-true, because a leading `[ \t]+` can only be
- *  consumed by the `\s*` that opens the first group (`:?-+` matches no space and `-+` needs a
- *  dash), so dropping those characters leaves that same match valid. Deleting the raw read
- *  therefore reds nothing today. It is kept because the two reads mirror two DIFFERENT parser
- *  call sites and the subsumption is a property of THAT regex, which
- *  cm-lezer-table-internals-tripwire.test.ts pins verbatim: if upstream changes it, this read
- *  is what keeps `endLeaf`'s raw input modelled instead of silently unmodelled. */
-function isTableDelimiterShaped(text: string): boolean {
-  return TABLE_DELIMITER_LINE.test(text) || TABLE_DELIMITER_LINE.test(text.replace(/^[ \t]+/, ""));
+/** Is this line delimiter-SHAPED? One read of the raw text is enough: the regex opens with
+ *  `[>\s]*`, which absorbs any leading whitespace and `>` quote marker, so it answers the
+ *  same for `endLeaf`'s raw `peekLine` and for `TableParser.nextLine`'s `line.pos`-onward
+ *  text (`> |---|` is true either way). Only a LIST-MARKER prefix (`- |---|`) is false here
+ *  while the parser, starting past the marker, sees `|---|` and says true; that value is
+ *  carried by SHAPE's container alternation firing on such a line first, so the pairing is
+ *  no more self-contained than the `hasPipe`/`parseRow` offsets above.
+ *  ⚠️ If upstream changes the regex, cm-lezer-table-internals-tripwire.test.ts goes red:
+ *  re-derive how each call site reads the line then, rather than assuming one read. */
+export function isTableDelimiterShaped(text: string): boolean {
+  return TABLE_DELIMITER_LINE.test(text);
 }
 
 /** Mirror of `parseRow`'s return value: cells split on unescaped `|`; a leading pipe opens

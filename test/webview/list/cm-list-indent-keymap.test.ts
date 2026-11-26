@@ -11,6 +11,12 @@ import {
   listIndentKeymap,
   outdentListItem,
 } from "../../../src/webview/cm/list/list-indent-keymap.js";
+import {
+  blockOwner,
+  itemAncestry,
+  parentMarkOf,
+  topLevelListCount,
+} from "../helpers/list-structure.js";
 import { settledMount, settledView } from "../helpers/settled-view.js";
 
 function mount(
@@ -638,6 +644,23 @@ describe("outdentListItem", () => {
     }
   });
 
+  // A bare marker line that owns a body below is not an empty item: the body
+  // must shift with the marker, or it stays at its old column and re-parses as
+  // an indented code block / a stray child.
+  it.each([
+    ["- p\n    -\n      text", "- p\n-\n  text"],
+    ["- p\n  -\n    - child\n  - sib", "- p\n-\n  - child\n  - sib"],
+  ])("outdents a bare-marker item together with its body (%j)", (doc, expected) => {
+    const view = mount(doc, EditorSelection.cursor(0));
+    view.dispatch({ selection: EditorSelection.cursor(view.state.doc.line(2).to) });
+    try {
+      expect(outdentListItem(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(expected);
+    } finally {
+      view.destroy();
+    }
+  });
+
   it("returns true (swallow) in a plain paragraph", () => {
     const view = mount("paragraph", EditorSelection.cursor(3));
     try {
@@ -928,5 +951,148 @@ describe("listIndentKeymap — registration + precedence", () => {
     expect(Object.keys(mod).sort()).toEqual(
       ["indentListItem", "listIndentKeymap", "outdentListItem"].sort()
     );
+  });
+});
+
+// CommonMark closes a bare item at a blank line right after its marker, so a list
+// edit that leaves a bare marker above the block it must own moves the blank lines
+// above the marker in the same transaction. Each case re-parses the result.
+describe("indent / outdent keep a bare marker's first block directly below it", () => {
+  it.each([
+    ["- a\n-\n\n- b", "- a\n\n-\n  - b", "b", "-"],
+    ["1. a\n2.\n\n3. b\n4. c", "1. a\n\n2.\n   1. b\n3. c", "1. b", "2."],
+  ])("Tab nests %j under the bare destination", (doc, out, needle, parent) => {
+    const view = mount(doc, EditorSelection.cursor(doc.indexOf(needle.slice(-1)) + 1));
+    try {
+      expect(indentListItem(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(out);
+      expect(parentMarkOf(out, needle)).toBe(parent);
+      expect(topLevelListCount(out)).toBe(1);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it.each([
+    ["- p\n  -\n\n  - b", "- p\n\n- \n  - b", "-"],
+    ["9. p\n   1.\n\n   2. b\n10. tail", "9. p\n\n10. \n    1. b\n11. tail", "10."],
+  ])("Shift-Tab on the bare item in %j keeps its forced child", (doc, out, parent) => {
+    const view = mount(doc, EditorSelection.cursor(doc.indexOf("\n") + 1));
+    try {
+      expect(outdentListItem(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(out);
+      expect(parentMarkOf(out, "b")).toBe(parent);
+      expect(topLevelListCount(out)).toBe(1);
+      expect(view.state.selection.main.head).toBe(
+        out.indexOf(`\n${parent} \n`) + parent.length + 2
+      );
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // Lifting the gap above the destination would put a blank right under an
+  // enclosing bare marker that owns the destination as its first block, closing
+  // that item. No safe placement exists, so Tab leaves bytes and numbers alone.
+  it("Tab is a no-op when the lift would close an enclosing bare item", () => {
+    const doc = "1.\n   1.\n\n   2. b\n   3. c";
+    const view = mount(doc, EditorSelection.cursor(doc.indexOf("b") + 1));
+    try {
+      expect(itemAncestry(doc, doc.indexOf("b"))).toEqual([doc.indexOf("2. b"), 0]);
+      indentListItem(view);
+      expect(view.state.doc.toString()).toBe(doc);
+      expect(itemAncestry(doc, doc.indexOf("c"))).toEqual([doc.indexOf("3. c"), 0]);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // A checkbox-only marker line is content, not a bare marker, so the item owns a
+  // later blank-separated body. Shift-Tab takes the non-empty path: the checkbox
+  // stays and the body moves with the promoted item.
+  it("Shift-Tab keeps a checkbox-only item's later body under it", () => {
+    const doc = "9. p\n   1. [ ]\n\n      body\n10. tail";
+    const view = mount(doc, EditorSelection.cursor(doc.indexOf("]") + 1));
+    try {
+      expect(outdentListItem(view)).toBe(true);
+      const out = view.state.doc.toString();
+      expect(out).toBe("9. p\n10. [ ]\n\n    body\n11. tail");
+      expect(itemAncestry(out, out.indexOf("body"))).toEqual([out.indexOf("10.")]);
+      expect(itemAncestry(out, out.indexOf("tail"))).toEqual([out.indexOf("11.")]);
+      expect(topLevelListCount(out)).toBe(1);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // A block the old parent owns after the moved run would end up below the bare
+  // promoted marker, which the blank line closes, so the block would leave the
+  // list as code (it stayed in the list under 1.6.4). Shift-Tab leaves bytes and
+  // numbers alone there.
+  it("Shift-Tab on a bare item keeps the parent's later block in the list", () => {
+    const doc = "1. parent\n\n   9.\n\n      body";
+    expect(blockOwner(doc, "body")).toEqual(["Paragraph", 0]);
+    const view = mount(doc, EditorSelection.cursor(doc.indexOf("9.") + 2));
+    try {
+      outdentListItem(view);
+      expect(view.state.doc.toString()).toBe(doc);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // With a forced child, the bare promoted item opens with that child directly
+  // below it, so the blank line does not close it and the parent's later block
+  // goes under the promoted item, as on main.
+  it("Shift-Tab on a bare item with a forced child keeps the parent's later block", () => {
+    const doc = "- p\n\n  -\n  - child\n\n  body";
+    const view = mount(doc, EditorSelection.cursor(doc.indexOf("  -\n") + 3));
+    try {
+      expect(outdentListItem(view)).toBe(true);
+      const out = view.state.doc.toString();
+      expect(out).toBe("- p\n\n- \n  - child\n\n  body");
+      expect(itemAncestry(out, out.indexOf("child"))).toEqual([out.indexOf("- child"), 5]);
+      expect(blockOwner(out, "body")).toEqual(["Paragraph", 5]);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // A content-bearing promoted item keeps main's behaviour: the parent's later
+  // block goes under the promoted item and stays in the list.
+  it.each([
+    ["1. parent\n\n   9. x\n\n   body", "9. x", "1. parent\n\n2. x\n\n   body", "2. x"],
+    [
+      "- parent\n  - child\n\n  more text",
+      "- child",
+      "- parent\n- child\n\n  more text",
+      "- child",
+    ],
+  ])("Shift-Tab in %j re-homes the later block under the promoted item", (doc, line, out, owner) => {
+    const view = mount(doc, EditorSelection.cursor(doc.indexOf(line) + line.length));
+    try {
+      expect(outdentListItem(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(out);
+      const needle = out.includes("body") ? "body" : "more";
+      expect(blockOwner(out, needle)).toEqual(["Paragraph", out.indexOf(owner)]);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // Main's known gap, kept as is (TODO.md "list: 本文を持つ item で marker 行を消す
+  // 既存の経路", case e): a wider promoted marker (`10.`) moves the content column
+  // past the block, which then leaves the list. Same bytes on main 216a6b66.
+  it("Shift-Tab that widens the marker keeps main's bytes", () => {
+    const doc = "9. parent\n\n   1. x\n\n   body";
+    const view = mount(doc, EditorSelection.cursor(doc.indexOf("1. x") + 4));
+    try {
+      expect(outdentListItem(view)).toBe(true);
+      const out = view.state.doc.toString();
+      expect(out).toBe("9. parent\n\n10. x\n\n   body");
+      expect(blockOwner(out, "body")).toEqual(["Paragraph", -1]);
+    } finally {
+      view.destroy();
+    }
   });
 });

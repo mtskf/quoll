@@ -16,14 +16,36 @@ type SyntaxNode = Tree["topNode"];
 /** The GFM TaskMarker byte shape — `[ ]`, `[x]`, or `[X]`. */
 export const TASK_MARKER_RE = /^\[[ xX]\]$/;
 
+/** The item's first content node (`listMark.nextSibling`) when it is non-empty
+ *  AND starts on the ListMark's own line, else null. Every "what follows the
+ *  marker" question — hang width, content column, empty-item, checkbox — asks
+ *  this one helper, so a content node on a LATER line counts as no content.
+ *  Why: since @lezer/markdown 1.7.2 an empty marker line has no content node, so
+ *  `nextSibling` can be a block on the next line (`-\n  [ ] foo`, `> -\n>   - x`);
+ *  1.6.4 always put a (possibly zero-width) node on the marker line. Treating
+ *  that later node as marker-line content mixed columns of different lines and
+ *  let a checkbox replace span a line break. */
+export function markerLineContent(state: EditorState, listMark: SyntaxNode): SyntaxNode | null {
+  const content = listMark.nextSibling;
+  if (
+    content === null ||
+    content.from === content.to ||
+    content.from > state.doc.lineAt(listMark.from).to
+  ) {
+    return null;
+  }
+  return content;
+}
+
 /** True when `node` is a CONTENT-LESS bare task marker — the parser leaves
  *  `- [ ]` as `ListItem > ListMark, Paragraph("[ ]")` with NO `Task`/`TaskMarker`
  *  node. Requires `node` to be:
  *    - a `Paragraph` of EXACTLY 3 bytes matching `TASK_MARKER_RE`,
  *    - whose parent is a `ListItem` whose `firstChild` is a `ListMark`,
- *    - AND that item's FIRST content node (`listMark.nextSibling` at the same
+ *    - AND that item's marker-line content (`markerLineContent` at the same
  *      `from`) — so a LATER `[ ]` paragraph in the same item
- *      (`- first\n\n  [ ]`) is NOT treated as a checkbox (Codex finding #3).
+ *      (`- first\n\n  [ ]`, or `-\n  [ ]`) is NOT treated as a checkbox (Codex
+ *      finding #3).
  *  Compared by `.from` (SyntaxNode object identity is not stable across cursor
  *  reads).
  *
@@ -54,7 +76,7 @@ export function isContentlessTaskParagraph(state: EditorState, node: SyntaxNode)
   if (listMark === null || listMark.name !== "ListMark") {
     return false;
   }
-  const firstContent = listMark.nextSibling;
+  const firstContent = markerLineContent(state, listMark);
   if (firstContent === null || firstContent.from !== node.from) {
     return false;
   }

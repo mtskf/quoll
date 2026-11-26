@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
+import { syntaxTree } from "@codemirror/language";
 import {
   EditorSelection,
   EditorState,
@@ -7,6 +8,7 @@ import {
   type Transaction,
 } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
+import type { SyntaxNode } from "@lezer/common";
 import { describe, expect, it, vi } from "vitest";
 
 import { PROTOCOL_VERSION, type WebviewToHost } from "../../src/shared/protocol.js";
@@ -115,6 +117,22 @@ describe("tryOpenLinkAt — safe URLs", () => {
     const host = { postMessage: (m: { type: string; href?: string }) => posted.push(m) };
     expect(tryOpenLinkAt(state, posOf(doc, "[t]") + 1, host, noScroll)).toBe(true);
     expect(posted[0]?.href).toBe("https://example.com");
+  });
+
+  it("opens the saved href of `<…\\\\>` when later prose has another `>)`", () => {
+    // Stock @lezer/markdown 1.8.1 extends this URL to the later `>)` and posts
+    // `…a(b)\\>) then `; patches/@lezer__markdown@1.8.1.patch fixes it.
+    const doc = "see [t](<https://example.test/a(b)\\\\>) then >)";
+    const state = stateOf(doc);
+    const posted: Array<{ type: string; href?: string }> = [];
+    const host = { postMessage: (m: { type: string; href?: string }) => posted.push(m) };
+    expect(tryOpenLinkAt(state, posOf(doc, "[t]") + 1, host, noScroll)).toBe(true);
+    expect(posted[0]?.href).toBe("https://example.test/a(b)\\");
+    let link: SyntaxNode | null = syntaxTree(state).resolveInner(posOf(doc, "[t]") + 1, 1);
+    while (link && link.name !== "Link") {
+      link = link.parent;
+    }
+    expect(doc.slice(link?.to)).toBe(" then >)");
   });
 });
 

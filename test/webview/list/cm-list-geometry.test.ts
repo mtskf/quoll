@@ -51,7 +51,7 @@ describe("resolveTaskMarkerGeometry — bullet/ordered fold policy (F7)", () => 
       taskMarkerFrom: 2,
       taskMarkerTo: 5,
       checked: false,
-      isBullet: true,
+      foldsListMark: true,
       foldFrom: 0,
     });
   });
@@ -62,7 +62,7 @@ describe("resolveTaskMarkerGeometry — bullet/ordered fold policy (F7)", () => 
       taskMarkerFrom: 3,
       taskMarkerTo: 6,
       checked: true,
-      isBullet: false,
+      foldsListMark: false,
       foldFrom: 3,
     });
   });
@@ -70,7 +70,7 @@ describe("resolveTaskMarkerGeometry — bullet/ordered fold policy (F7)", () => 
   it("blockquoted bullet task: still folds (Blockquote grandparent ignored)", () => {
     // `> - [ ] foo`: ListMark `-` at 2, TaskMarker at [4,7).
     expect(taskGeom("> - [ ] foo")).toMatchObject({
-      isBullet: true,
+      foldsListMark: true,
       foldFrom: 2,
       taskMarkerFrom: 4,
     });
@@ -110,7 +110,7 @@ describe("resolveContentlessTaskMarkerGeometry", () => {
       taskMarkerFrom: 2,
       taskMarkerTo: 5,
       checked: false,
-      isBullet: true,
+      foldsListMark: true,
       foldFrom: 0,
     });
   });
@@ -148,7 +148,7 @@ describe("resolveContentlessTaskMarkerGeometry", () => {
   it("ordered content-less `1. [ ]` keeps foldFrom at the marker (number stays visible)", () => {
     const { state, item } = listItemAt("1. [ ]", 0);
     const g = resolveContentlessTaskMarkerGeometry(state, item);
-    expect(g?.isBullet).toBe(false);
+    expect(g?.foldsListMark).toBe(false);
     expect(g?.foldFrom).toBe(g?.taskMarkerFrom);
   });
 });
@@ -300,7 +300,7 @@ describe("resolveListItemHang — recursive geometry (F1 + NEST_STEP)", () => {
 
   it("ordered `)` TASK (`1) [x]`) splits the same as `.` — Lezer delimiter guard", () => {
     // Mirrors the plain `1) item` guard: pins that a `)`-delimited item is an
-    // OrderedList (isBullet=false, keeps `1)` visible) — not a BulletList — so
+    // OrderedList (foldsListMark=false, keeps `1)` visible) — not a BulletList — so
     // the glyph split runs and matches `1. [x]` (the delimiter doesn't change
     // the 2 glyph cols / 1 space / checkbox counts).
     expect(hangOf("1) [x] foo", 0)).toEqual({
@@ -423,6 +423,60 @@ describe("content-less / empty items — hang", () => {
   it("empty top-level bullet `-` still starts at the base column (indent === pad)", () => {
     const h = hangOfTop("-");
     expect(h?.indent).toEqual(h?.pad);
+  });
+
+  // Content on a LATER line is not marker-line content (since @lezer/markdown
+  // 1.7.2 the empty marker line has no node, so nextSibling is the next line's
+  // block). Inside a blockquote that block starts at the continuation `>`
+  // (col 0), which once yielded a negative ch (-1) hang.
+  it("empty marker line with a nested child on the next line hangs like `-`", () => {
+    expect(hangOfTop("> -\n>   - child\n")).toEqual(hangOfTop("> -\n"));
+    expect(hangOfTop("> -\n>   - child\n")).toEqual(hangOfTop("> - x\n"));
+    expect(hangOfTop("-\n  - child\n")).toEqual(hangOfTop("-"));
+  });
+});
+
+describe("task marker below the ListMark line", () => {
+  // One fold rule: the checkbox replaces the TaskMarker's own `[ ]`, widened to
+  // the bullet ListMark only when the mark shares its line. A Task below the
+  // marker line — bullet or ordered — therefore keeps a single-line checkbox on
+  // its own `[ ]` and the bullet keeps its dot (foldsListMark: false).
+  // (Previously a bullet Task here resolved no geometry at all, because the old
+  // bullet fold [ListMark.from, TaskMarker.to) would have crossed a line break;
+  // that dropped the checkbox and Mod-L for an existing task — Codex F2.)
+  // 1.6.4 parsed `-\n  [ ] foo` / `1.\n   [ ] foo` as a plain Paragraph; 1.8.1
+  // emits a Task, which GFM agrees with (the item's first block is the task
+  // paragraph). Lock-step with the hang: the checkbox sits on a later line, not
+  // beside the marker, so the item hangs like a bare marker and is not a task
+  // parent.
+  it.each([
+    ["-\n  [ ] foo", 4],
+    ["- a\n\n  [ ] b", 7],
+    ["> -\n>   [ ] foo", 8],
+    ["1. a\n\n   [ ] b", 9],
+    ["1.\n   [ ] foo", 6],
+  ])("%j folds only its own `[ ]`", (doc, from) => {
+    expect(taskGeom(doc)).toMatchObject({
+      foldsListMark: false,
+      taskMarkerFrom: from,
+      foldFrom: from,
+    });
+    const { state, item } = listItemAt(doc, doc.search(/[-\d]/));
+    expect(isTaskItem(state, item)).toBe(false);
+  });
+
+  it("content-less `-\n  [ ]` resolves no task geometry", () => {
+    const { state, item } = listItemAt("-\n  [ ]", 0);
+    expect(resolveContentlessTaskMarkerGeometry(state, item)).toBeNull();
+    expect(isTaskItem(state, item)).toBe(false);
+  });
+
+  it.each([
+    ["-\n  [ ] foo", "-"],
+    ["-\n  [ ]", "-"],
+    ["1.\n   [ ] foo", "1."],
+  ])("%j hangs like a bare `%s`", (doc, bare) => {
+    expect(hangOfTop(doc)).toEqual(hangOfTop(bare));
   });
 });
 
