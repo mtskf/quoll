@@ -443,6 +443,38 @@ describe("continueListOnEnter — split keeps the item's children nested", () =>
     }
   });
 
+  // With a marker-width change, only the own lines below the insertion point move
+  // to the new item and are shifted; lines kept above it stay as they are.
+  it("keeps a mixed paragraph whole when the new marker changes the content column", () => {
+    const doc = "1.   x\n         - y\nlazy";
+    const view = mount(doc, at(doc.indexOf("x") + 1));
+    try {
+      expect(continueListOnEnter(view)).toBe(true);
+      const out = view.state.doc.toString();
+      expect(out).toBe("1.   x\n         - y\nlazy\n2. ");
+      expect(view.state.selection.main.head).toBe(out.length);
+      expect(blockOwner(out, "- y")).toEqual(["Paragraph", 0]);
+      expect(blockOwner(out, "lazy")).toEqual(["Paragraph", 0]);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("shifts only the child below the gap when the marker widens after a lazy line", () => {
+    const doc = "9. x\nbody\n\n   - child";
+    const view = mount(doc, at(doc.indexOf("x") + 1));
+    try {
+      expect(continueListOnEnter(view)).toBe(true);
+      const out = view.state.doc.toString();
+      expect(out).toBe("9. x\nbody\n\n10. \n    - child");
+      expect(view.state.selection.main.head).toBe(out.indexOf("10. ") + 4);
+      expect(blockOwner(out, "body")).toEqual(["Paragraph", 0]);
+      expect(parentMarkOf(out, "child")).toBe("10.");
+    } finally {
+      view.destroy();
+    }
+  });
+
   it("does not shift a lazy-continuation line (not structurally the item's)", () => {
     const view = mount("9. abcd\nlazy", at(5));
     try {

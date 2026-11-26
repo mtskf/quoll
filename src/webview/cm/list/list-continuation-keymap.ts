@@ -106,13 +106,19 @@ function caretRunEnd(
   if (content === null) {
     return caretLineNo;
   }
+  // `ownLines` is sorted: the paragraph's lines below the caret line are all own
+  // exactly when that many own lines fall in the range. One pass, so linear.
   const last = state.doc.lineAt(content.to).number;
-  for (let n = caretLineNo + 1; n <= last; n++) {
-    if (!ownLines.includes(n)) {
-      return last;
+  let own = 0;
+  for (const n of ownLines) {
+    if (n > last) {
+      break;
+    }
+    if (n > caretLineNo) {
+      own++;
     }
   }
-  return caretLineNo;
+  return own === last - caretLineNo ? caretLineNo : last;
 }
 
 /** Blank in Lezer's and CommonMark's sense: ASCII spaces and tabs only. */
@@ -323,9 +329,12 @@ export const continueListOnEnter: Command = (view) => {
         { from: insertAt, insert: insert + tail },
       ]
     : [{ from: at, insert }];
-  // All edits below sit past `insertAt`, so the caret is unaffected.
+  // Only the own lines below the new line move to the new item, so only those are
+  // shifted; every edit below then sits past `insertAt` and the caret holds.
   if (ownItem !== null) {
-    changes.push(...shiftOwnLines(state, ownItem, newContentCol));
+    changes.push(
+      ...shiftOwnLines(state, ownItem, newContentCol, state.doc.lineAt(insertAt).number)
+    );
   }
   if (ordered) {
     // Keep the contiguous ordered run sequential.
