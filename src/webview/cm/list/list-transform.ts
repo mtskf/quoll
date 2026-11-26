@@ -479,18 +479,22 @@ function liftGap(
  *  just-typed empty task). Unlike a bare marker this is content, so the item is not
  *  blank-first and can own blocks after a blank line. */
 export function isCheckboxOnly(state: EditorState, content: SyntaxNode): boolean {
-  if (isContentlessTaskParagraph(state, content)) {
-    return true;
-  }
-  if (content.name !== "Task") {
+  const end = checkboxEndOf(state, content);
+  if (end === null) {
     return false;
   }
-  const marker = findTaskMarker(state, content);
-  if (marker === null) {
-    return false;
-  }
-  const rest = state.doc.sliceString(marker.to, content.to);
+  const rest = state.doc.sliceString(end, content.to);
   return indentLength(rest) === rest.length;
+}
+
+/** The end of the checkbox that opens marker-line `content`: a `Task`'s 3-byte
+ *  `TaskMarker`, or the whole content-less task paragraph (`- [ ]`). Null when the
+ *  content does not open with a checkbox. */
+export function checkboxEndOf(state: EditorState, content: SyntaxNode): number | null {
+  if (isContentlessTaskParagraph(state, content)) {
+    return content.to;
+  }
+  return content.name === "Task" ? (findTaskMarker(state, content)?.to ?? null) : null;
 }
 
 /** True when the item has no continuable content: a bare `- ` / `1. ` that owns

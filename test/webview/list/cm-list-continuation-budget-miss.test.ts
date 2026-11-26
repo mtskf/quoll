@@ -104,6 +104,23 @@ describe("continueListOnEnter — marker-line decisions request no EOF parse", (
   });
 });
 
+describe("continueListOnEnter — checkbox-only ownership read from bounded text", () => {
+  it("makes no edit when the blank gap below runs past the lookahead", () => {
+    // The first non-blank line below is out of reach, so ownership is unknown:
+    // neither exit (could orphan a body) nor continue. No parse is requested.
+    let requests = 0;
+    missWhen = (state, upto) => {
+      if (upto > state.doc.line(1).to) {
+        requests++;
+      }
+      return false;
+    };
+    const doc = `- [ ] ${"\n".repeat(20_000)}para`;
+    expect(pressEnter(doc, "- [ ] ".length)).toBe(doc);
+    expect(requests).toBe(0);
+  });
+});
+
 describe("continueListOnEnter — EOF budget miss across a marker-width change", () => {
   // `9.` → `10. ` moves the content column, so the body must shift with it.
   // Without a tree that shows the item closed the shift cannot be computed:

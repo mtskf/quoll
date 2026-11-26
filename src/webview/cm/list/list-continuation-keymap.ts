@@ -36,17 +36,23 @@
 
 import { isolateHistory } from "@codemirror/commands";
 import { ensureSyntaxTree } from "@codemirror/language";
-import { type ChangeSpec, EditorSelection, type EditorState, Prec } from "@codemirror/state";
+import {
+  type ChangeSpec,
+  countColumn,
+  EditorSelection,
+  type EditorState,
+  type Line,
+  Prec,
+} from "@codemirror/state";
 import { type Command, keymap } from "@codemirror/view";
 
 import { leadingFrontmatterEnd } from "../frontmatter/detect.js";
 import { markerLineContent } from "../task-checkbox/task-marker-shape.js";
-import { columnAt, findTaskMarker } from "./list-geometry.js";
 import {
   blankGapBetween,
+  checkboxEndOf,
   classifyItemLines,
   contentColumnFromMarkerLine,
-  contentColumnOf,
   continuationMarkerFor,
   isCheckboxOnly,
   isEmptyItem,
@@ -114,23 +120,35 @@ function bareItemThroughLineBelow(
   return resolveListItemThrough(state, markFrom, state.doc.line(lineNo + 1).to);
 }
 
-/** Whether a checkbox-only item owns a block below its marker line on `lineNo`,
+/** Lezer expands a tab to the next multiple of 4 columns, ignoring `tabSize`. */
+const LEZER_TAB_SIZE = 4;
+
+/** Whether a checkbox-only item owns a block below its marker line `markerLine`,
  *  read from the text alone: past a blank line there is no lazy continuation, so
  *  the first non-blank line below belongs to the item exactly when it starts at
- *  or past `contentCol` (CommonMark list-item continuation). The line directly
- *  below cannot be a lazy line either, since a checkbox-only paragraph would then
- *  not be checkbox-only. Enter defers inside blockquotes before this, so no
- *  container prefix precedes the item's lines here. */
+ *  or past the item's content column (CommonMark list-item continuation). The line
+ *  directly below cannot be a lazy line either, since a checkbox-only paragraph
+ *  would then not be checkbox-only. Enter defers inside blockquotes before this,
+ *  so no container prefix precedes the item's lines here.
+ *
+ *  Columns use 4-column tab stops, as Lezer does whatever the editor's tabSize.
+ *  The scan stops CLOSURE_LOOKAHEAD characters past the marker line: null when no
+ *  non-blank line starts within that, so ownership is unknown. */
 function checkboxItemOwnsBlockBelow(
   state: EditorState,
-  lineNo: number,
-  contentCol: number
-): boolean {
-  for (let n = lineNo + 1; n <= state.doc.lines; n++) {
+  markerLine: Line,
+  markerEnd: number
+): boolean | null {
+  const contentCol = contentColumnFromMarkerLine(markerLine.text, markerEnd, LEZER_TAB_SIZE);
+  const cap = markerLine.to + CLOSURE_LOOKAHEAD;
+  for (let n = markerLine.number + 1; n <= state.doc.lines; n++) {
     const line = state.doc.line(n);
+    if (line.from > cap) {
+      return null;
+    }
     const ws = indentLength(line.text);
     if (ws < line.text.length) {
-      return columnAt(state, line.from + ws) >= contentCol;
+      return countColumn(line.text, LEZER_TAB_SIZE, ws) >= contentCol;
     }
   }
   return false;
@@ -232,10 +250,14 @@ export const continueListOnEnter: Command = (view) => {
     // add a marker under an empty item). Consume Enter, no edit.
     return true;
   }
-  const empty =
+  const owned =
     lineContent !== null && isCheckboxOnly(state, lineContent)
-      ? !checkboxItemOwnsBlockBelow(state, caretLine.number, contentColumnOf(state, item))
-      : isEmptyItem(state, judged);
+      ? checkboxItemOwnsBlockBelow(state, caretLine, mark.to - caretLine.from)
+      : undefined;
+  if (owned === null) {
+    return true; // the first block below is out of reach: unknown, so no edit
+  }
+  const empty = owned === undefined ? isEmptyItem(state, judged) : !owned;
   if (empty) {
     // Empty item → remove the whole marker line, exiting the list. Uniform across
     // nesting: no outdent (outdentListItem shifts whitespace only and would leave
@@ -255,8 +277,7 @@ export const continueListOnEnter: Command = (view) => {
   // content's start. A caret before it (indent / marker region `1|. a`, or inside
   // `[|x]`) must not split the marker — defer to the default Enter.
   const bare = lineContent === null;
-  const taskMarker = lineContent?.name === "Task" ? findTaskMarker(state, lineContent) : null;
-  const contentStart = bare ? mark.to : (taskMarker?.to ?? lineContent.from);
+  const contentStart = bare ? mark.to : (checkboxEndOf(state, lineContent) ?? lineContent.from);
   if (head < contentStart) {
     return false;
   }
