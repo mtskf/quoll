@@ -11,7 +11,7 @@ import {
   listContinuationKeymap,
 } from "../../../src/webview/cm/list/list-continuation-keymap.js";
 import { quollMarkdownLanguage } from "../../../src/webview/cm/markdown.js";
-import { parentMarkOf } from "../helpers/list-structure.js";
+import { itemAncestry, parentMarkOf } from "../helpers/list-structure.js";
 import { settledMount } from "../helpers/settled-view.js";
 
 function mount(
@@ -366,6 +366,30 @@ describe("continueListOnEnter — split keeps the item's children nested", () =>
       expect(view.state.doc.toString()).toBe(out);
       expect(view.state.selection.main.head).toBe(out.indexOf(" \n") + 1);
       expect(parentMarkOf(out, "child")).toBe(parent);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // Only ASCII spaces and tabs are blank: a U+00A0 tail is content, so it moves
+  // to the new item (which then owns the blank-separated body as usual), and a
+  // space/tab tail is carried onto the new bare line.
+  it.each([
+    // [doc, result, offset of the new item, caret, text the new item must hold];
+    // the caret starts right after `a`.
+    ["- a\u00a0", "- a\n- \u00a0", 4, 6, "\u00a0"],
+    ["- a\u00a0\n\n  - child", "- a\n- \u00a0\n\n  - child", 4, 6, "child"],
+    ["- a  ", "- a\n-   ", 4, 6, null],
+    ["9. a \n\n   - child", "9. a\n\n10.  \n    - child", 6, 10, "child"],
+  ] as const)("Enter after `a` in %j splits at the caret", (doc, out, newItem, caret, held) => {
+    const view = mount(doc, at(doc.indexOf("a") + 1));
+    try {
+      expect(continueListOnEnter(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(out);
+      expect(view.state.selection.main.head).toBe(caret);
+      if (held !== null) {
+        expect(itemAncestry(out, out.indexOf(held))).toContain(newItem);
+      }
     } finally {
       view.destroy();
     }

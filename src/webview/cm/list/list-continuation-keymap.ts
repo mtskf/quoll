@@ -91,6 +91,9 @@ function resolveListItemThrough(
   return item;
 }
 
+/** Blank in Lezer's and CommonMark's sense: ASCII spaces and tabs only. */
+const ASCII_BLANK = /^[ \t]*$/;
+
 /** The item to judge a bare marker's emptiness on: one whose tree shows the line
  *  below the marker line, which is all `isEmptyItem` needs (a bare item's body
  *  starts there or not at all). On the last line the caret-bounded `item` is
@@ -234,9 +237,7 @@ export const continueListOnEnter: Command = (view) => {
     // consume Enter without an edit; content-bearing items keep the default Enter.
     return bare;
   }
-  // A whitespace-only split tail stays on the caret line: the new line is then
-  // just the marker, the one shape the bare-marker rule below has to handle.
-  const at = bare || state.doc.sliceString(head, caretLine.to).trim() === "" ? caretLine.to : head;
+  const at = bare ? caretLine.to : head;
   // The edit lands, so resolve the item past the caret line — the caret-bounded
   // `item` sees neither its own lines below nor the following siblings. One EOF
   // parse serves shift and renumber; on a miss, a bounded parse that proves the
@@ -256,23 +257,22 @@ export const continueListOnEnter: Command = (view) => {
     mark.to - caretLine.from,
     state.tabSize
   );
-  // An empty tail makes the new line a bare marker, which owns only a block
-  // directly below it (`blankGapBetween`): the item's first own line must not sit
-  // after a blank line.
-  const newBare = tail === "" && parseListMark(markerStr.trim()) !== null;
-  const nextLine = caretLine.number < state.doc.lines ? state.doc.line(caretLine.number + 1) : null;
-  if (
-    ownItem === null &&
-    (newContentCol !== oldContentCol || (newBare && nextLine?.text.trim() === ""))
-  ) {
+  // A tail of only ASCII spaces / tabs (not trim(): U+00A0 is content) makes the
+  // new line a bare marker, which owns only a block directly below it
+  // (`blankGapBetween`): the item's first own line must not sit after a blank line.
+  const newBare = ASCII_BLANK.test(tail) && parseListMark(markerStr.trim()) !== null;
+  const nextLineBlank =
+    caretLine.number < state.doc.lines &&
+    ASCII_BLANK.test(state.doc.line(caretLine.number + 1).text);
+  if (ownItem === null && (newContentCol !== oldContentCol || (newBare && nextLineBlank))) {
     // The item's lines are unknown and the insert could strand them: the new
     // marker moves the content column (`9.` → `10. `), or a bare new marker would
     // sit above a blank line. Do nothing — but consume Enter, since upstream would
     // strip the marker.
     return true;
   }
-  // The new marker goes after any blank lines above the item's first own line, so
-  // that line stays directly below it.
+  // The new line (marker + tail) goes after any blank lines above the item's first
+  // own line, so that line stays directly below it.
   let insertAt = at;
   const firstOwn =
     newBare && ownItem !== null
@@ -286,8 +286,14 @@ export const continueListOnEnter: Command = (view) => {
     insertAt = gap.to;
   }
   const insert = `\n${indent}${markerStr}`;
-  const caret = insertAt + insert.length;
-  const changes: ChangeSpec[] = [{ from: insertAt, insert }];
+  const moved = insertAt !== at;
+  const caret = insertAt - (moved ? tail.length : 0) + insert.length;
+  const changes: ChangeSpec[] = moved
+    ? [
+        { from: at, to: caretLine.to },
+        { from: insertAt, insert: insert + tail },
+      ]
+    : [{ from: at, insert }];
   // All edits below sit past `insertAt`, so the caret is unaffected.
   if (ownItem !== null) {
     changes.push(...shiftOwnLines(state, ownItem, newContentCol));

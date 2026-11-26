@@ -35,3 +35,14 @@ export function topLevelListCount(doc: string): number {
   }
   return count;
 }
+
+/** The start offsets of every list item that holds offset `pos` in a fresh parse
+ *  of `doc`, innermost first (empty outside any list). */
+export function itemAncestry(doc: string, pos: number): number[] {
+  const out: number[] = [];
+  for (let n = enclosingItem(gfmParser.parse(doc).resolveInner(pos, 1)); n !== null; ) {
+    out.push(n.from);
+    n = enclosingItem(n.parent);
+  }
+  return out;
+}
