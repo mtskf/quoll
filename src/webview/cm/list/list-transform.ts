@@ -53,6 +53,7 @@ import {
   caretInCode,
   destinationForIndent,
   destinationForOutdent,
+  enclosingListItem,
   followingListItems,
   indentLength,
   isListNode,
@@ -440,14 +441,28 @@ export function blankGapBetween(
 
 /** Changes that move `gap` (from `blankGapBetween(state, upper, …)`) from below
  *  line `upper` to directly above it: `gap.to - gap.from` chars land before the
- *  line. */
+ *  line. `owner` is the item that holds line `upper` once the edit lands. Null when
+ *  the lift is unsafe: a bare marker of `owner` or one of its ancestors sits on the
+ *  line above, owning `upper` as its directly-below first block, and the lifted
+ *  blank would close it. No other placement is tried; the edit is then a no-op. */
 function liftGap(
   state: EditorState,
   upper: number,
-  gap: { from: number; to: number }
-): ChangeSpec[] {
+  gap: { from: number; to: number },
+  owner: SyntaxNode | null
+): ChangeSpec[] | null {
   if (gap.from === gap.to) {
     return [];
+  }
+  for (let n = owner; n !== null; n = enclosingListItem(n)) {
+    const mark = listMarkOf(n);
+    if (
+      mark !== null &&
+      state.doc.lineAt(mark.from).number === upper - 1 &&
+      markerLineContent(state, mark) === null
+    ) {
+      return null;
+    }
   }
   return [
     { from: gap.from, to: gap.to },
@@ -776,10 +791,13 @@ export function planOutdentItem(state: EditorState, headPos: number): ListEditPl
         markerLine.number,
         state.doc.lineAt(firstForced.from).number
       );
-      if (gap === null) {
+      // The promoted item lands beside `parent`, inside `parent`'s own owner.
+      const lift =
+        gap === null ? null : liftGap(state, markerLine.number, gap, enclosingListItem(parent));
+      if (gap === null || lift === null) {
         return { kind: "noop" };
       }
-      changes.push(...liftGap(state, markerLine.number, gap));
+      changes.push(...lift);
       liftedChars = gap.to - gap.from;
     }
     // Caret right after the synthesized marker, in POST-transform coords: the
@@ -966,10 +984,11 @@ export function planIndentItem(state: EditorState, headPos: number): ListEditPla
   if (parentMark !== null && isBodilessBareMarker(state, parentMark)) {
     const upper = state.doc.lineAt(parentMark.from).number;
     const gap = blankGapBetween(state, upper, state.doc.lineAt(mark.from).number);
-    if (gap === null) {
+    const moved = gap === null ? null : liftGap(state, upper, gap, enclosingListItem(parent));
+    if (moved === null) {
       return { kind: "noop" };
     }
-    lift.push(...liftGap(state, upper, gap));
+    lift.push(...moved);
   }
 
   const targetCol = contentColumnOf(state, parent);

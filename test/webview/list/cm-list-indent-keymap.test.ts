@@ -11,7 +11,7 @@ import {
   listIndentKeymap,
   outdentListItem,
 } from "../../../src/webview/cm/list/list-indent-keymap.js";
-import { parentMarkOf, topLevelListCount } from "../helpers/list-structure.js";
+import { itemAncestry, parentMarkOf, topLevelListCount } from "../helpers/list-structure.js";
 import { settledMount, settledView } from "../helpers/settled-view.js";
 
 function mount(
@@ -996,6 +996,22 @@ describe("indent / outdent keep a bare marker's first block directly below it", 
       expect(view.state.selection.main.head).toBe(
         out.indexOf(`\n${parent} \n`) + parent.length + 2
       );
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // Lifting the gap above the destination would put a blank right under an
+  // enclosing bare marker that owns the destination as its first block, closing
+  // that item. No safe placement exists, so Tab leaves bytes and numbers alone.
+  it("Tab is a no-op when the lift would close an enclosing bare item", () => {
+    const doc = "1.\n   1.\n\n   2. b\n   3. c";
+    const view = mount(doc, EditorSelection.cursor(doc.indexOf("b") + 1));
+    try {
+      expect(itemAncestry(doc, doc.indexOf("b"))).toEqual([doc.indexOf("2. b"), 0]);
+      indentListItem(view);
+      expect(view.state.doc.toString()).toBe(doc);
+      expect(itemAncestry(doc, doc.indexOf("c"))).toEqual([doc.indexOf("3. c"), 0]);
     } finally {
       view.destroy();
     }
