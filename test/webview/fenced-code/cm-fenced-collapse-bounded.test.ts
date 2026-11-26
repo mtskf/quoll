@@ -217,6 +217,20 @@ describe("fencedCodeCollapseField bounded ≡ full", () => {
         { changes: { from: 13, to: 14, insert: ":" } },
       ],
     },
+    // An ATX heading closes the list, promoting the far indented fence without a
+    // marker, indent, newline or blank delta. @lezer/markdown 1.8.1 reads a tab after
+    // the `#` as a heading too (1.6.4 kept `#\tHeading` a lazy paragraph line).
+    ...(["\t", " "] as const).map((sep) => {
+      const tilde = `~~~\n${Array.from({ length: 13 }, (_, i) => `code ${i}`).join("\n")}\n~~~`;
+      return {
+        name: `GF heading: typing \`#\` before ${sep === "\t" ? "a tab" : "a space"} promotes a far fence`,
+        initial: `- item\nx${sep}Heading\nmore\nmore\nmore\n  ${tilde.split("\n").join("\n  ")}`,
+        edits: [
+          { changes: { from: 7, to: 8, insert: "#" } },
+          { changes: { from: 7, to: 8, insert: "x" } },
+        ],
+      };
+    }),
     // Pins that the fence arm of STRUCTURAL is load-bearing: deleting block A's closing
     // ``` leaves it unclosed, so the parser re-pairs with block B's opener — block B (a
     // DISTANT node outside the edit span) vanishes. Without the fence arm, the bounded
