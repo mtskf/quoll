@@ -1,5 +1,5 @@
 diff --git a/dist/index.cjs b/dist/index.cjs
-index 4a361b0d03d5ed263f09e3eeebbbc2f1b6375ec8..c4b8aa0eda1940212e006f280dc8cd1e3f5ba862 100644
+index 4a361b0d03d5ed263f09e3eeebbbc2f1b6375ec8..7b5db5e64cff2ed493d51dde6feeea550b60b984 100644
 --- a/dist/index.cjs
 +++ b/dist/index.cjs
 @@ -268,8 +268,9 @@ const DefaultSkipMarkup = {
@@ -40,8 +40,17 @@ index 4a361b0d03d5ed263f09e3eeebbbc2f1b6375ec8..c4b8aa0eda1940212e006f280dc8cd1e
          }
          return null;
      }
+@@ -2133,7 +2134,7 @@ function hasPipe(str, start) {
+     }
+     return false;
+ }
+-const delimiterLine = /^[>\s]*\|?(\s*:?-+:?\s*\|)+(\s*:?-+:?\s*)?$/;
++const delimiterLine = /^[>\s]*(?:\|\s*)?:?-+:?\s*\|(?:\s*:?-+:?\s*\|)*(?:\s*:?-+:?\s*)?$/;
+ class TableParser {
+     constructor() {
+         // Null means we haven't seen the second line yet, false means this
 diff --git a/dist/index.js b/dist/index.js
-index bcaae772b1e92dd3f279b5c0b6607a3df0a2b20a..c35ca49ff515d7430f7e9767e8913b7f861de678 100644
+index bcaae772b1e92dd3f279b5c0b6607a3df0a2b20a..31a2f636c85f3d0382677e6a06ce9b30427891c3 100644
 --- a/dist/index.js
 +++ b/dist/index.js
 @@ -266,8 +266,9 @@ const DefaultSkipMarkup = {
@@ -82,3 +91,12 @@ index bcaae772b1e92dd3f279b5c0b6607a3df0a2b20a..c35ca49ff515d7430f7e9767e8913b7f
          }
          return null;
      }
+@@ -2131,7 +2132,7 @@ function hasPipe(str, start) {
+     }
+     return false;
+ }
+-const delimiterLine = /^[>\s]*\|?(\s*:?-+:?\s*\|)+(\s*:?-+:?\s*)?$/;
++const delimiterLine = /^[>\s]*(?:\|\s*)?:?-+:?\s*\|(?:\s*:?-+:?\s*\|)*(?:\s*:?-+:?\s*)?$/;
+ class TableParser {
+     constructor() {
+         // Null means we haven't seen the second line yet, false means this

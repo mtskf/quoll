@@ -87,3 +87,18 @@ describe("gfmParser — bare-marker list items", () => {
     expect(listItems(incremental)).toEqual([`0-${after.indexOf("item\n\npara") + 4}`]);
   });
 });
+
+// The GFM table parser's endLeaf tests the line after a pipe-bearing paragraph line
+// against delimiterLine. Upstream 1.8.1's spelling backtracks quadratically on a
+// long indent (about 1 s here); the patched one is linear. Tabs, not spaces: a long
+// space run also hits the inline HardBreak scan, a separate quadratic path that
+// 1.6.4 already had and this patch does not touch.
+describe("gfmParser — long indented line after a table-like line", () => {
+  it("parses a 40,000-tab indent in linear time", () => {
+    const doc = `intro\nx | y\n${"\t".repeat(40_000)}plain prose`;
+    const start = performance.now();
+    const tree = gfmParser.parse(doc);
+    expect(performance.now() - start).toBeLessThan(200);
+    expect(tree.toString()).toBe("Document(Paragraph)");
+  });
+});

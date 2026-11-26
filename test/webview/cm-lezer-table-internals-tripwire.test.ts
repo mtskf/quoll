@@ -17,19 +17,21 @@ const distPath = require_.resolve("@lezer/markdown");
 const dist = readFileSync(distPath, "utf8");
 
 describe("@lezer/markdown table internals the guard mirrors", () => {
-  it("still ships the delimiterLine regex the mirror is equivalent to", () => {
-    expect(dist).toContain(
-      "const delimiterLine = /^[>\\s]*\\|?(\\s*:?-+:?\\s*\\|)+(\\s*:?-+:?\\s*)?$/;"
-    );
+  // patches/@lezer__markdown@1.8.1.patch respells upstream's delimiterLine (whose
+  // overlapping `[>\s]*` / `\s*` quantifiers backtrack quadratically on a long
+  // indent) in both builds, the same way as the mirror in structural-guard.ts.
+  it("ships the patched delimiterLine in both builds", () => {
+    const esm = readFileSync(join(dirname(distPath), "index.js"), "utf8");
+    const patched =
+      "const delimiterLine = /^[>\\s]*(?:\\|\\s*)?:?-+:?\\s*\\|(?:\\s*:?-+:?\\s*\\|)*(?:\\s*:?-+:?\\s*)?$/;";
+    expect(dist).toContain(patched);
+    expect(esm).toContain(patched);
   });
 
-  // The mirror is rewritten without the upstream regex's overlapping `[>\s]*` /
-  // `\s*` quantifiers (which backtrack quadratically on a long indent), so it is
-  // checked for the same answers against the regex read out of the installed dist.
-  it("answers like the shipped delimiterLine regex on every short line", () => {
-    const source = /const delimiterLine = \/(.*)\/;/.exec(dist)?.[1];
-    expect(source).toBeDefined();
-    const upstream = new RegExp(source ?? "");
+  // The oracle is upstream's ORIGINAL 1.8.1 spelling, as a literal: the dist now
+  // carries the respelling, so reading it from there would compare it with itself.
+  it("answers like upstream's original delimiterLine regex on every short line", () => {
+    const upstream = /^[>\s]*\|?(\s*:?-+:?\s*\|)+(\s*:?-+:?\s*)?$/;
     const alphabet = [" ", "\t", ">", "|", ":", "-", "x", "\u00a0"];
     let lines = [""];
     let checked = 0;
@@ -67,7 +69,7 @@ describe("@lezer/markdown table internals the guard mirrors", () => {
     // endLeaf tests `cx.peekLine()` raw while TableParser.nextLine tests
     // `line.text.slice(line.pos)`. `isTableDelimiterShaped` reads the raw line ONCE because the
     // 1.8.1 regex's `[>\s]*` head absorbs the leading whitespace both call sites differ by.
-    // The first test pins the regex text: if it goes red, re-derive how each site reads the line.
+    // The patched-regex test pins its text: if it goes red, re-derive how each site reads the line.
     expect(dist).toMatch(/let next = cx\.peekLine\(\);\s*\n\s*return delimiterLine\.test\(next\)/);
     expect(dist).toContain("delimiterLine.test(lineText = line.text.slice(line.pos))");
   });

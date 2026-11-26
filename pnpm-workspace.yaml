@@ -57,13 +57,16 @@ allowBuilds:
   esbuild: false
   keytar: false
 
-# Two @lezer/markdown 1.8.1 bugs, fixed in dist/ (index.js + index.cjs):
+# Three @lezer/markdown 1.8.1 changes, in dist/ (index.js + index.cjs):
 #  - `esc` stays set after an escaped backslash in an angle destination, so
 #    `[t](<a\\>) then >)` swallows the prose up to the later `>`;
 #  - `blankFirstLine` ends a bare-marker item at ANY blank line before its body is
-#    attached, so `9. \n   first\n\n   second` drops `second` from the item.
+#    attached, so `9. \n   first\n\n   second` drops `second` from the item;
+#  - PERFORMANCE ONLY: the GFM table `delimiterLine` regex is respelled without
+#    its overlapping quantifiers (quadratic on a long indent). Drop this hunk at any
+#    bump once upstream's spelling is linear; it changes no parse result.
 # Delete this entry, the patch file and the exact pin in package.json only once an
-# upstream release fixes BOTH (test/markdown/url-decode.test.ts and the
+# upstream release fixes the first two (test/markdown/url-decode.test.ts and the
 # bare-marker block in test/markdown/gfm-parser.test.ts pass unpatched).
 patchedDependencies:
   '@lezer/markdown@1.8.1': patches/@lezer__markdown@1.8.1.patch
