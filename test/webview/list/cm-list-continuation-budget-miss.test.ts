@@ -65,18 +65,35 @@ describe("continueListOnEnter — bare-marker empty check under a budget miss", 
     missWhen = (state, upto) => upto === state.doc.line(2).to;
     expect(pressEnter(doc, 1)).toBe("-\n- \n  text\n\npara");
   });
+
+  it("exits an empty `- ` when only the judging parse misses", () => {
+    // The EOF parse still proves the item empty, so the miss must not leave a
+    // second empty marker behind.
+    const doc = "- \n\npara";
+    missWhen = (state, upto) => upto === state.doc.line(2).to;
+    expect(pressEnter(doc, 2)).toBe("\n\npara");
+  });
 });
 
 describe("continueListOnEnter — EOF budget miss across a marker-width change", () => {
   // `9.` → `10. ` moves the content column, so the body must shift with it.
-  // Without the EOF tree the shift cannot be computed: Enter must leave the
-  // doc untouched (not insert `10. ` and orphan the body as a paragraph).
+  // Without a tree that shows the item closed the shift cannot be computed:
+  // Enter must leave the doc untouched (not insert `10. ` and orphan the body
+  // as a paragraph).
   it.each([
-    ["bare marker owning a body", "9.\n   body\n\npara", 2],
+    ["bare marker owning a body", "9.\n   body", 2],
     ["item with content and a body", "9. a\n   body", 4],
   ])("does not orphan the body (%s)", (_label, doc, caret) => {
     missWhen = (state, upto) => upto >= state.doc.length;
     expect(pressEnter(doc, caret)).toBe(doc);
+  });
+
+  it("still inserts `10. ` when the next line already closes the item", () => {
+    // The heading right below shows the item closed in the next-line-bounded
+    // tree, so it owns no line to shift; only the renumber is skipped.
+    missWhen = (state, upto) => upto >= state.doc.length;
+    const tail = "para line of some text here\n\n".repeat(1000);
+    expect(pressEnter(`9. a\n# H\n${tail}`, 4)).toBe(`9. a\n10. \n# H\n${tail}`);
   });
 
   it("still inserts when the content column does not move (`- a`)", () => {

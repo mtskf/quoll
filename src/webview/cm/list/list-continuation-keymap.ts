@@ -84,15 +84,34 @@ function resolveListItemThrough(
   return item;
 }
 
+/** The end of the line below `lineNo` (the last line's end on the last line). */
+function nextLineEnd(state: EditorState, lineNo: number): number {
+  return state.doc.line(Math.min(lineNo + 1, state.doc.lines)).to;
+}
+
 /** Whether the bare marker at `markFrom` (on line `lineNo`) heads an EMPTY item.
  *  The caret-bounded tree stops at the marker line, so parse through the next
  *  line — all `isEmptyItem` needs, since a bare item's body starts there or not
- *  at all — and never to EOF (a large unparsed tail must not cost the budget).
- *  A budget miss cannot tell empty from body-owning, so it keeps the list. */
+ *  at all — and reach for EOF only when that parse misses its budget. A miss on
+ *  both cannot tell empty from body-owning, so it keeps the list. */
 function bareItemIsEmpty(state: EditorState, markFrom: number, lineNo: number): boolean {
-  const upto = state.doc.line(Math.min(lineNo + 1, state.doc.lines)).to;
-  const item = resolveListItemThrough(state, markFrom, upto);
+  const item =
+    resolveListItemThrough(state, markFrom, nextLineEnd(state, lineNo)) ??
+    resolveListItemThrough(state, markFrom, state.doc.length);
   return item !== null && isEmptyItem(state, item);
+}
+
+/** The ListItem at `markFrom` from a tree parsed through the next line, but only
+ *  when that tree already holds a node after the item: the parser has moved past
+ *  it, so every line the item owns is in the tree. Null otherwise. */
+function closedItemNear(state: EditorState, markFrom: number, lineNo: number): SyntaxNode | null {
+  const item = resolveListItemThrough(state, markFrom, nextLineEnd(state, lineNo));
+  for (let n = item; n !== null; n = n.parent) {
+    if (n.nextSibling !== null) {
+      return item;
+    }
+  }
+  return null;
 }
 
 export const continueListOnEnter: Command = (view) => {
@@ -188,6 +207,9 @@ export const continueListOnEnter: Command = (view) => {
   // caret-bounded `item` sees neither its own lines below the caret nor the
   // following siblings.
   const eofItem = resolveListItemThrough(state, mark.from, state.doc.length);
+  // On an EOF budget miss the item's own lines are still known once a nearer
+  // parse shows the item closed; only the renumber needs the whole tail.
+  const ownItem = eofItem ?? closedItemNear(state, mark.from, caretLine.number);
   // The tail can add marker padding. Use the complete new line so the item's
   // own lines move to the column where the split content begins.
   const tail = state.doc.sliceString(at, caretLine.to);
@@ -197,21 +219,22 @@ export const continueListOnEnter: Command = (view) => {
     state.tabSize
   );
   if (
-    eofItem === null &&
+    ownItem === null &&
     newContentCol !==
       contentColumnFromMarkerLine(caretLine.text, mark.to - caretLine.from, state.tabSize)
   ) {
-    // Budget miss and the new marker moves the content column (`9.` → `10. `):
-    // inserting without shifting the body would drop it out of the list, so do
-    // nothing — but consume Enter, since upstream would strip the marker.
+    // The item's own lines are unknown and the new marker moves the content
+    // column (`9.` → `10. `): inserting without shifting a body would drop it out
+    // of the list, so do nothing — but consume Enter, since upstream would strip
+    // the marker.
     return true;
   }
   const insert = `\n${indent}${markerStr}`;
   const caret = at + insert.length;
   const changes: ChangeSpec[] = [{ from: at, insert }];
   // All edits below sit past `at`, so the caret is unaffected.
-  if (eofItem !== null) {
-    changes.push(...shiftOwnLines(state, eofItem, newContentCol));
+  if (ownItem !== null) {
+    changes.push(...shiftOwnLines(state, ownItem, newContentCol));
   }
   if (ordered) {
     // Keep the contiguous ordered run sequential.
