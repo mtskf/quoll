@@ -123,8 +123,16 @@ function lazyParagraphEnd(
 /** Blank in Lezer's and CommonMark's sense: ASCII spaces and tabs only. */
 const ASCII_BLANK = /^[ \t]*$/;
 
-/** Text that is only blank lines (the document's tail after a block). */
-const TRAILING_BLANKS = /^[ \t\n]*$/;
+/** Whether every line after `lineNo` is blank (the document's tail after a
+ *  block). Stops at the first non-blank line, so it never copies the tail. */
+function onlyBlankLinesAfter(state: EditorState, lineNo: number): boolean {
+  for (let n = lineNo + 1; n <= state.doc.lines; n++) {
+    if (!ASCII_BLANK.test(state.doc.line(n).text)) {
+      return false;
+    }
+  }
+  return true;
+}
 
 /** The item to judge a bare marker's emptiness on: one whose tree shows the line
  *  below the marker line, which is all `isEmptyItem` needs (a bare item's body
@@ -323,11 +331,10 @@ export const continueListOnEnter: Command = (view) => {
     const { ownLines } = classifyItemLines(state, ownItem, oldContentCol);
     const lazyEnd = lazyParagraphEnd(state, ownItem, caretLine.number, ownLines);
     if (lazyEnd !== null) {
-      const end = state.doc.line(lazyEnd).to;
-      if (!TRAILING_BLANKS.test(state.doc.sliceString(end))) {
+      if (!onlyBlankLinesAfter(state, lazyEnd)) {
         return true;
       }
-      insertAt = end;
+      insertAt = state.doc.line(lazyEnd).to;
       shiftFrom = null;
     }
     const firstOwn = lazyEnd === null ? ownLines[0] : undefined;
