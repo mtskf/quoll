@@ -51,8 +51,9 @@
 
 import { Decoration, type DecorationSet } from "@codemirror/view";
 
+import { decodeMarkdownDestination } from "../../../markdown/url-decode.js";
 import { isActionableLinkTarget, linkDestination, resolveLinkTarget } from "../link-resolve.js";
-import { classifyLinkDestination } from "../link-target.js";
+import { classifyLinkTarget } from "../link-target.js";
 import { buildSortedRangeSet } from "../sorted-range-set.js";
 
 import { HIDE, intersectsAnySelection, REVEAL_MARK } from "./shared.js";
@@ -147,7 +148,7 @@ export const linkReveal: DecorationProvider = {
           // keystroke, not once per link. See cm/link-resolve.ts's
           // SLUG_INDEX_CACHE comment.
           //
-          // NOT wrapped in try/catch on purpose: classifyLinkDestination is total by
+          // NOT wrapped in try/catch on purpose: classifyLinkTarget is total by
           // contract (pinned against a hostile matrix in
           // test/webview/cm-link-target.test.ts) and resolveLinkTarget is total
           // by contract too — its one throwing primitive in reach, `doc.lineAt`
@@ -168,8 +169,10 @@ export const linkReveal: DecorationProvider = {
               resolveLinkTarget(
                 ctx.state,
                 ctx.tree,
-                classifyLinkDestination(
-                  ctx.state.doc.sliceString(destination.from, destination.to)
+                classifyLinkTarget(
+                  decodeMarkdownDestination(
+                    ctx.state.doc.sliceString(destination.from, destination.to)
+                  )
                 ),
                 // "viewport-only" is the whole reason this reads as a named arm
                 // rather than an omitted budget: forcing a parse here would run

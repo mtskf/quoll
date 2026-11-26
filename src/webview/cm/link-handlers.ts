@@ -28,10 +28,11 @@ import { syntaxTree } from "@codemirror/language";
 import { EditorSelection, type EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 
+import { decodeMarkdownDestination } from "../../markdown/url-decode.js";
 import { MAX_HREF_LENGTH, PROTOCOL_VERSION, type WebviewToHost } from "../../shared/protocol.js";
 import { type PostMessageHost, safePostMessage } from "../safe-post-message.js";
 import { linkDestination, resolveLinkTarget } from "./link-resolve.js";
-import { classifyLinkDestination } from "./link-target.js";
+import { classifyLinkTarget } from "./link-target.js";
 
 /** Forced-parse budget for resolving a `#slug` on CLICK. Same value and same
  *  reasoning as outline-panel.ts's PARSE_BUDGET_MS: a user-initiated, one-shot
@@ -159,11 +160,12 @@ export function tryOpenLinkAt(
     return false;
   }
   const raw = state.sliceDoc(destination.from, destination.to);
+  const decoded = decodeMarkdownDestination(raw);
   // Classify (pure), then answer the document question. The budget is spent
   // only if the arm is a fragment — see resolveLinkTarget. This switch adds
   // only the LOGGING policy on top; every field below is already
   // NO-URL-POLICY-safe by construction (see link-target.ts's header).
-  const target = resolveLinkTarget(state, tree, classifyLinkDestination(raw), {
+  const target = resolveLinkTarget(state, tree, classifyLinkTarget(decoded), {
     completeWithinMs: FRAGMENT_PARSE_BUDGET_MS,
   });
   switch (target.kind) {
