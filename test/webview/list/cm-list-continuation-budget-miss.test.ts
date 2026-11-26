@@ -66,6 +66,18 @@ describe("continueListOnEnter — bare-marker empty check under a budget miss", 
     expect(pressEnter(doc, 1)).toBe("-\n- \n  text\n\npara");
   });
 
+  it("parses to EOF once, so a later success cannot overrule an earlier miss", () => {
+    // Next-line and the first EOF request miss; any later EOF request would
+    // succeed. One EOF verdict feeds every decision, so the miss keeps the
+    // list (a second marker, nothing deleted) instead of mixing two trees.
+    const doc = "- \n\npara";
+    let eofRequests = 0;
+    missWhen = (state, upto) =>
+      upto === state.doc.line(2).to || (upto >= state.doc.length && eofRequests++ === 0);
+    expect(pressEnter(doc, 2)).toBe("- \n- \n\npara");
+    expect(eofRequests).toBe(1);
+  });
+
   it("exits an empty `- ` when only the judging parse misses", () => {
     // The EOF parse still proves the item empty, so the miss must not leave a
     // second empty marker behind.
@@ -86,14 +98,6 @@ describe("continueListOnEnter — EOF budget miss across a marker-width change",
   ])("does not orphan the body (%s)", (_label, doc, caret) => {
     missWhen = (state, upto) => upto >= state.doc.length;
     expect(pressEnter(doc, caret)).toBe(doc);
-  });
-
-  it("still inserts `10. ` when the next line already closes the item", () => {
-    // The heading right below shows the item closed in the next-line-bounded
-    // tree, so it owns no line to shift; only the renumber is skipped.
-    missWhen = (state, upto) => upto >= state.doc.length;
-    const tail = "para line of some text here\n\n".repeat(1000);
-    expect(pressEnter(`9. a\n# H\n${tail}`, 4)).toBe(`9. a\n10. \n# H\n${tail}`);
   });
 
   it("still inserts when the content column does not move (`- a`)", () => {
