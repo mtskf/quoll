@@ -85,17 +85,17 @@ describe("continueListOnEnter — bare-marker empty check under a budget miss", 
 });
 
 describe("continueListOnEnter — marker-line decisions request no EOF parse", () => {
-  // Only an edit that lands needs the tree past the caret line.
+  // Only an edit that lands needs the tree past the caret line. Every EOF request
+  // misses here, so a request would also turn the expected edit into a no-op.
   it.each([
-    // The judging request runs to the first non-blank line below (`para`), so a
-    // line after it keeps that request off EOF.
-    ["exits an empty task", "- [ ] \n\npara\n\nmore", "- [ ] ".length, "\n\npara\n\nmore"],
+    ["exits an empty task", "- [ ] \n\npara", "- [ ] ".length, "\n\npara"],
     ["defers inside the checkbox", "- [x] a\n\npara", "- [".length, "- [\nx] a\n\npara"],
   ])("%s", (_label, doc, caret, out) => {
     let eofRequests = 0;
     missWhen = (state, upto) => {
       if (upto >= state.doc.length) {
         eofRequests++;
+        return true;
       }
       return false;
     };

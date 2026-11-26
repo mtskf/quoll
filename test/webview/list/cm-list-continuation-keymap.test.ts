@@ -401,6 +401,7 @@ describe("continueListOnEnter — split keeps the item's children nested", () =>
   it.each([
     ["- [ ] \n\n  body", "- [ ] \n- [ ] \n\n  body", 7],
     ["1. [ ]\n\n   body\n2. x", "1. [ ]\n2. [ ] \n\n   body\n3. x", 7],
+    ["- [ ] \n\n  > body", "- [ ] \n- [ ] \n\n  > body", 7],
   ] as const)("Enter at the end of %j continues the list", (doc, out, newItem) => {
     const view = mount(doc, at(doc.indexOf("\n")));
     try {
@@ -408,6 +409,22 @@ describe("continueListOnEnter — split keeps the item's children nested", () =>
       expect(view.state.doc.toString()).toBe(out);
       expect(itemAncestry(out, out.indexOf("body"))).toEqual([newItem]);
       expect(topLevelListCount(out)).toBe(1);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // After a blank line there is no lazy continuation: a first block below the
+  // content column has closed the item, so the checkbox-only task is empty.
+  it.each([
+    ["- [ ] \n\npara", "\n\npara"],
+    ["- [ ] \n\n> body", "\n\n> body"],
+    ["  - [ ] \n\n  para", "\n\n  para"],
+  ])("Enter at the end of %j exits the empty task", (doc, out) => {
+    const view = mount(doc, at(doc.indexOf("\n")));
+    try {
+      expect(continueListOnEnter(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(out);
     } finally {
       view.destroy();
     }
