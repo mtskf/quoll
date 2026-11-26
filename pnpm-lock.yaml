@@ -21,6 +21,9 @@ overrides:
   minimatch: ^11.0.1
   mocha>glob: ^14.0.3
 
+patchedDependencies:
+  '@lezer/markdown@1.8.1': a4f6ddec8b66e46d28dc8b0fde2ba831e92164b7cc04850abc37c3dcbf1de5a4
+
 importers:
 
   .:
@@ -53,8 +56,8 @@ importers:
         specifier: ^1.2.3
         version: 1.2.3
       '@lezer/markdown':
-        specifier: ^1.8.1
-        version: 1.8.1
+        specifier: 1.8.1
+        version: 1.8.1(patch_hash=a4f6ddec8b66e46d28dc8b0fde2ba831e92164b7cc04850abc37c3dcbf1de5a4)
     devDependencies:
       '@biomejs/biome':
         specifier: ^2.4.15
@@ -2933,7 +2936,7 @@ snapshots:
       '@codemirror/state': 6.6.0
       '@codemirror/view': 6.43.0
       '@lezer/common': 1.5.2
-      '@lezer/markdown': 1.8.1
+      '@lezer/markdown': 1.8.1(patch_hash=a4f6ddec8b66e46d28dc8b0fde2ba831e92164b7cc04850abc37c3dcbf1de5a4)
 
   '@codemirror/language@6.12.3':
     dependencies:
@@ -3182,7 +3185,7 @@ snapshots:
     dependencies:
       '@lezer/common': 1.5.2
 
-  '@lezer/markdown@1.8.1':
+  '@lezer/markdown@1.8.1(patch_hash=a4f6ddec8b66e46d28dc8b0fde2ba831e92164b7cc04850abc37c3dcbf1de5a4)':
     dependencies:
       '@lezer/common': 1.5.2
       '@lezer/highlight': 1.2.3

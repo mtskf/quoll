@@ -219,12 +219,13 @@ function decodeCharacterReferences(s: string): string {
  *     unescapes backslashes BEFORE it decodes references, so `\&amp;` still
  *     decodes to `&`. The reference pass is a single pass, so the `&` that
  *     `&amp;` yields is never re-read as the start of another reference.
- *   - `\` becomes `&#92;` everywhere. Doubling it is not enough: since
- *     @lezer/markdown 1.8.1 the angle form honours backslash escapes but does
- *     not clear the escape after an escaped backslash, so `<a\\>` reads its
- *     closing `>` as escaped and the link is lost. A reference is decoded
- *     after backslashes are unescaped, so it can neither escape the next
- *     character nor be swallowed by a backslash in front of it.
+ *   - `\` becomes `&#92;` everywhere. Doubling it is not enough: stock
+ *     @lezer/markdown 1.8.1 honours backslash escapes in the angle form but
+ *     does not clear the escape after an escaped backslash, so `<a\\>` reads
+ *     its closing `>` as escaped and the link is lost (Quoll patches that
+ *     parser, but a reference does not depend on the patch). A reference is
+ *     decoded after backslashes are unescaped, so it can neither escape the
+ *     next character nor be swallowed by a backslash in front of it.
  *   - `<` / `>` become `&lt;` / `&gt;` in both forms. The angle form cannot
  *     hold either raw (the shipped parser ends it at the first unescaped
  *     `>` and rejects an unescaped `<`), and the bare form cannot start with

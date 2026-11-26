@@ -1,0 +1,26 @@
+diff --git a/dist/index.cjs b/dist/index.cjs
+index 4a361b0d03d5ed263f09e3eeebbbc2f1b6375ec8..f378e7df383ec07d22d14fcd28aa3c230658b4c0 100644
+--- a/dist/index.cjs
++++ b/dist/index.cjs
+@@ -1573,7 +1573,7 @@ function parseURL(text, start, offset) {
+                 return elt(Type.URL, start + offset, pos + 1 + offset);
+             if (ch == 60 && !esc || ch == 10 /* '<\n' */)
+                 return false;
+-            esc = ch == 92; /* '\\' */
++            esc = !esc && ch == 92; /* '\\' */
+         }
+         return null;
+     }
+diff --git a/dist/index.js b/dist/index.js
+index bcaae772b1e92dd3f279b5c0b6607a3df0a2b20a..26c9d09b466b46f2a8e464bee061ffc09315f6dc 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -1571,7 +1571,7 @@ function parseURL(text, start, offset) {
+                 return elt(Type.URL, start + offset, pos + 1 + offset);
+             if (ch == 60 && !esc || ch == 10 /* '<\n' */)
+                 return false;
+-            esc = ch == 92; /* '\\' */
++            esc = !esc && ch == 92; /* '\\' */
+         }
+         return null;
+     }

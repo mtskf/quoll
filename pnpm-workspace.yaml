@@ -56,3 +56,10 @@ allowBuilds:
   '@vscode/vsce-sign': false
   esbuild: false
   keytar: false
+
+# @lezer/markdown 1.8.1 leaves `esc` set after an escaped backslash in an angle
+# destination, so `[t](<a\\>) then >)` swallows the prose up to the later `>`.
+# One-token fix in dist/; delete this entry, the patch file and the exact pin in
+# package.json once an upstream release passes test/markdown/url-decode.test.ts.
+patchedDependencies:
+  '@lezer/markdown@1.8.1': patches/@lezer__markdown@1.8.1.patch

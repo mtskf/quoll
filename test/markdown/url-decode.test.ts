@@ -115,19 +115,37 @@ describe("encodeMarkdownDestination", () => {
     expect(encodeMarkdownDestination("a\\b")).toBe("a&#92;b");
   });
 
-  it("keeps a trailing backslash inside the angle form (Lezer 1.8.1 escape state)", () => {
-    // `<x(\\>` would end the destination at an ESCAPED `>` in @lezer/markdown 1.8.1.
+  it("keeps a trailing backslash inside the angle form", () => {
+    // `&#92;` cannot escape the closing `>` under any parser, with or without
+    // the 1.8.1 escape-parity patch.
     expect(encodeMarkdownDestination("x(\\")).toBe("<x(&#92;>");
     expect(parsedDestination(encodeMarkdownDestination("x(\\"))).toBe("x(\\");
   });
 
-  it("known limitation: the v0.1.86–0.1.87 spelling `<x(\\\\>` no longer resolves", () => {
-    // Accepted residual of the 1.8.1 bump (LEARNING "Dependency policy",
-    // 2026-11-25): the old encoder doubled `\`, and 1.8.1 reads the closing `>`
-    // after `\\` as escaped, so the link loses its destination. The bytes are
-    // unchanged; rewriting `\\` as `&#92;` restores it. Goes red if a parser
-    // fix lifts the limitation — then drop this pin and the LEARNING note.
-    expect(parsedDestination("<x(\\\\>")).toBeNull();
+  it("reads the v0.1.86–0.1.87 spelling `<x(\\\\>` as a destination ending in one backslash", () => {
+    // Stock 1.8.1 reads the `>` after an even backslash run as escaped and drops
+    // the destination; patches/@lezer__markdown@1.8.1.patch restores escape
+    // parity (LEARNING "Dependency policy", 2026-11-25). Red without the patch.
+    expect(parsedDestination("<x(\\\\>")).toBe("x(\\");
+  });
+
+  it("still reads an odd backslash run before `>` as escaping it", () => {
+    expect(parsedDestination("<a\\>")).toBeNull();
+    expect(parsedDestination("<a\\\\\\>")).toBeNull();
+  });
+
+  it("ends an angle destination at its own `>` when later prose has another `>)`", () => {
+    // Stock 1.8.1 extends the URL to the later `>)`, so a click opens a
+    // different target and the reveal hides ` then >)`.
+    const href = "https://example.test/a(b)\\";
+    for (const prefix of ["[t]", "![t]"]) {
+      const md = `${prefix}(<https://example.test/a(b)\\\\>) then >)`;
+      const node = gfmParser.parse(md).topNode.firstChild?.firstChild;
+      const url = node?.getChild("URL");
+      expect(node?.name).toBe(prefix === "[t]" ? "Link" : "Image");
+      expect(md.slice(node?.to)).toBe(" then >)");
+      expect(url && decodeMarkdownDestination(md.slice(url.from, url.to))).toBe(href);
+    }
   });
 
   it("writes angle brackets as references and wraps only for whitespace or parens", () => {
