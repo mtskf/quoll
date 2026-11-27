@@ -36,7 +36,7 @@ import { QuollWidget } from "../../src/webview/cm/widget-base.js";
 import { settledState } from "./helpers/settled-state.js";
 import { settledMount } from "./helpers/settled-view.js";
 import { recordsOf, recordWidgetsOf } from "./helpers/structural-records.js";
-import { withUnstarvedFrontierState } from "./helpers/unstarved-frontier.js";
+import { withUnstarvedFrontier, withUnstarvedFrontierState } from "./helpers/unstarved-frontier.js";
 
 // One switch for both throwing seams. A mock only throws while `armed` is true, so the
 // fields' `create` (which already calls both seams) never throws at mount.
@@ -430,36 +430,45 @@ describe("structural blocks: an edit outside the viewport (production fields)", 
       prose.push(`Paragraph ${i} of plain prose between the blocks and the edit.`, "");
     }
     const doc = ["Top.", "", ...BLOCKS_TAIL, ...prose, "Last line."].join("\n");
-    const view = mountView(EditorState.create({ doc, extensions: p.extensions }));
-    try {
-      const records = (): StructuralRecordSet<unknown> =>
-        (kind === "table"
-          ? view.state.field(p.tableBlockField)
-          : view.state.field(p.imageBlockField)
-        ).records;
-      const blocks = (): unknown[] => recordsOf(records()).map((r) => r.block);
-      const widgets = (): unknown[] => recordWidgetsOf(records());
-      const beforeWidgets = widgets();
-      const before = blocks();
-      expect(before).toHaveLength(1); // precondition
-      const at = doc.length;
-      // Precondition: the edit is beyond the reported viewport and after every block,
-      // with at least one line between the last block and the edited line.
-      expect(at).toBeGreaterThan(view.viewport.to);
-      const lastBlockLine = view.state.doc.lineAt(
-        Math.max(...p.shape(view.state).map((s) => Number(s[1])))
-      ).number;
-      expect(view.state.doc.lineAt(at).number - lastBlockLine).toBeGreaterThan(1);
+    withUnstarvedFrontier({
+      what: `the out-of-viewport ${kind} block reuse`,
+      mount: (parent) =>
+        settledMount(
+          { state: EditorState.create({ doc, extensions: p.extensions }), parent },
+          10_000
+        ),
+      observe: (view, requireUnstarvedFrontier) => {
+        const records = (): StructuralRecordSet<unknown> =>
+          (kind === "table"
+            ? view.state.field(p.tableBlockField)
+            : view.state.field(p.imageBlockField)
+          ).records;
+        const blocks = (): unknown[] => recordsOf(records()).map((r) => r.block);
+        const widgets = (): unknown[] => recordWidgetsOf(records());
+        const beforeWidgets = widgets();
+        const before = blocks();
+        expect(before).toHaveLength(1); // precondition
+        const at = doc.length;
+        // Precondition: the edit is beyond the reported viewport and after every block,
+        // with at least one line between the last block and the edited line.
+        expect(at).toBeGreaterThan(view.viewport.to);
+        const lastBlockLine = view.state.doc.lineAt(
+          Math.max(...p.shape(view.state).map((s) => Number(s[1])))
+        ).number;
+        expect(view.state.doc.lineAt(at).number - lastBlockLine).toBeGreaterThan(1);
 
-      view.dispatch({ changes: { from: at, insert: "x" } });
-      const after = blocks();
-      expect(after).toHaveLength(1);
-      expect(after[0]).toBe(before[0]);
-      expect(widgets()[0]).toBe(beforeWidgets[0]);
-      expect(p.shape(view.state)).toEqual(p.shape(p.create(view.state.doc.toString())));
-    } finally {
-      view.destroy();
-    }
+        view.dispatch({ changes: { from: at, insert: "x" } });
+        // The edit's own parse runs under a 20ms wall-clock budget; starved under load it
+        // publishes a short tree, the field answers with a full rebuild, and the reuse below
+        // is never exercised — so a starved attempt is re-run rather than asserted on.
+        requireUnstarvedFrontier();
+        const after = blocks();
+        expect(after).toHaveLength(1);
+        expect(after[0]).toBe(before[0]);
+        expect(widgets()[0]).toBe(beforeWidgets[0]);
+        expect(p.shape(view.state)).toEqual(p.shape(p.create(view.state.doc.toString())));
+      },
+    });
   }
 
   it("viewport outside table: the table block object is reused and matches a fresh build", async () => {

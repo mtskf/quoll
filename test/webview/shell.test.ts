@@ -17,6 +17,12 @@ import {
 import { EDITOR_PREF_CSS_VARS, editorPrefToCssValue } from "../../src/webview/cm/editor-prefs.js";
 import { proseLintEnabled } from "../../src/webview/cm/lint/index.js";
 import { pendingPasteOperations } from "../../src/webview/cm/paste/paste-operation.js";
+// Static, not a per-test `await import`: the module graph is cold on the first
+// test, and loading it inside that test's 5 s budget timed it out under CPU
+// load — the abandoned body then resumed into the NEXT test's mount and posted
+// a second `ready` there. Collection-time loading is untimed. vi.mock below is
+// hoisted above this import, so host.js is still mocked.
+import { attachTeardownListeners, mountShell } from "../../src/webview/shell.js";
 import { HEAVY_FIXTURE_TIMEOUT_MS } from "../shared/heavy-fixture-timeout.js";
 import { firePasteAt, IMAGE_FILE } from "./helpers/clipboard-double.js";
 
@@ -103,7 +109,6 @@ afterEach(() => {
 async function mount(
   opts: { resourceBaseUri?: string } = {}
 ): Promise<{ advanceTimers(ms: number): Promise<void> }> {
-  const { mountShell } = await import("../../src/webview/shell.js");
   const own = mountShell(container as HTMLElement, { nonce: "test-nonce", ...opts });
   handle = own;
   const assertLive = () => {
@@ -2729,7 +2734,6 @@ describe("shell — init-failure teardown (no leaked pagehide listener)", () => 
 
   it("propagates the ready-post throw, tears down the subscription, and registers no pagehide listener", async () => {
     const winAdd = vi.spyOn(window, "addEventListener");
-    const { mountShell } = await import("../../src/webview/shell.js");
     postMessage.mockImplementationOnce(() => {
       throw new Error("synthetic ready-post failure");
     });
@@ -2776,7 +2780,6 @@ describe("attachTeardownListeners — perf onPageHide rides the after-init set",
   // first test goes red.
 
   it("registers onPageHide on pagehide (once) and the remover takes it back off", async () => {
-    const { attachTeardownListeners } = await import("../../src/webview/shell.js");
     const winAdd = vi.spyOn(window, "addEventListener");
     const winRemove = vi.spyOn(window, "removeEventListener");
     const onPageHide = vi.fn();
@@ -2808,7 +2811,6 @@ describe("attachTeardownListeners — perf onPageHide rides the after-init set",
   });
 
   it("registers no perf pagehide listener when onPageHide is null (the QUOLL_PERF=false build)", async () => {
-    const { attachTeardownListeners } = await import("../../src/webview/shell.js");
     const winAdd = vi.spyOn(window, "addEventListener");
     const flushPending = vi.fn();
     // Capture the remover and call it in a finally — otherwise this test would

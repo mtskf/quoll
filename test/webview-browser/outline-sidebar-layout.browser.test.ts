@@ -26,10 +26,25 @@ const LONG_DOC = `# Alpha\n\n${"line\n".repeat(400)}\n## Beta\n`;
 
 let view: EditorView | undefined;
 
-afterEach(() => {
+afterEach(async () => {
+  // Teardown is synchronous and comes first, so a pointer park that rejects or is
+  // still pending when vitest times the hook out cannot leave this fixture attached.
   view?.destroy();
   view = undefined;
   document.getElementById("root")?.remove();
+  // The real pointer outlives the test: the hover tests leave it parked on the
+  // toggle's corner, so the next mount's fresh toggle appears under it, Chromium's
+  // hover recompute fires pointerenter, and the sidebar opens on its own — hiding
+  // the toggle before the next test can hover it ("element is not visible" once
+  // load delays that hover past the 120 ms intent). Park it on a small spot in the
+  // far corner, away from every outline control (1px measured as not visible).
+  const spot = document.body.appendChild(document.createElement("div"));
+  spot.style.cssText = "position: fixed; right: 0; bottom: 0; width: 8px; height: 8px";
+  try {
+    await userEvent.hover(spot, { timeout: 2000 });
+  } finally {
+    spot.remove();
+  }
 });
 
 /** Mount inside the production shell chain (#root → main → .quoll-editor) so
