@@ -409,8 +409,11 @@ describe("collapse bars — keyboard path (real Chromium, production bundle)", (
   });
 
   // A long preamble: no bar is drawn when the reader arrives, so the keyboard has to page
-  // down to the block from the scroller before any bar can be Tabbed to.
-  const preamble = Array.from({ length: 400 }, (_, i) => `intro${i + 1}`).join("\n\n");
+  // down to the block from the scroller before any bar can be Tabbed to. 100 paragraphs
+  // clear CodeMirror's render margin (the null-bar precondition below checks it). Every
+  // extra page is a real key round-trip: a 400-paragraph preamble ran past the 15 s
+  // limit under load.
+  const preamble = Array.from({ length: 100 }, (_, i) => `intro${i + 1}`).join("\n\n");
   for (const c of CASES) {
     it(`read-only ${c.name} after a long preamble: Tab in, page down, Tab and Enter both ways`, async () => {
       fixture = await productionPasteFixture(`${preamble}\n\n${c.doc}`, "\n", false);

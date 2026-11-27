@@ -26,10 +26,23 @@ const LONG_DOC = `# Alpha\n\n${"line\n".repeat(400)}\n## Beta\n`;
 
 let view: EditorView | undefined;
 
-afterEach(() => {
+afterEach(async () => {
+  // The real pointer outlives the test: the hover tests leave it parked on the
+  // toggle's corner, so the next mount's fresh toggle appears under it, Chromium's
+  // hover recompute fires pointerenter, and the sidebar opens on its own —
+  // hiding the toggle before the next test can hover it ("element is not
+  // visible" once load delays that hover past the 120 ms intent). Park the
+  // pointer in the far corner, away from every outline control, before the
+  // shell goes.
+  const root = document.getElementById("root");
+  if (root) {
+    await userEvent.hover(root, {
+      position: { x: root.clientWidth - 1, y: root.clientHeight - 1 },
+    });
+  }
   view?.destroy();
   view = undefined;
-  document.getElementById("root")?.remove();
+  root?.remove();
 });
 
 /** Mount inside the production shell chain (#root → main → .quoll-editor) so

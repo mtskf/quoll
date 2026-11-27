@@ -167,20 +167,26 @@ describe("htmlToMarkdown — inline constructs", () => {
     // loaded machine, while load slows both sizes alike and leaves their ratio
     // alone. For 4x the input, the linear scan measured 2.0–5.0x the time and the
     // O(n²) regex 13.1–13.6x (16x diluted by the linear DOM parse), so 8 separates
-    // them. Min-of-3 per size: the fastest sample is the least load-disturbed one.
-    const fastestMs = (k: number): number => {
-      const html = `<p><strong>x${"<br>".repeat(k)}x</strong>y</p>`;
-      let fastest = Number.POSITIVE_INFINITY;
-      for (let i = 0; i < 3; i++) {
-        const t0 = performance.now();
-        expect(convert(html)).not.toBeNull();
-        fastest = Math.min(fastest, performance.now() - t0);
-      }
-      return fastest;
-    };
+    // them. The fastest sample per size is the least load-disturbed one, and the
+    // sizes are sampled INTERLEAVED so one load burst slows both alike. Five rounds,
+    // because interleaved min-of-3 still read 8.6x in a parallel unit+browser run.
+    // Not process CPU time: it counts the parallel GC threads, which the large input
+    // keeps busier, and put the idle ratio at 4.5–8.6x.
     const K = 10000;
-    expect(fastestMs(4 * K) / fastestMs(K)).toBeLessThan(8);
-  });
+    const sampleMs = (k: number): number => {
+      const html = `<p><strong>x${"<br>".repeat(k)}x</strong>y</p>`;
+      const t0 = performance.now();
+      expect(convert(html)).not.toBeNull();
+      return performance.now() - t0;
+    };
+    let small = Number.POSITIVE_INFINITY;
+    let large = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < 5; i++) {
+      small = Math.min(small, sampleMs(K));
+      large = Math.min(large, sampleMs(4 * K));
+    }
+    expect(large / small).toBeLessThan(8);
+  }, 30_000); // ~1 s idle: the default 5 s would be the wall-clock bound this test avoids
   it("converts inline code and does NOT escape its content", () => {
     expect(convert("<p><code>a*b_c</code></p>")).toBe("`a*b_c`");
   });

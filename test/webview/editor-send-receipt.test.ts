@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_CONTENT_LENGTH } from "../../src/shared/protocol.js";
 import { type EditorHandle, mountEditor } from "../../src/webview/editor.js";
 import { type Action, initialState, reducer } from "../../src/webview/state.js";
+import { HEAVY_FIXTURE_TIMEOUT_MS } from "../shared/heavy-fixture-timeout.js";
 
 const postMessage = vi.fn();
 vi.mock("../../src/webview/host.js", () => ({
@@ -102,26 +103,28 @@ describe("editor — failed sends preserve receipt ownership", () => {
     expect(s.state().editInFlight).toBe(true);
   });
 
-  it.each([
-    "size cap",
-    "transport throw",
-  ])("keeps Edit 1 in flight after a forced %s failure", (fault) => {
-    const s = mount();
-    s.type("a");
-    vi.advanceTimersByTime(300);
-    expect(s.posted).toEqual(["a"]);
-    s.fail(fault === "transport throw");
-    s.type(fault === "size cap" ? "x".repeat(MAX_CONTENT_LENGTH + 1) : "ab");
-    s.editor.flushPending();
-    expect(s.state().sendFailure).not.toBeNull();
-    expect.soft(s.state().editInFlight).toBe(true);
-    s.fail(false);
-    s.type("abc");
-    vi.advanceTimersByTime(300);
-    expect.soft(s.posted).toEqual(["a"]);
-    s.document({ ...seed, docVersion: 2, content: "a", settledEditId: 1 });
-    expect(s.posted.at(-1)).toBe("abc");
-  });
+  it.each(["size cap", "transport throw"])(
+    "keeps Edit 1 in flight after a forced %s failure",
+    (fault) => {
+      const s = mount();
+      s.type("a");
+      vi.advanceTimersByTime(300);
+      expect(s.posted).toEqual(["a"]);
+      s.fail(fault === "transport throw");
+      s.type(fault === "size cap" ? "x".repeat(MAX_CONTENT_LENGTH + 1) : "ab");
+      s.editor.flushPending();
+      expect(s.state().sendFailure).not.toBeNull();
+      expect.soft(s.state().editInFlight).toBe(true);
+      s.fail(false);
+      s.type("abc");
+      vi.advanceTimersByTime(300);
+      expect.soft(s.posted).toEqual(["a"]);
+      s.document({ ...seed, docVersion: 2, content: "a", settledEditId: 1 });
+      expect(s.posted.at(-1)).toBe("abc");
+    },
+    // The "size cap" case inserts a 4 MiB document: ~0.5 s idle, past 5 s under load.
+    HEAVY_FIXTURE_TIMEOUT_MS
+  );
 
   it("replays a failed force-post's retained bytes on Edit 1's covering ack without retyping", () => {
     const s = mount();

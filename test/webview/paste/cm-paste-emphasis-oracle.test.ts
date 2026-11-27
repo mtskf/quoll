@@ -3,6 +3,7 @@ import { Parser } from "commonmark";
 import { Window } from "happy-dom";
 import { describe, expect, it, vi } from "vitest";
 import { htmlToMarkdown } from "../../../src/webview/cm/paste/html-to-markdown.js";
+import { HEAVY_FIXTURE_TIMEOUT_MS } from "../../shared/heavy-fixture-timeout.js";
 import {
   assertStyleParity,
   commonmarkStyledChars,
@@ -382,6 +383,8 @@ describe("emphasis round-trip against the Lezer re-parse", () => {
         });
       }
     },
-    30_000
+    // CPU-bound for seconds even idle, with no wall-clock assertion: the limit has to
+    // cover a loaded machine, not an idle one.
+    HEAVY_FIXTURE_TIMEOUT_MS
   );
 });
