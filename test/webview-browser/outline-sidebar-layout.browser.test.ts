@@ -34,15 +34,21 @@ afterEach(async () => {
   // visible" once load delays that hover past the 120 ms intent). Park the
   // pointer in the far corner, away from every outline control, before the
   // shell goes.
+  // This mount is captured and the shared `view` cleared BEFORE the await, so a
+  // rejected or late-resolving hover can neither leak it nor destroy a later case's.
   const root = document.getElementById("root");
-  if (root) {
-    await userEvent.hover(root, {
-      position: { x: root.clientWidth - 1, y: root.clientHeight - 1 },
-    });
-  }
-  view?.destroy();
+  const mounted = view;
   view = undefined;
-  root?.remove();
+  try {
+    if (root) {
+      await userEvent.hover(root, {
+        position: { x: root.clientWidth - 1, y: root.clientHeight - 1 },
+      });
+    }
+  } finally {
+    mounted?.destroy();
+    root?.remove();
+  }
 });
 
 /** Mount inside the production shell chain (#root → main → .quoll-editor) so
