@@ -2,6 +2,7 @@
 import { markdownLanguage } from "@codemirror/lang-markdown";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { htmlToMarkdown } from "../../../src/webview/cm/paste/html-to-markdown.js";
+import { HEAVY_FIXTURE_TIMEOUT_MS } from "../../shared/heavy-fixture-timeout.js";
 
 // The converter returns a discriminated result; these tests predate that and
 // assert on the Markdown alone. `emittedMarkdownSyntax` is covered by its own describe
@@ -490,10 +491,17 @@ describe("htmlToMarkdown — block constructs", () => {
   it("returns null when the input exceeds the size cap", () => {
     expect(convert(`<p>${"a".repeat(2 * 1024 * 1024 + 1)}</p>`)).toBeNull();
   });
-  it("returns null when the node cap is breached (never throws)", () => {
-    const deep = `${"<div>".repeat(60_000)}x${"</div>".repeat(60_000)}`;
-    expect(convert(deep)).toBeNull();
-  });
+  it(
+    "converts at the node cap and returns null one node over",
+    () => {
+      const maxNodes = 50_000;
+      // Each shallow div counts once and contributes one character of text.
+      const html = "<div>x</div>".repeat(maxNodes);
+      expect(convert(html)).toBe(`${"x\n\n".repeat(maxNodes - 1)}x`);
+      expect(convert(`${html}<div>x</div>`)).toBeNull();
+    },
+    HEAVY_FIXTURE_TIMEOUT_MS
+  );
   it("returns null when the block depth cap is breached", () => {
     const nested = `${"<blockquote>".repeat(200)}x${"</blockquote>".repeat(200)}`;
     expect(convert(nested)).toBeNull();

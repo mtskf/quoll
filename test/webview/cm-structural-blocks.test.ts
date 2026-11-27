@@ -282,19 +282,26 @@ describe("structural block widget identity", () => {
       "Edit here.",
       "",
     ].join("\n");
-    const st0 = settledState(
-      EditorState.create({ doc, extensions: [quollMarkdownLanguage(), tableBlockField] })
-    );
-    const before = widgetSlots(st0, TableBlockWidget);
-    // Precondition: both tables have a widget.
-    expect(before.map((s) => s.from)).toEqual([doc.indexOf("| a |"), doc.indexOf("| c |")]);
+    withUnstarvedFrontierState({
+      what: "table widget reuse after an edit below the last table",
+      observe: (requireUnstarvedFrontier) => {
+        const st0 = settledState(
+          EditorState.create({ doc, extensions: [quollMarkdownLanguage(), tableBlockField] })
+        );
+        const before = widgetSlots(st0, TableBlockWidget);
+        // Precondition: both tables have a widget.
+        expect(before.map((s) => s.from)).toEqual([doc.indexOf("| a |"), doc.indexOf("| c |")]);
 
-    const at = doc.indexOf("Edit here.") + 4;
-    const st1 = st0.update({ changes: { from: at, insert: "x" } }).state;
-    expect(st1.doc.toString()).toContain("Editx here.");
-    const after = widgetSlots(st1, TableBlockWidget);
-    expect(after.map((s) => s.from)).toEqual(before.map((s) => s.from));
-    expect(after[1].widget).toBe(before[1].widget);
+        const at = doc.indexOf("Edit here.") + 4;
+        const st1 = st0.update({ changes: { from: at, insert: "x" } }).state;
+        requireUnstarvedFrontier(st1);
+        expect(st1.doc.toString()).toContain("Editx here.");
+        const after = widgetSlots(st1, TableBlockWidget);
+        expect(after.map((s) => s.from)).toEqual(before.map((s) => s.from));
+        expect(after[1].widget).toBe(before[1].widget);
+        return st1;
+      },
+    });
   });
 });
 
@@ -382,30 +389,38 @@ describe("structural blocks: frontmatter shift stays bounded (production fields)
 
   async function shiftRow(doc: string, change: { from: number; to?: number; insert?: string }) {
     const p = await productionBlocks();
-    const st0 = p.create(doc);
-    // Precondition: both seams built their blocks at mount.
-    expect(seam.log.some((s) => s.includes("| a | b |"))).toBe(true);
-    expect(seam.log).toContain("pic");
-    expect(p.shape(st0)).toHaveLength(2);
-    seam.log.length = 0;
+    withUnstarvedFrontierState({
+      what: "bounded widget reuse after a prose or frontmatter edit",
+      observe: (requireUnstarvedFrontier) => {
+        seam.log.length = 0;
+        const st0 = p.create(doc);
+        // Precondition: both seams built their blocks at mount.
+        expect(seam.log.some((s) => s.includes("| a | b |"))).toBe(true);
+        expect(seam.log).toContain("pic");
+        expect(p.shape(st0)).toHaveLength(2);
+        seam.log.length = 0;
 
-    const values = (state: EditorState) => [
-      state.field(p.tableBlockField).records.iter().value,
-      state.field(p.imageBlockField).records.iter().value,
-    ];
-    const before = values(st0);
-    const tr = st0.update({ changes: change });
-    const st1 = tr.state;
-    expect(requiresFullBoundedRebuild(tr)).toBe(false); // precondition: no full reason
-    expect(p.shape(st1)).toHaveLength(2);
-    expect(seam.log).toEqual([]);
-    values(st1).forEach((value, index) => {
-      const original = before[index];
-      expect(value?.spec.widget).toBe(original?.spec.widget);
-      expect(value).toBe(original);
+        const values = (state: EditorState) => [
+          state.field(p.tableBlockField).records.iter().value,
+          state.field(p.imageBlockField).records.iter().value,
+        ];
+        const before = values(st0);
+        const tr = st0.update({ changes: change });
+        const st1 = tr.state;
+        requireUnstarvedFrontier(st1);
+        expect(requiresFullBoundedRebuild(tr)).toBe(false); // precondition: no full reason
+        expect(p.shape(st1)).toHaveLength(2);
+        expect(seam.log).toEqual([]);
+        values(st1).forEach((value, index) => {
+          const original = before[index];
+          expect(value?.spec.widget).toBe(original?.spec.widget);
+          expect(value).toBe(original);
+        });
+        const fresh = p.create(st1.doc.toString());
+        expect(p.shape(st1)).toEqual(p.shape(fresh));
+        return st1;
+      },
     });
-    const fresh = p.create(st1.doc.toString());
-    expect(p.shape(st1)).toEqual(p.shape(fresh));
   }
 
   it("frontmatter body insert: one character inside the body maps both widget records in place", async () => {
@@ -1139,57 +1154,75 @@ describe("structural block contract updates (toy spec)", () => {
   });
 
   it("toy branching: transactions and states sharing the field keep independent records", () => {
-    const t = toy();
-    const state = toyState(TOY_DOC, t);
-    const base = state.field(t.field).records;
-    const text = state.doc.toString();
-    // Two branches: one edits inside the last block, the other the prose after it.
-    const a = state.update({ changes: { from: text.indexOf("gamma") + 1, insert: "x" } }).state;
-    const b = state.update({ changes: { from: text.indexOf("Tail") + 1, insert: "y" } }).state;
-    expect(state.field(t.field).records).toBe(base);
-    const baseList = recordsOf(base);
-    const ra = recordsOf(a.field(t.field).records);
-    const rb = recordsOf(b.field(t.field).records);
-    expect(ra[2].block).not.toBe(baseList[2].block);
-    expect(ra[0].block).toBe(baseList[0].block);
-    rb.forEach((r, i) => {
-      expect(r.block).toBe(baseList[i].block);
-    });
-    expect(ra[2].block.text).toContain("gxamma");
-    expect(rb[2].block.text).not.toContain("gxamma");
-    expect(recordsOf(state.field(t.field).records)[2].block.text).not.toContain("gxamma");
+    withUnstarvedFrontierState({
+      what: "independent structural records across branches",
+      observe: (requireUnstarvedFrontier) => {
+        const t = toy();
+        const state = toyState(TOY_DOC, t);
+        const base = state.field(t.field).records;
+        const text = state.doc.toString();
+        // Two branches: one edits inside the last block, the other the prose after it.
+        const a = state.update({ changes: { from: text.indexOf("gamma") + 1, insert: "x" } }).state;
+        requireUnstarvedFrontier(a);
+        const b = state.update({ changes: { from: text.indexOf("Tail") + 1, insert: "y" } }).state;
+        requireUnstarvedFrontier(b);
+        expect(state.field(t.field).records).toBe(base);
+        const baseList = recordsOf(base);
+        const ra = recordsOf(a.field(t.field).records);
+        const rb = recordsOf(b.field(t.field).records);
+        expect(ra[2].block).not.toBe(baseList[2].block);
+        expect(ra[0].block).toBe(baseList[0].block);
+        rb.forEach((r, i) => {
+          expect(r.block).toBe(baseList[i].block);
+        });
+        expect(ra[2].block.text).toContain("gxamma");
+        expect(rb[2].block.text).not.toContain("gxamma");
+        expect(recordsOf(state.field(t.field).records)[2].block.text).not.toContain("gxamma");
 
-    // A second state built with the same field instance is untouched by updates to the first.
-    const other = toyState(["Other.", "", ...fence(["delta"]), ""].join("\n"), t);
-    const otherRecords = other.field(t.field).records;
-    state.update({ changes: { from: 0, insert: "\n\n" } });
-    expect(other.field(t.field).records).toBe(otherRecords);
-    expect(recordsOf(otherRecords).map((r) => r.block.text)).toEqual(["```\ndelta\n```"]);
+        // A second state built with the same field instance is untouched by updates to the first.
+        const other = toyState(["Other.", "", ...fence(["delta"]), ""].join("\n"), t);
+        const otherRecords = other.field(t.field).records;
+        const shifted = state.update({ changes: { from: 4, insert: "xy" } }).state;
+        requireUnstarvedFrontier(shifted);
+        expect(ranges(shifted, t)).toEqual(baseList.map(({ from, to }) => [from + 2, to + 2]));
+        expect(t.calls.build).toEqual([]);
+        expect(other.field(t.field).records).toBe(otherRecords);
+        expect(recordsOf(otherRecords).map((r) => r.block.text)).toEqual(["```\ndelta\n```"]);
+        return shifted;
+      },
+    });
   });
 
   it("toy seeded oracle: after each of 20 seeded edits the records equal a fresh full build", () => {
-    let seed = 0x5eed;
-    const rand = (n: number): number => {
-      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
-      return seed % n;
-    };
-    const inserts = ["x", " ", "\n", "`", "```\n", "\n\n", "ab"];
-    const t = toy();
-    let state = toyState(TOY_DOC, t);
-    for (let i = 0; i < 20; i++) {
-      const len = state.doc.length;
-      const from = rand(len + 1);
-      const spec =
-        rand(3) === 0 && from < len
-          ? { from, to: Math.min(len, from + 1 + rand(4)) }
-          : { from, insert: inserts[rand(inserts.length)] };
-      state = state.update({ changes: spec }).state;
-      const got = ranges(state, t);
-      const sorted = [...got].sort((x, y) => x[0] - y[0]);
-      expect(got).toEqual(sorted);
-      const oracle = toyState(state.doc.toString(), toy());
-      expect(got).toEqual(fencedRanges(oracle));
-    }
+    withUnstarvedFrontierState({
+      what: "structural records after each seeded edit",
+      observe: (requireUnstarvedFrontier) => {
+        let seed = 0x5eed;
+        const rand = (n: number): number => {
+          seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+          return seed % n;
+        };
+        const inserts = ["x", " ", "\n", "`", "```\n", "\n\n", "ab"];
+        const t = toy();
+        let state = toyState(TOY_DOC, t);
+        for (let i = 0; i < 20; i++) {
+          const len = state.doc.length;
+          const from = rand(len + 1);
+          const spec =
+            rand(3) === 0 && from < len
+              ? { from, to: Math.min(len, from + 1 + rand(4)) }
+              : { from, insert: inserts[rand(inserts.length)] };
+          state = state.update({ changes: spec }).state;
+          requireUnstarvedFrontier(state);
+          const got = ranges(state, t);
+          const sorted = [...got].sort((x, y) => x[0] - y[0]);
+          expect(got).toEqual(sorted);
+          const oracle = toyState(state.doc.toString(), toy());
+          expect(got).toEqual(fencedRanges(oracle));
+        }
+        return state;
+      },
+    });
   });
 });
 
