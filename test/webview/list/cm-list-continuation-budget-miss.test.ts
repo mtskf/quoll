@@ -64,15 +64,21 @@ describe("continueListOnEnter — bare-marker empty check under a budget miss", 
 
   it("exits a bare marker on the last line with no further request", () => {
     // No line below, so the caret-bounded item is complete: judged as is.
-    missWhen = (state, upto) => upto >= state.doc.length;
     withUnstarvedFrontierState({
       what: "the last-line bare marker with EOF requests mocked to miss",
       observe: (requireUnstarvedFrontier) => {
         const state = listState("- a\n- ");
-        // The caret-line request also targets EOF here, so Enter falls back to the
+        // The caret-line probes also target EOF here, so Enter falls back to the
         // initial snapshot. Require it to cover the marker before pressing Enter.
         requireUnstarvedFrontier(state);
+        const requests: number[] = [];
+        missWhen = (requestState, upto) => {
+          requests.push(upto);
+          return upto >= requestState.doc.length;
+        };
         expect(pressEnter(state, state.doc.length)).toBe("- a\n");
+        // Item, code, and blockquote probes all target the caret line's end.
+        expect(requests).toEqual([state.doc.length, state.doc.length, state.doc.length]);
         return state;
       },
     });

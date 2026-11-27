@@ -492,10 +492,13 @@ describe("htmlToMarkdown — block constructs", () => {
     expect(convert(`<p>${"a".repeat(2 * 1024 * 1024 + 1)}</p>`)).toBeNull();
   });
   it(
-    "returns null when the node cap is breached (never throws)",
+    "converts at the node cap and returns null one node over",
     () => {
-      const deep = `${"<div>".repeat(60_000)}x${"</div>".repeat(60_000)}`;
-      expect(convert(deep)).toBeNull();
+      const maxNodes = 50_000;
+      // Each shallow div counts once and contributes one character of text.
+      const html = "<div>x</div>".repeat(maxNodes);
+      expect(convert(html)).toBe(`${"x\n\n".repeat(maxNodes - 1)}x`);
+      expect(convert(`${html}<div>x</div>`)).toBeNull();
     },
     HEAVY_FIXTURE_TIMEOUT_MS
   );

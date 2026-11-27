@@ -1182,10 +1182,13 @@ describe("structural block contract updates (toy spec)", () => {
         // A second state built with the same field instance is untouched by updates to the first.
         const other = toyState(["Other.", "", ...fence(["delta"]), ""].join("\n"), t);
         const otherRecords = other.field(t.field).records;
-        state.update({ changes: { from: 0, insert: "\n\n" } });
+        const shifted = state.update({ changes: { from: 4, insert: "xy" } }).state;
+        requireUnstarvedFrontier(shifted);
+        expect(ranges(shifted, t)).toEqual(baseList.map(({ from, to }) => [from + 2, to + 2]));
+        expect(t.calls.build).toEqual([]);
         expect(other.field(t.field).records).toBe(otherRecords);
         expect(recordsOf(otherRecords).map((r) => r.block.text)).toEqual(["```\ndelta\n```"]);
-        return b;
+        return shifted;
       },
     });
   });
