@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { listContinuationKeymap } from "../../../src/webview/cm/list/list-continuation-keymap.js";
 import { quollMarkdownLanguage } from "../../../src/webview/cm/markdown.js";
+import { withUnstarvedFrontierState } from "../helpers/unstarved-frontier.js";
 
 /** Parse targets (`upto`) that report a budget miss; null = no misses. */
 let missWhen: ((state: EditorState, upto: number) => boolean) | null = null;
@@ -31,16 +32,17 @@ afterEach(() => {
   missWhen = null;
 });
 
-function pressEnter(doc: string, caret: number): string {
+function listState(doc: string): EditorState {
+  return EditorState.create({
+    doc,
+    extensions: [quollMarkdownLanguage(), listContinuationKeymap(), keymap.of(defaultKeymap)],
+  });
+}
+
+function pressEnter(doc: string | EditorState, caret: number): string {
   const parent = document.createElement("div");
   document.body.appendChild(parent);
-  const view = new EditorView({
-    parent,
-    state: EditorState.create({
-      doc,
-      extensions: [quollMarkdownLanguage(), listContinuationKeymap(), keymap.of(defaultKeymap)],
-    }),
-  });
+  const view = new EditorView({ parent, state: typeof doc === "string" ? listState(doc) : doc });
   try {
     view.dispatch({ selection: EditorSelection.cursor(caret) });
     runScopeHandlers(view, new KeyboardEvent("keydown", { key: "Enter" }), "editor");
@@ -63,7 +65,17 @@ describe("continueListOnEnter — bare-marker empty check under a budget miss", 
   it("exits a bare marker on the last line with no further request", () => {
     // No line below, so the caret-bounded item is complete: judged as is.
     missWhen = (state, upto) => upto >= state.doc.length;
-    expect(pressEnter("- a\n- ", "- a\n- ".length)).toBe("- a\n");
+    withUnstarvedFrontierState({
+      what: "the last-line bare marker with EOF requests mocked to miss",
+      observe: (requireUnstarvedFrontier) => {
+        const state = listState("- a\n- ");
+        // The caret-line request also targets EOF here, so Enter falls back to the
+        // initial snapshot. Require it to cover the marker before pressing Enter.
+        requireUnstarvedFrontier(state);
+        expect(pressEnter(state, state.doc.length)).toBe("- a\n");
+        return state;
+      },
+    });
   });
 
   // Emptiness unknown: neither exit (could orphan a body) nor continue (could
